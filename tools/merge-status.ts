@@ -13,10 +13,19 @@ export interface PrRef {
   number: number;
 }
 
-/** The result of asking gh about one PR. Either a state or a fetch failure. */
+/** The landed-status of one item's work ref (a PR URL for the github adapter, a
+ *  branch name for the git adapter). Either a state or a lookup failure. The git
+ *  adapter maps LANDED -> MERGED and PENDING -> OPEN so both adapters share one
+ *  report pipeline. */
 export type PrStatus =
-  | { url: string; state: PrState; mergedAt?: string; mergeCommit?: string }
-  | { url: string; error: string };
+  | { ref: string; state: PrState; mergedAt?: string; mergeCommit?: string }
+  | { ref: string; error: string };
+
+/** The key an item's status is looked up under: its review URL when it has one,
+ *  else its branch. Null for items with neither (nothing to check). */
+export function workRef(item: ItemFile): string | null {
+  return item.links.pr ?? item.links.branch ?? null;
+}
 
 /** Extracts {org, repo, number} from a GitHub PR URL. Returns null for anything
  *  that isn't a `.../pull/<n>` URL (e.g. an issue link or a bare branch ref). */
@@ -39,7 +48,8 @@ export function tokenPathForOrg(config: LoopsConfig, org: string): string | null
 export interface MergeReportRow {
   slug: string;
   title: string;
-  prUrl: string;
+  /** The work ref the status was looked up under (PR URL or branch). */
+  ref: string;
   state: PrState | "ERROR";
   itemState: string;
   awaiting?: string;
@@ -57,26 +67,26 @@ export interface MergeReport {
   stale: MergeReportRow[];
 }
 
-/** Pure: correlate every item that has a `links.pr` with its fetched PR status and
- *  classify. `statusByUrl` is keyed by the exact `links.pr` string. Items with no
- *  PR link, or whose PR URL wasn't fetched, are skipped. */
+/** Pure: correlate every item that has a work ref with its fetched status and
+ *  classify. `statusByRef` is keyed by the exact `workRef(item)` string. Items with
+ *  no work ref, or whose ref wasn't fetched, are skipped. */
 export function buildMergeReport(
   items: ItemFile[],
-  statusByUrl: Map<string, PrStatus>,
+  statusByRef: Map<string, PrStatus>,
 ): MergeReport {
   const rows: MergeReportRow[] = [];
 
   for (const item of items) {
-    const prUrl = item.links.pr;
-    if (!prUrl) continue;
-    const status = statusByUrl.get(prUrl);
+    const ref = workRef(item);
+    if (!ref) continue;
+    const status = statusByRef.get(ref);
     if (!status) continue;
 
     if ("error" in status) {
       rows.push({
         slug: item.slug,
         title: item.title,
-        prUrl,
+        ref,
         state: "ERROR",
         itemState: item.state,
         awaiting: item.awaiting,
@@ -94,7 +104,7 @@ export function buildMergeReport(
     rows.push({
       slug: item.slug,
       title: item.title,
-      prUrl,
+      ref,
       state: status.state,
       itemState: item.state,
       awaiting: item.awaiting,
@@ -108,19 +118,19 @@ export function buildMergeReport(
   return { rows, stale: rows.filter((r) => r.staleReviewMerge) };
 }
 
-/** Pure: the `implemented` items whose PR GitHub reports as MERGED — the flip
+/** Pure: the `implemented` items whose work is reported landed (MERGED) — the flip
  *  candidates for `bun run landed --apply`. Only `implemented` items are eligible;
  *  anything already at `merged`/`tested`/… is left alone (idempotent), and an item
- *  with no fetched-MERGED PR is skipped. Sorted by slug for deterministic output. */
+ *  with no fetched-MERGED status is skipped. Sorted by slug for deterministic output. */
 export function itemsToFlipMerged(
   items: ItemFile[],
-  statusByUrl: Map<string, PrStatus>,
+  statusByRef: Map<string, PrStatus>,
 ): ItemFile[] {
   const flip = items.filter((item) => {
     if (item.state !== "implemented") return false;
-    const prUrl = item.links.pr;
-    if (!prUrl) return false;
-    const status = statusByUrl.get(prUrl);
+    const ref = workRef(item);
+    if (!ref) return false;
+    const status = statusByRef.get(ref);
     return status != null && !("error" in status) && status.state === "MERGED";
   });
   return flip.sort((a, b) => a.slug.localeCompare(b.slug));

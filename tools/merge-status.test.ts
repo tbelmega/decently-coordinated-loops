@@ -80,7 +80,7 @@ describe("tokenPathForOrg", () => {
 
 describe("buildMergeReport", () => {
   const statuses = (entries: PrStatus[]): Map<string, PrStatus> =>
-    new Map(entries.map((s) => [s.url, s]));
+    new Map(entries.map((s) => [s.ref, s]));
 
   test("flags a MERGED PR whose item is still awaiting review-merge as stale", () => {
     const items = [
@@ -95,7 +95,7 @@ describe("buildMergeReport", () => {
       items,
       statuses([
         {
-          url: "https://github.com/acme-org/atlas/pull/44",
+          ref: "https://github.com/acme-org/atlas/pull/44",
           state: "MERGED",
           mergedAt: "2026-07-10T23:11:40Z",
         },
@@ -117,7 +117,7 @@ describe("buildMergeReport", () => {
     ];
     const report = buildMergeReport(
       items,
-      statuses([{ url: "https://github.com/acme-org/atlas/pull/44", state: "MERGED" }]),
+      statuses([{ ref: "https://github.com/acme-org/atlas/pull/44", state: "MERGED" }]),
     );
     expect(report.stale.length).toBe(0);
     expect(report.rows[0].state).toBe("MERGED");
@@ -133,7 +133,7 @@ describe("buildMergeReport", () => {
     ];
     const report = buildMergeReport(
       items,
-      statuses([{ url: "https://github.com/acme-org/atlas/pull/50", state: "OPEN" }]),
+      statuses([{ ref: "https://github.com/acme-org/atlas/pull/50", state: "OPEN" }]),
     );
     expect(report.stale.length).toBe(0);
     expect(report.rows[0].state).toBe("OPEN");
@@ -149,7 +149,7 @@ describe("buildMergeReport", () => {
     ];
     const report = buildMergeReport(
       items,
-      statuses([{ url: "https://github.com/acme-org/atlas/pull/51", state: "CLOSED" }]),
+      statuses([{ ref: "https://github.com/acme-org/atlas/pull/51", state: "CLOSED" }]),
     );
     expect(report.rows[0].closedUnmerged).toBe(true);
     expect(report.stale.length).toBe(0);
@@ -165,7 +165,7 @@ describe("buildMergeReport", () => {
     ];
     const report = buildMergeReport(
       items,
-      statuses([{ url: "https://github.com/acme-org/atlas/pull/99", error: "gh exited 1" }]),
+      statuses([{ ref: "https://github.com/acme-org/atlas/pull/99", error: "gh exited 1" }]),
     );
     expect(report.rows[0].state).toBe("ERROR");
     expect(report.rows[0].error).toBe("gh exited 1");
@@ -184,7 +184,7 @@ describe("buildMergeReport", () => {
 
 describe("itemsToFlipMerged", () => {
   const statuses = (entries: PrStatus[]): Map<string, PrStatus> =>
-    new Map(entries.map((s) => [s.url, s]));
+    new Map(entries.map((s) => [s.ref, s]));
 
   test("returns an implemented item whose PR is MERGED", () => {
     const items = [
@@ -197,7 +197,7 @@ describe("itemsToFlipMerged", () => {
     ];
     const flip = itemsToFlipMerged(
       items,
-      statuses([{ url: "https://github.com/acme-org/atlas/pull/44", state: "MERGED" }]),
+      statuses([{ ref: "https://github.com/acme-org/atlas/pull/44", state: "MERGED" }]),
     );
     expect(flip.map((i) => i.slug)).toEqual(["atlas-search-index"]);
   });
@@ -212,7 +212,7 @@ describe("itemsToFlipMerged", () => {
     ];
     const flip = itemsToFlipMerged(
       items,
-      statuses([{ url: "https://github.com/acme-org/atlas/pull/44", state: "MERGED" }]),
+      statuses([{ ref: "https://github.com/acme-org/atlas/pull/44", state: "MERGED" }]),
     );
     expect(flip).toEqual([]);
   });
@@ -227,7 +227,7 @@ describe("itemsToFlipMerged", () => {
     ];
     const flip = itemsToFlipMerged(
       items,
-      statuses([{ url: "https://github.com/acme-org/atlas/pull/50", state: "OPEN" }]),
+      statuses([{ ref: "https://github.com/acme-org/atlas/pull/50", state: "OPEN" }]),
     );
     expect(flip).toEqual([]);
   });
