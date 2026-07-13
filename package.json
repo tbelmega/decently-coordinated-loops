@@ -1,0 +1,10 @@
+{
+  "name": "decently-coordinated-loops",
+  "private": true,
+  "scripts": {
+    "test": "bun test tools"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}
