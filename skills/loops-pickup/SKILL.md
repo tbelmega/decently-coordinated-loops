@@ -45,9 +45,11 @@ closest to done (finish over start).
 **Dependency gate — applies to every item, including `auto`.** An item with any
 unsatisfied `depends-on` target is not eligible; skip it, whatever its autonomy or
 how low-risk it looks. A "documentation" item describing code not yet landed is the
-classic trap. A target is satisfied only when its work is on the integration branch
-(loops-board → "Dependencies & readiness") — resolve real landed status with
-`bun run landed` or git before claiming; board state alone doesn't prove a landing.
+classic trap. `bun run ready` lists which active items clear this gate on board state
+and which are blocked (and by what). A target is satisfied only when its work is on
+the integration branch (loops-board → "Dependencies & readiness"); `ready` treats an
+in-flight `implemented` target as unsatisfied, so resolve its real landed status with
+`bun run landed` or git before claiming — board state alone doesn't prove a landing.
 
 An item is eligible for unattended pickup when **either**:
 
@@ -129,7 +131,9 @@ board item first if none exists).
 
 1. **Request review** per `HOUSE-RULES.md → Review mechanism` (a PR to a review
    bot, invoking another harness/agent on the branch, a review script — whatever
-   the instance defines), referencing the spec. Set item state `implemented`,
+   the instance defines), referencing the spec. If the instance activated the
+   bundled local reviewer (`loops.json → review.reviewer`), that is the mechanism —
+   drive it per the loops-review skill. Set item state `implemented`,
    `next-actor: owner`, `awaiting: review-merge`, add the `pr:`/`branch:` link, log
    line, commit + push the board. Landing the change on the integration branch is
    the owner's step (see Merge policy below).
@@ -270,12 +274,8 @@ cadence (tuning: `HOUSE-RULES.md → Dispatch`). Suggested prompt:
 > skill. You are running unattended — deliver a change for review or refinement per
 > the protocol, babysit any review you open, and never land changes or deploy.
 
-Know the mechanics before relying on it (as observed in session-cron harnesses):
-the job is bound to the exact session (closing the window silently kills the
-schedule; nothing inherits it); recurring jobs may auto-expire after days; each
-firing appends to the same conversation, so context grows until compaction —
-survivable because durable state lives on the board, not in the conversation.
-Re-create the job periodically in a fresh window. When multiple dispatcher sessions
-exist, stagger their schedules so they don't wake simultaneously and collide on
-usage windows. If a hard usage-limit warning fires mid-run, finish the current item
-safely (deliver or park it), stop the recurring job, and log that you did so.
+The scheduling mechanism is **harness-specific** — an in-session cron in one harness, a
+system scheduler in another, unavailable in a third. Before relying on it, read
+`references/periodic-dispatch.md` for the mechanics and failure modes (written for
+session-bound cron harnesses). Use only the automation your harness actually provides;
+never imitate a feature your harness lacks.

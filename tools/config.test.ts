@@ -19,6 +19,7 @@ describe("loadConfig", () => {
         landedAdapter: "git",
         githubTokens: {},
         projects: {},
+        review: {},
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -40,6 +41,7 @@ describe("loadConfig", () => {
       expect(config.landedAdapter).toBe("git");
       expect(config.githubTokens).toEqual({});
       expect(config.projects).toEqual({});
+      expect(config.review).toEqual({});
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -55,6 +57,7 @@ describe("loadConfig", () => {
         landedAdapter: "github" as const,
         githubTokens: { "acme-org": "~/.secrets/gh-acme" },
         projects: { atlas: { repo: "acme-org/atlas", landedAdapter: "git" as const } },
+        review: { reviewer: "claude", model: "claude-opus-4-8" },
       };
       writeFileSync(join(root, "loops.json"), JSON.stringify(full));
       expect(loadConfig(root)).toEqual(full);

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquireLock, releaseLock } from "./lock.ts";
+import { acquireLock, releaseLock, withLock } from "./lock.ts";
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "loops-lock-"));
@@ -100,6 +100,38 @@ describe("acquireLock / releaseLock", () => {
     const root = tempRoot();
     try {
       expect(() => releaseLock(root)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("withLock", () => {
+  test("holds the lock while fn runs and releases it afterward", async () => {
+    const root = tempRoot();
+    try {
+      let heldDuringFn = false;
+      const result = await withLock(root, () => {
+        heldDuringFn = existsSync(join(root, ".loops-sync.lock"));
+        return 42;
+      });
+      expect(heldDuringFn).toBe(true);
+      expect(result).toBe(42);
+      expect(existsSync(join(root, ".loops-sync.lock"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("releases the lock even if fn throws", async () => {
+    const root = tempRoot();
+    try {
+      await expect(
+        withLock(root, () => {
+          throw new Error("boom");
+        }),
+      ).rejects.toThrow("boom");
+      expect(existsSync(join(root, ".loops-sync.lock"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

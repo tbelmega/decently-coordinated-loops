@@ -33,20 +33,41 @@ export const CANONICAL_AWAITING = new Set([
   "decide",
 ]);
 
-/** Pure: every closed-set violation on one item, as human-readable messages.
- * Empty array = the item's enum fields are all canonical. Empty `next-actor` is
- * left to the caller (which already flags it) so the messages don't double up. */
+/** The mandatory scalar frontmatter fields (loops-board schema), paired with the
+ * frontmatter key name to report on. `owner` and `autonomy` are omitted deliberately:
+ * parse.ts defaults both to "-", so they are never empty (and "-" is a valid owner /
+ * autonomy sentinel). A blank required field is a broken item, not an enum typo, so it
+ * is flagged with its own message instead of "'' is not canonical". */
+const REQUIRED_FIELDS: ReadonlyArray<{ key: string; get: (item: ItemFile) => string }> = [
+  { key: "title", get: (item) => item.title },
+  { key: "project", get: (item) => item.project },
+  { key: "state", get: (item) => item.state },
+  { key: "next-actor", get: (item) => item.nextActor },
+  { key: "next-step", get: (item) => item.nextStep },
+  { key: "updated", get: (item) => item.updated },
+];
+
+/** Pure: every schema violation on one item, as human-readable messages — a blank
+ * mandatory field, or a closed-set enum value outside its canonical set. Empty array =
+ * the item is well-formed. Empty required fields are reported first; the enum checks
+ * then skip empty values so a blank field isn't also flagged as "not canonical". */
 export function validateItem(item: ItemFile): string[] {
   const messages: string[] = [];
 
-  if (!CANONICAL_STATES.has(item.state)) {
+  for (const { key, get } of REQUIRED_FIELDS) {
+    if (get(item).trim() === "") {
+      messages.push(`${key} is required but empty`);
+    }
+  }
+
+  if (item.state.trim() !== "" && !CANONICAL_STATES.has(item.state)) {
     const hint = CANONICAL_AWAITING.has(item.state)
       ? ` — looks like an awaiting sub-bucket, not a state; did you mean \`awaiting: ${item.state}\`?`
       : "";
     messages.push(`state "${item.state}" is not a canonical state${hint}`);
   }
 
-  if (item.nextActor !== "" && !CANONICAL_NEXT_ACTORS.has(item.nextActor)) {
+  if (item.nextActor.trim() !== "" && !CANONICAL_NEXT_ACTORS.has(item.nextActor)) {
     messages.push(`next-actor "${item.nextActor}" is not canonical (expected owner or agent)`);
   }
 

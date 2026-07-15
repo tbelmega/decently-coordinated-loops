@@ -14,7 +14,7 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 | `archive/` + `ARCHIVE.md` | Terminal work-streams (accepted / dropped). |
 | `INBOX.md` | {{OWNER}}'s dump zone: raw thoughts in, board items out. |
 | `OUTBOX.md` | The mirror: everything agents need from {{OWNER}}, answerable in one line each. |
-| `PROJECTS.md` | Per-project registry: repo paths, gates, tracker locations. |
+| `PROJECTS.md` | Per-project registry: repo paths (which drive the participation gate), gates, tracker locations. |
 | `HOUSE-RULES.md` | Cross-project local policy the DCL skills defer to. |
 | `loops.json` | Machine-read config: priorities, integration branch, landed adapter, tokens. |
 
@@ -23,7 +23,19 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 - `bun run check` — report-only board integrity check.
 - `bun run sync` — regenerate `BOARD.md` and move item files per their state.
 - `bun run landed` — check which items' work has landed on the integration branch.
+- `bun run ready` — the dependency gate: which items' `depends-on` targets are satisfied.
+- `bun run restamp` — advance `.loops-version` after reviewing a DCL upgrade.
 
-Contracts and protocols: the `loops-board`, `loops-queues`, `loops-pickup`, and
-`loops-setup` skills — installed into your harness's skills tree, or readable at
-`{{DCL_HOME}}/skills/`.
+## Local code review (optional)
+
+If `loops.json → review.reviewer` is set (`bun run setup` offers this), an independent
+reviewer model reviews a finished branch read-only, with no forge/PR. Drive it from the
+target repo per the loops-review skill:
+
+```bash
+bun "{{DCL_HOME}}/tools/review/cli-review.ts" start --base <branch> --data-repo <this repo>
+```
+
+Contracts and protocols: the `loops-board`, `loops-queues`, `loops-pickup`,
+`loops-review`, and `loops-setup` skills — installed into your harness's skills tree,
+or readable at `{{DCL_HOME}}/skills/`.

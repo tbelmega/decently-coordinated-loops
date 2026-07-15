@@ -86,3 +86,33 @@ export function releaseLock(root: string): void {
   const path = lockPath(root);
   if (existsSync(path)) unlinkSync(path);
 }
+
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 2000;
+
+/** Runs `fn` while holding the sync lock, releasing it in a `finally`. Retries
+ * acquisition a few times with a short delay (a stale lock is broken automatically by
+ * `acquireLock`). If the lock is genuinely held after every attempt, prints a message
+ * naming `label` and exits(1) — a concurrent holder owns the data repo. Shared by the
+ * sync and `landed --apply` CLIs so their overlapping BOARD.md/item-file writes can't
+ * interleave. */
+export async function withLock<T>(root: string, fn: () => T, label = "sync run"): Promise<T> {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const result = acquireLock(root);
+    if (result.acquired) {
+      if (result.brokeStale) console.log("breaking stale lock");
+      try {
+        return fn();
+      } finally {
+        releaseLock(root);
+      }
+    }
+    if (attempt < MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+  }
+  console.error(
+    `could not acquire ${LOCK_NAME} after ${MAX_ATTEMPTS} attempts — another ${label} appears to be in progress`,
+  );
+  process.exit(1);
+}

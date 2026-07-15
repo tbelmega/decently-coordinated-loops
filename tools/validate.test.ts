@@ -14,7 +14,7 @@ function item(overrides: Partial<ItemFile>): ItemFile {
     autonomy: "auto",
     nextActor: "agent",
     dependsOn: [],
-    nextStep: "",
+    nextStep: "Do the thing",
     updated: "2026-07-10",
     links: {},
     ...overrides,
@@ -57,14 +57,33 @@ describe("validateItem", () => {
     expect(validateItem(item({ nextActor: "owner", awaiting: "accept" }))).toEqual([]);
   });
 
-  test("flags a non-canonical next-actor but leaves an empty one to the caller", () => {
+  test("flags a non-canonical next-actor", () => {
     expect(validateItem(item({ nextActor: "nobody" }))[0]).toContain('next-actor "nobody"');
-    expect(validateItem(item({ nextActor: "" }))).toEqual([]);
   });
 
   test("accepts the '-' autonomy sentinel but flags a typo", () => {
     expect(validateItem(item({ autonomy: "-" }))).toEqual([]);
     expect(validateItem(item({ autonomy: "supervized" }))[0]).toContain('autonomy "supervized"');
+  });
+
+  test("flags each blank required field with its own message", () => {
+    expect(validateItem(item({ title: "" }))).toEqual(["title is required but empty"]);
+    expect(validateItem(item({ project: "" }))).toEqual(["project is required but empty"]);
+    expect(validateItem(item({ nextActor: "" }))).toEqual(["next-actor is required but empty"]);
+    expect(validateItem(item({ nextStep: "" }))).toEqual(["next-step is required but empty"]);
+    expect(validateItem(item({ updated: "" }))).toEqual(["updated is required but empty"]);
+  });
+
+  test("treats a whitespace-only required field as empty", () => {
+    expect(validateItem(item({ nextStep: "   " }))).toEqual(["next-step is required but empty"]);
+  });
+
+  test("flags a blank state once (required), not also as non-canonical", () => {
+    expect(validateItem(item({ state: "" }))).toEqual(["state is required but empty"]);
+  });
+
+  test("flags a blank next-actor once (required), not also as non-canonical", () => {
+    expect(validateItem(item({ nextActor: "" }))).toEqual(["next-actor is required but empty"]);
   });
 });
 

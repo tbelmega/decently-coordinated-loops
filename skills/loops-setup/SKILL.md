@@ -24,13 +24,16 @@ From the DCL clone root (`bun` required; install from bun.sh if missing):
 ```bash
 # harness wiring (skill symlinks) + seed in one go:
 ./install.sh --seed <data-repo-dir> --owner <NAME> --branch <integration-branch> \
-  [--projects name=path,name=path] [--join]
+  [--projects name=path,name=path] [--reviewer codex|claude|cursor] [--join]
 ```
 
 Gather `--owner` (how agents should address the user), `--branch` (default
-integration branch, default `master`), and optionally the initial projects
-(name=repo-path pairs) from the user before running — the script prompts
-interactively otherwise, which an agent can't answer.
+integration branch, default `master`), optionally the initial projects
+(name=repo-path pairs), and optionally `--reviewer` (activate the bundled local code
+reviewer — see loops-review) from the user before running — the script prompts
+interactively otherwise (including which detected reviewer CLI to activate), which an
+agent can't answer. If you seed non-interactively with `--owner`, offer the reviewer
+choice explicitly so the user doesn't miss it.
 
 The seeding installs a markered `LOOPS:START/END` block into each detected harness
 global config (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`) carrying the data-repo
@@ -49,7 +52,8 @@ path and owner name. Existing files are never overwritten; re-running is safe.
 3. For a new repo: have the user add a git remote and push — origin is the source
    of truth across machines.
 4. Point the user at the other skills: loops-board (contract), loops-queues
-   (inbox/outbox), loops-pickup (unattended work).
+   (inbox/outbox), loops-pickup (unattended work), loops-review (the bundled local
+   code reviewer, if activated).
 
 ## Updating an instance
 

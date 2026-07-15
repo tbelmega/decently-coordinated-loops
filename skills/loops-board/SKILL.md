@@ -70,6 +70,28 @@ map to `awaiting`:
 | `tested` | owner | `deliver` |
 | `delivered` | owner | `accept` |
 
+## Project participation
+
+Board participation is **scoped to registered projects**. An agent working in a
+checkout that isn't a registered project (a throwaway clone, an unrelated repo)
+neither reads nor updates the board there — otherwise the board bleeds into every
+repo on the machine. The gate is a single command, run from the checkout in question:
+
+```bash
+bun "$DCL_HOME/tools/cli-registered.ts" --data-repo <data-repo>
+```
+
+It prints the project name and exits 0 when the current checkout matches a `repo:`
+entry in `loops.json` (or is the data repo itself); it exits non-zero otherwise.
+**Worktrees resolve to their main checkout** — a linked worktree of a registered repo
+is registered. Register a project (add it to `PROJECTS.md` and `loops.json`) before
+doing board-tracked work in it.
+
+**Gate exemptions.** An instance may declare obligations in `HOUSE-RULES.md` that
+follow an *action* rather than a *directory* — e.g. "after refreshing the design
+export, file board items for newly-buildable work." Those apply regardless of the
+current checkout and are exempt from this gate; everything else respects it.
+
 ## Item file schema — `items/<project>-<slug>.md`
 
 ```markdown
@@ -125,7 +147,8 @@ An item with any unsatisfied dependency is not eligible for pickup (loops-pickup
 
 ## Update rules
 
-1. **Read `BOARD.md` before starting substantive work** in any project.
+1. **Read `BOARD.md` before starting substantive work** in any registered project
+   (see Project participation — the board is silent in unregistered checkouts).
 2. When an item's state or next step changes: update its item file (state,
    next-step, next-actor, awaiting, updated, append a log line), then run
    `bun run sync` (or hand-edit the board row when a sync isn't warranted).
@@ -174,8 +197,22 @@ register a project before doing unattended work in it.
 Run from the data-repo root:
 
 - `bun run check` — report-only integrity check (board vs items, closed-set
-  validation, version-stamp drift). Exits non-zero on findings.
+  validation, required-field and dangling-`depends-on` checks, version-stamp drift).
+  Exits non-zero on findings.
 - `bun run sync` — regenerate `BOARD.md`, route orphan rows to `OUTBOX.md`, move
   item files per state, append `ARCHIVE.md` rows.
 - `bun run landed [--apply]` — check which items' work has landed on the integration
   branch; `--apply` records observed landings (`implemented → merged`).
+- `bun run ready` — the dependency gate: which active items have all their
+  `depends-on` targets satisfied (state ∈ `merged`/`tested`/`delivered`/`accepted`)
+  vs. blocked by an unsatisfied or missing target. Board-state only — confirm an
+  in-flight (`implemented`) target's real landed status with `bun run landed`.
+- `bun run restamp` — advance `.loops-version` to the DCL clone's current HEAD after
+  reviewing an upgrade, clearing the version-drift note `check` prints.
+
+The participation gate runs from a project checkout, not the data repo, so it is
+invoked by path rather than `bun run`:
+
+- `bun "$DCL_HOME/tools/cli-registered.ts" --data-repo <data-repo> [--cwd <dir>]` —
+  prints the registered project name (exit 0) for the current checkout, or exits
+  non-zero when the repo isn't registered (see Project participation).

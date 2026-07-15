@@ -28,4 +28,21 @@ describe("appendOrphanRowEntry", () => {
     const result = appendOrphanRowEntry(outbox, orphan);
     expect(result).toContain("### 1 — question: orphan BOARD.md row with no item file");
   });
+
+  test("is idempotent: re-appending the same orphan is a no-op", () => {
+    const outbox = `# Outbox\n\n## Open\n`;
+    const once = appendOrphanRowEntry(outbox, orphan);
+    const twice = appendOrphanRowEntry(once, orphan);
+    expect(twice).toBe(once);
+    expect([...twice.matchAll(/### \d+ — question: orphan/g)]).toHaveLength(1);
+  });
+
+  test("still appends a different orphan alongside an existing one", () => {
+    const once = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
+    const other: OrphanRow = { ...orphan, path: "items/other-ghost.md", title: "Other ghost" };
+    const both = appendOrphanRowEntry(once, other);
+    expect(both).toContain("items/does-not-exist.md");
+    expect(both).toContain("items/other-ghost.md");
+    expect([...both.matchAll(/### \d+ — question: orphan/g)]).toHaveLength(2);
+  });
 });

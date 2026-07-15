@@ -16,7 +16,13 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
-import { detectConfigTargets, renderConfigBlock, upsertConfigBlock } from "./config-block.ts";
+import {
+  detectConfigTargets,
+  renderConfigBlock,
+  renderCursorRule,
+  upsertConfigBlock,
+  writeCursorRule,
+} from "./config-block.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
 const TEMPLATES = join(DCL_HOME, "setup", "templates");
@@ -28,15 +34,30 @@ interface Options {
   branch?: string;
   /** "name=~/path,name2=~/path2" */
   projects?: string;
+  /** Bundled review adapter to activate: "codex" | "claude" | "cursor" | "" (none). */
+  reviewer?: string;
   /** Skip harness config-block installation (used by tests / unusual setups). */
   skipHarness: boolean;
   home: string;
 }
 
+const REVIEWERS: Array<{ id: string; bin: string }> = [
+  { id: "codex", bin: "codex" },
+  { id: "claude", bin: "claude" },
+  { id: "cursor", bin: "cursor-agent" },
+];
+
+/** The review adapters whose CLI is actually installed on this machine. */
+function detectReviewers(): string[] {
+  return REVIEWERS.filter(({ bin }) => spawnSync(bin, ["--version"], { stdio: "ignore" }).error === undefined).map(
+    ({ id }) => id,
+  );
+}
+
 function usage(): never {
   console.error(
     "usage: bun setup/seed.ts <target-dir> [--join] [--owner NAME] [--branch BRANCH] " +
-      "[--projects name=path[,name=path...]] [--skip-harness]",
+      "[--projects name=path[,name=path...]] [--reviewer codex|claude|cursor] [--skip-harness]",
   );
   process.exit(2);
 }
@@ -56,6 +77,7 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--owner") opts.owner = args.shift() ?? usage();
     else if (arg === "--branch") opts.branch = args.shift() ?? usage();
     else if (arg === "--projects") opts.projects = args.shift() ?? usage();
+    else if (arg === "--reviewer") opts.reviewer = args.shift() ?? usage();
     else if (arg.startsWith("-")) usage();
     else if (!opts.targetDir) opts.targetDir = arg;
     else usage();
@@ -79,6 +101,22 @@ async function promptMissing(opts: Options): Promise<void> {
   if (opts.projects == null) {
     opts.projects =
       (await rl.question("Initial projects as name=path, comma-separated (or empty): ")).trim();
+  }
+  if (opts.reviewer == null) {
+    const detected = detectReviewers();
+    if (detected.length) {
+      const answer = (
+        await rl.question(
+          `Activate a local code-review adapter? A reviewer runs read-only and drives\n` +
+            `the loops-review loop for finished changes. Detected: ${detected.join(", ")}.\n` +
+            `Enter one or 'none' [none]: `,
+        )
+      ).trim();
+      opts.reviewer = answer && answer !== "none" ? answer : "";
+    } else {
+      console.log("no supported review CLI (codex/claude/cursor-agent) detected — skipping review activation");
+      opts.reviewer = "";
+    }
   }
   rl.close();
   if (!opts.owner) {
@@ -137,6 +175,8 @@ function packageJsonText(root: string): string {
         check: scriptFor("cli-check"),
         sync: scriptFor("cli-sync"),
         landed: scriptFor("cli-landed"),
+        ready: scriptFor("cli-ready"),
+        restamp: scriptFor("cli-restamp"),
       },
     },
     null,
@@ -147,15 +187,22 @@ function packageJsonText(root: string): string {
 function installConfigBlock(opts: Options, root: string): void {
   if (opts.skipHarness) return;
   const owner = opts.owner ?? "the owner";
-  const block = renderConfigBlock({ owner, dataRepo: root, dclHome: DCL_HOME });
+  const params = { owner, dataRepo: root, dclHome: DCL_HOME };
+  const block = renderConfigBlock(params);
+  const cursorRule = renderCursorRule(params);
   const targets = detectConfigTargets(opts.home);
   if (!targets.length) {
     console.log("no harness config directories detected — config block not installed");
     return;
   }
   for (const target of targets) {
-    const action = upsertConfigBlock(target, block);
-    console.log(`  config block ${action}: ${target}`);
+    if (target.kind === "cursor") {
+      const action = writeCursorRule(target.path, cursorRule);
+      console.log(`  cursor rule ${action}: ${target.path}`);
+    } else {
+      const action = upsertConfigBlock(target.path, block);
+      console.log(`  config block ${action}: ${target.path}`);
+    }
   }
 }
 
@@ -189,6 +236,11 @@ await promptMissing(opts);
 const owner = opts.owner!;
 const branch = opts.branch ?? "master";
 const projects = parseProjects(opts.projects);
+const reviewer = (opts.reviewer ?? "").trim();
+if (reviewer && !REVIEWERS.some((entry) => entry.id === reviewer)) {
+  console.error(`--reviewer must be one of ${REVIEWERS.map((entry) => entry.id).join(", ")} (got "${reviewer}")`);
+  process.exit(2);
+}
 
 console.log(`seeding new data repo at ${root}`);
 mkdirSync(root, { recursive: true });
@@ -243,6 +295,7 @@ writeNew(
       landedAdapter: "git",
       githubTokens: {},
       projects: Object.fromEntries(projects.map((p) => [p.name, { repo: p.repo }])),
+      review: reviewer ? { reviewer } : {},
     },
     null,
     2,
@@ -271,6 +324,12 @@ if (inited) {
     console.log("  + initial commit");
   }
 }
+
+console.log(
+  reviewer
+    ? `  review adapter: ${reviewer} (loops.json → review.reviewer; drive it per the loops-review skill)`
+    : `  review adapter: none — activate later by setting review.reviewer in loops.json (see loops-review)`,
+);
 
 console.log(`
 seed complete. Next steps:

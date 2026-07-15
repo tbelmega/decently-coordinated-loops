@@ -7,6 +7,15 @@ export interface ProjectConfig {
   landedAdapter?: "github" | "git";
 }
 
+/** Local code-review adapter selection. Empty (no `reviewer`) means review is not
+ * activated for this instance; `bun run setup` offers to fill it in. */
+export interface ReviewConfig {
+  /** Which bundled reviewer adapter to drive: "codex" | "claude" | "cursor". */
+  reviewer?: string;
+  /** Optional model id override; omit to use the reviewer CLI's own default. */
+  model?: string;
+}
+
 export interface LoopsConfig {
   /** The human owner's name. */
   owner: string;
@@ -17,6 +26,7 @@ export interface LoopsConfig {
   /** GitHub org -> token file path ("~" expanded by the reader, not here). */
   githubTokens: Record<string, string>;
   projects: Record<string, ProjectConfig>;
+  review: ReviewConfig;
 }
 
 function defaults(): LoopsConfig {
@@ -27,6 +37,7 @@ function defaults(): LoopsConfig {
     landedAdapter: "git",
     githubTokens: {},
     projects: {},
+    review: {},
   };
 }
 
@@ -47,5 +58,6 @@ export function loadConfig(root: string): LoopsConfig {
     landedAdapter: raw.landedAdapter ?? base.landedAdapter,
     githubTokens: raw.githubTokens ?? base.githubTokens,
     projects: raw.projects ?? base.projects,
+    review: raw.review ?? base.review,
   };
 }

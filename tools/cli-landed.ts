@@ -25,6 +25,7 @@ import { spawnSync } from "node:child_process";
 import { formatSnapshotDate } from "./date.ts";
 import { loadConfig } from "./config.ts";
 import { gitLandedStatus } from "./git-landed.ts";
+import { withLock } from "./lock.ts";
 import { loadItemsDir } from "./parse.ts";
 import { replaceActiveRow } from "./render.ts";
 import {
@@ -32,6 +33,7 @@ import {
   buildMergeReport,
   itemsToFlipMerged,
   parsePrUrl,
+  planLandedCheck,
   tokenPathForOrg,
   workRef,
   type PrState,
@@ -150,16 +152,18 @@ console.log(`Checking ${checkable.length} item(s)…\n`);
 
 const statusByRef = new Map<string, PrStatus>();
 for (const item of checkable) {
-  const ref = workRef(item)!;
-  if (statusByRef.has(ref)) continue;
-  const adapter = effectiveAdapter(item.project);
-  if (adapter === "github" && item.links.pr) {
-    statusByRef.set(ref, fetchPrStatus(ref));
-  } else if (item.links.branch) {
-    statusByRef.set(item.links.branch, fetchGitStatus(item, item.links.branch));
+  // The plan's `ref` is the key both this store and the report's lookup use — always
+  // workRef(item), never the branch, so an item carrying both a PR and a branch link
+  // isn't stored-under-branch, looked-up-under-PR, and silently dropped.
+  const plan = planLandedCheck(item, effectiveAdapter(item.project));
+  if (!plan) continue;
+  if (statusByRef.has(plan.ref)) continue;
+  if (plan.kind === "github") {
+    statusByRef.set(plan.ref, fetchPrStatus(plan.pr));
+  } else if (plan.kind === "git") {
+    statusByRef.set(plan.ref, fetchGitStatus(item, plan.branch));
   } else {
-    // github adapter but only a branch link: the PR URL is the missing piece.
-    statusByRef.set(ref, { ref, error: "github adapter needs a links.pr (or switch the project to the git adapter)" });
+    statusByRef.set(plan.ref, { ref: plan.ref, error: plan.error });
   }
 }
 
@@ -189,24 +193,32 @@ if (apply) {
     console.log("\n--apply: no implemented item has newly landed work. Nothing to record.");
     process.exit(0);
   }
-  const today = formatSnapshotDate(new Date());
-  const BOARD_PATH = join(ROOT, "BOARD.md");
-  let boardText = readFileSync(BOARD_PATH, "utf8");
+  // Take the same lock `bun run sync` uses: both rewrite BOARD.md and item files, so
+  // an overlapping sync and `landed --apply` must not interleave their writes.
+  await withLock(
+    ROOT,
+    () => {
+      const today = formatSnapshotDate(new Date());
+      const BOARD_PATH = join(ROOT, "BOARD.md");
+      let boardText = readFileSync(BOARD_PATH, "utf8");
 
-  for (const item of flippable) {
-    const itemPath = join(ROOT, item.path);
-    writeFileSync(itemPath, applyMergedFrontmatter(readFileSync(itemPath, "utf8"), today));
-    boardText = replaceActiveRow(boardText, {
-      ...item,
-      state: "merged",
-      nextActor: "agent",
-      awaiting: undefined,
-      autonomy: "auto",
-      nextStep: "Verify per the project verify gate, then flip to tested",
-      updated: today,
-    });
-  }
-  writeFileSync(BOARD_PATH, boardText);
+      for (const item of flippable) {
+        const itemPath = join(ROOT, item.path);
+        writeFileSync(itemPath, applyMergedFrontmatter(readFileSync(itemPath, "utf8"), today));
+        boardText = replaceActiveRow(boardText, {
+          ...item,
+          state: "merged",
+          nextActor: "agent",
+          awaiting: undefined,
+          autonomy: "auto",
+          nextStep: "Verify per the project verify gate, then flip to tested",
+          updated: today,
+        });
+      }
+      writeFileSync(BOARD_PATH, boardText);
+    },
+    "landed --apply run",
+  );
 
   console.log(
     `\n--apply: recorded ${flippable.length} landing(s) (implemented → merged, now agent-owned for verification):`,

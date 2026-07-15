@@ -6,6 +6,7 @@ import {
   buildMergeReport,
   itemsToFlipMerged,
   parsePrUrl,
+  planLandedCheck,
   tokenPathForOrg,
   type PrStatus,
 } from "./merge-status.ts";
@@ -36,6 +37,7 @@ function config(overrides: Partial<LoopsConfig> = {}): LoopsConfig {
     landedAdapter: "git",
     githubTokens: {},
     projects: {},
+    review: {},
     ...overrides,
   };
 }
@@ -75,6 +77,43 @@ describe("tokenPathForOrg", () => {
   test("returns null for an org with no configured token (caller falls back to ambient auth)", () => {
     const cfg = config({ githubTokens: { "acme-org": "~/.secrets/gh-acme-org" } });
     expect(tokenPathForOrg(cfg, "some-other-org")).toBeNull();
+  });
+});
+
+describe("planLandedCheck", () => {
+  const PR = "https://github.com/acme-org/atlas/pull/44";
+  const BRANCH = "agents/worker-1";
+
+  test("github adapter with a PR link is keyed and checked by the PR URL", () => {
+    const plan = planLandedCheck(item({ slug: "a", links: { pr: PR } }), "github");
+    expect(plan).toEqual({ kind: "github", ref: PR, pr: PR });
+  });
+
+  test("git adapter with a branch link is keyed and checked by the branch", () => {
+    const plan = planLandedCheck(item({ slug: "a", links: { branch: BRANCH } }), "git");
+    expect(plan).toEqual({ kind: "git", ref: BRANCH, branch: BRANCH });
+  });
+
+  test("git adapter with BOTH links keys by workRef (the PR URL), not the branch", () => {
+    // regression: a git-adapter item carrying both a PR and a branch used to be stored
+    // under its branch but looked up under workRef (the PR URL), so it was silently
+    // skipped. The plan's ref must equal workRef so store-key and lookup-key match.
+    const plan = planLandedCheck(item({ slug: "a", links: { pr: PR, branch: BRANCH } }), "git");
+    expect(plan).toEqual({ kind: "git", ref: PR, branch: BRANCH });
+  });
+
+  test("github adapter with only a branch link is an error keyed by workRef", () => {
+    const plan = planLandedCheck(item({ slug: "a", links: { branch: BRANCH } }), "github");
+    expect(plan).toEqual({ kind: "error", ref: BRANCH, error: expect.stringContaining("links.pr") });
+  });
+
+  test("git adapter with only a PR link is an error keyed by workRef", () => {
+    const plan = planLandedCheck(item({ slug: "a", links: { pr: PR } }), "git");
+    expect(plan).toEqual({ kind: "error", ref: PR, error: expect.stringContaining("links.branch") });
+  });
+
+  test("returns null for an item with no work ref", () => {
+    expect(planLandedCheck(item({ slug: "a", links: {} }), "git")).toBeNull();
   });
 });
 

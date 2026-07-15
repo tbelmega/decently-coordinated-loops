@@ -1,5 +1,6 @@
 import type { PreflightReport } from "./preflight.ts";
 import type { ItemAnomaly } from "./validate.ts";
+import type { DanglingDep } from "./readiness.ts";
 
 /** Human-readable preflight summary, shared by the sync and check CLIs. */
 export function printPreflightReport(report: PreflightReport): void {
@@ -36,5 +37,16 @@ export function printValidationReport(anomalies: ItemAnomaly[]): void {
     for (const message of anomaly.messages) {
       console.log(`  - ${anomaly.slug}: ${message}`);
     }
+  }
+}
+
+/** Human-readable dangling-dependency summary: a `depends-on` target that resolves to
+ * no known item — the item can never become eligible. An integrity error the check CLI
+ * exits non-zero on. */
+export function printDanglingDeps(dangling: DanglingDep[]): void {
+  if (!dangling.length) return;
+  console.log(`\nDangling depends-on targets (${dangling.length} — target resolves to no item):`);
+  for (const dep of dangling) {
+    console.log(`  - ${dep.slug}: depends-on target "${dep.target}" not found`);
   }
 }

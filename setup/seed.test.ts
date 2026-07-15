@@ -180,4 +180,32 @@ describe("config block", () => {
     // No .codex dir in this fake home — must not have been created.
     expect(existsSync(join(home, ".codex"))).toBe(false);
   });
+
+  test("writes a Cursor .mdc rule when ~/.cursor exists, and refreshes idempotently", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+
+    const dir = seedNewRepo([], home);
+    const rulePath = join(home, ".cursor", ".cursor", "rules", "loops.mdc");
+    expect(existsSync(rulePath)).toBe(true);
+    const rule = readFileSync(rulePath, "utf8");
+    expect(rule).toContain("alwaysApply: true");
+    expect(rule).toContain("## Work-stream board (decently-coordinated-loops)");
+    expect(rule).toContain(dir);
+    expect(rule).toContain("casey");
+    // Cursor rules use YAML frontmatter, not the HTML markers.
+    expect(rule).not.toContain("LOOPS:START");
+
+    // Re-running refreshes the whole file — one frontmatter, no duplication.
+    const rerun = run(["run", SEED, dir, "--join", "--owner", "casey"], { home });
+    expect(rerun.status).toBe(0);
+    expect(readFileSync(rulePath, "utf8").split("alwaysApply: true").length).toBe(2);
+  });
+
+  test("no Cursor rule when ~/.cursor is absent", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    seedNewRepo([], home);
+    expect(existsSync(join(home, ".cursor"))).toBe(false);
+  });
 });

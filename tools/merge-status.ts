@@ -27,6 +27,44 @@ export function workRef(item: ItemFile): string | null {
   return item.links.pr ?? item.links.branch ?? null;
 }
 
+/** What `bun run landed` must do to check one item, and — crucially — the key its
+ *  result must be stored under. The key is ALWAYS `workRef(item)`, because that is
+ *  what buildMergeReport / itemsToFlipMerged look the result up by. The git adapter
+ *  must not key by branch: an item that also carries a `links.pr` would then be
+ *  stored under its branch but looked up under its PR URL, and silently skipped. */
+export type LandedPlan =
+  | { kind: "github"; ref: string; pr: string }
+  | { kind: "git"; ref: string; branch: string }
+  | { kind: "error"; ref: string; error: string };
+
+/** Pure: decide how to check an item's landed status under the given adapter, and
+ *  under which key to store the result. Returns null only for items with no work ref
+ *  (nothing to check). The github adapter needs a `links.pr`; the git adapter needs a
+ *  `links.branch` — a missing one yields an `error` plan keyed under `workRef(item)`. */
+export function planLandedCheck(
+  item: ItemFile,
+  adapter: "github" | "git",
+): LandedPlan | null {
+  const ref = workRef(item);
+  if (ref === null) return null;
+  if (adapter === "github") {
+    return item.links.pr
+      ? { kind: "github", ref, pr: item.links.pr }
+      : {
+          kind: "error",
+          ref,
+          error: "github adapter needs a links.pr (or switch the project to the git adapter)",
+        };
+  }
+  return item.links.branch
+    ? { kind: "git", ref, branch: item.links.branch }
+    : {
+        kind: "error",
+        ref,
+        error: "git adapter needs a links.branch (or switch the project to the github adapter)",
+      };
+}
+
 /** Extracts {org, repo, number} from a GitHub PR URL. Returns null for anything
  *  that isn't a `.../pull/<n>` URL (e.g. an issue link or a bare branch ref). */
 export function parsePrUrl(url: string): PrRef | null {

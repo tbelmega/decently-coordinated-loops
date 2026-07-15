@@ -13,6 +13,7 @@ const CONFIG: LoopsConfig = {
   landedAdapter: "git",
   githubTokens: {},
   projects: {},
+  review: {},
 };
 
 describe("renderBoardMd", () => {

@@ -6,7 +6,7 @@
 // run) can't race on the same data repo.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { acquireLock, releaseLock } from "./lock.ts";
+import { withLock } from "./lock.ts";
 import { loadConfig } from "./config.ts";
 import { loadForDeliveryDir, loadItemsDir } from "./parse.ts";
 import { runPreflight } from "./preflight.ts";
@@ -25,31 +25,7 @@ if (!existsSync(BOARD_PATH)) {
   process.exit(2);
 }
 
-const MAX_ATTEMPTS = 3;
-const RETRY_DELAY_MS = 2000;
-
-async function withLock<T>(fn: () => T): Promise<T> {
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const result = acquireLock(ROOT);
-    if (result.acquired) {
-      if (result.brokeStale) console.log("breaking stale lock");
-      try {
-        return fn();
-      } finally {
-        releaseLock(ROOT);
-      }
-    }
-    if (attempt < MAX_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-    }
-  }
-  console.error(
-    `could not acquire .loops-sync.lock after ${MAX_ATTEMPTS} attempts — another sync run appears to be in progress`,
-  );
-  process.exit(1);
-}
-
-await withLock(() => {
+await withLock(ROOT, () => {
   const OUTBOX_PATH = join(ROOT, "OUTBOX.md");
   const ARCHIVE_MD_PATH = join(ROOT, "ARCHIVE.md");
   const ITEMS_DIR = join(ROOT, "items");

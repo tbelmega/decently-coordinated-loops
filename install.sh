@@ -8,6 +8,13 @@
 #     already exists and is not a link to this repo is left untouched and
 #     reported.
 #
+# --config-dir <dir> (repeatable): also symlink the skills into <dir>/skills.
+#   Use it for each extra Claude profile / CLAUDE_CONFIG_DIR you run — e.g. a
+#   machine with several profiles wires them all in one invocation:
+#     ./install.sh --config-dir ~/.claude-work --config-dir ~/.claude-personal
+#   The default ~/.claude and ~/.agents targets are always linked as well.
+#   (Config-block seeding via --seed still targets the default config only.)
+#
 # --seed <dir> [seed args...]: additionally stand up (or join) a data repo by
 #   chaining setup/seed.ts, which also installs the agent-config block into the
 #   harness global configs (block content carries the data-repo path and owner).
@@ -41,9 +48,34 @@ link_skills() {
   echo "  $target_root: $linked newly linked, $current already current"
 }
 
+# Pull optional --config-dir values out of the args; everything else (notably
+# --seed and its arguments) passes through unchanged.
+extra_config_dirs=()
+passthrough_args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config-dir)
+      if [ "$#" -lt 2 ]; then
+        echo "--config-dir requires a directory argument" >&2
+        exit 1
+      fi
+      extra_config_dirs+=("$2")
+      shift 2
+      ;;
+    *)
+      passthrough_args+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- ${passthrough_args[@]+"${passthrough_args[@]}"}
+
 echo "Linking DCL skills:"
 link_skills "$HOME/.claude/skills"
 link_skills "$HOME/.agents/skills"
+for extra_dir in ${extra_config_dirs[@]+"${extra_config_dirs[@]}"}; do
+  link_skills "$extra_dir/skills"
+done
 
 if [ "${1:-}" = "--seed" ]; then
   shift

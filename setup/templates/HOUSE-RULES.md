@@ -26,7 +26,11 @@ this file before any unattended work.
      another harness or agent on the branch; run a review script. The loops-pickup
      deliver/iterate steps are written against this section. -->
 
-- TODO: define how reviews are requested and received.
+- Bundled option: DCL ships a local, forge-independent reviewer (an independent
+  model — Codex/Claude/Cursor — reviews the branch read-only). Activate it by setting
+  `review.reviewer` in `loops.json` (`bun run setup` offers this); agents then drive
+  it per the loops-review skill. The terminal signal is a clean review round.
+- TODO: keep the bundled reviewer, or define your own mechanism here.
 
 ## Merge policy
 
@@ -44,6 +48,16 @@ this file before any unattended work.
      services, no force-pushes to shared branches). -->
 
 - TODO: add instance-specific boundaries, or remove this placeholder.
+
+## Cross-cutting obligations (gate exemptions)
+
+<!-- Obligations that follow an action, not a directory: they apply regardless of
+     which repo you're in, so they are exempt from the project-participation gate
+     (loops-board → Project participation). Example: "after refreshing the design
+     export archive, file board items for newly-buildable work — even when invoked
+     from another repo." List them here, or leave empty. -->
+
+- TODO: none, or list cwd-independent obligations.
 
 ## Dispatch
 
