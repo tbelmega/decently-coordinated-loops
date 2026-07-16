@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ItemFile } from "./types.ts";
-import { validateItem, validateItems } from "./validate.ts";
+import { findDuplicateSlugs, validateItem, validateItems } from "./validate.ts";
 
 /** Minimal canonical ItemFile; override to introduce a specific violation. */
 function item(overrides: Partial<ItemFile>): ItemFile {
@@ -95,5 +95,35 @@ describe("validateItems", () => {
     ]);
     expect(anomalies).toHaveLength(1);
     expect(anomalies[0].slug).toBe("bad-state");
+  });
+});
+
+describe("findDuplicateSlugs", () => {
+  test("returns nothing when every slug is unique", () => {
+    expect(
+      findDuplicateSlugs([
+        item({ slug: "a", path: "items/a.md" }),
+        item({ slug: "b", path: "for-delivery/b.md" }),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("reports a slug that appears in two folders, with both paths sorted", () => {
+    const dupes = findDuplicateSlugs([
+      item({ slug: "foo", path: "items/foo.md" }),
+      item({ slug: "foo", path: "archive/foo.md" }),
+      item({ slug: "unique", path: "items/unique.md" }),
+    ]);
+    expect(dupes).toEqual([{ slug: "foo", paths: ["archive/foo.md", "items/foo.md"] }]);
+  });
+
+  test("reports multiple duplicated slugs, sorted by slug", () => {
+    const dupes = findDuplicateSlugs([
+      item({ slug: "zed", path: "items/zed.md" }),
+      item({ slug: "zed", path: "for-delivery/zed.md" }),
+      item({ slug: "abe", path: "items/abe.md" }),
+      item({ slug: "abe", path: "archive/abe.md" }),
+    ]);
+    expect(dupes.map((d) => d.slug)).toEqual(["abe", "zed"]);
   });
 });

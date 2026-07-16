@@ -93,3 +93,28 @@ export function validateItems(items: ItemFile[]): ItemAnomaly[] {
     .map((item) => ({ slug: item.slug, messages: validateItem(item) }))
     .filter((entry) => entry.messages.length > 0);
 }
+
+export interface DuplicateSlug {
+  slug: string;
+  /** Every file path carrying this slug, sorted. */
+  paths: string[];
+}
+
+/** Pure: slugs that occur on more than one item file across the loaded folders
+ * (items/, for-delivery/, archive/). A slug is a file identity — the folder move
+ * writes `<slug>.md`, and depends-on resolves by slug — so a collision means one
+ * item's file can overwrite another's on a move, and a dependency can resolve to the
+ * wrong target. An integrity error: sync must stop before writing, and check must
+ * fail. Sorted by slug; each entry's paths sorted for deterministic output. */
+export function findDuplicateSlugs(items: ItemFile[]): DuplicateSlug[] {
+  const pathsBySlug = new Map<string, string[]>();
+  for (const item of items) {
+    const paths = pathsBySlug.get(item.slug) ?? [];
+    paths.push(item.path);
+    pathsBySlug.set(item.slug, paths);
+  }
+  return [...pathsBySlug.entries()]
+    .filter(([, paths]) => paths.length > 1)
+    .map(([slug, paths]) => ({ slug, paths: [...paths].sort() }))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+}

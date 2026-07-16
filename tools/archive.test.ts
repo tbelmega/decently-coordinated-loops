@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadItemsDir } from "./parse.ts";
 import {
-  appendArchiveRows,
   currentFolder,
   FOR_DELIVERY_STATES,
   planMoves,
+  reconcileArchiveRows,
   targetFolder,
   TERMINAL_STATES,
 } from "./archive.ts";
@@ -96,7 +96,7 @@ describe("planMoves", () => {
   });
 });
 
-describe("appendArchiveRows", () => {
+describe("reconcileArchiveRows", () => {
   const ARCHIVE_MD = `# Archive
 
 Terminal work-streams.
@@ -105,14 +105,14 @@ Terminal work-streams.
 | --- | --- | --- |
 `;
 
-  test("is a no-op when there's nothing new to archive", () => {
-    expect(appendArchiveRows(ARCHIVE_MD, [])).toBe(ARCHIVE_MD);
+  test("is a no-op when there are no archived items", () => {
+    expect(reconcileArchiveRows(ARCHIVE_MD, [])).toBe(ARCHIVE_MD);
   });
 
-  test("appends a row per newly archived item, linking to archive/<slug>.md", () => {
+  test("appends a row per un-indexed archived item, linking to archive/<slug>.md", () => {
     const items = loadItemsDir(FIXTURES);
     const item = { ...items[0], slug: "some-slug", title: "Some Title", project: "atlas", updated: "2026-07-10" };
-    const result = appendArchiveRows(ARCHIVE_MD, [item]);
+    const result = reconcileArchiveRows(ARCHIVE_MD, [item]);
     expect(result).toContain("| [Some Title](archive/some-slug.md) | atlas | 2026-07-10 |");
   });
 
@@ -120,7 +120,7 @@ Terminal work-streams.
     const items = loadItemsDir(FIXTURES);
     const older = { ...items[0], slug: "older", title: "Older", updated: "2026-07-01" };
     const newer = { ...items[0], slug: "newer", title: "Newer", updated: "2026-07-08" };
-    const result = appendArchiveRows(ARCHIVE_MD, [older, newer]);
+    const result = reconcileArchiveRows(ARCHIVE_MD, [older, newer]);
     expect(result.indexOf("Newer")).toBeLessThan(result.indexOf("Older"));
   });
 
@@ -128,9 +128,30 @@ Terminal work-streams.
     const withExisting = `${ARCHIVE_MD}| [Old row](archive/old-row.md) | atlas | 2026-06-01 |\n`;
     const items = loadItemsDir(FIXTURES);
     const item = { ...items[0], slug: "fresh", title: "Fresh", updated: "2026-07-10" };
-    const result = appendArchiveRows(withExisting, [item]);
+    const result = reconcileArchiveRows(withExisting, [item]);
     expect(result).toContain("Old row");
     expect(result).toContain("Fresh");
     expect(result.indexOf("Old row")).toBeLessThan(result.indexOf("Fresh"));
+  });
+
+  test("is idempotent: an already-indexed slug is not re-appended", () => {
+    const items = loadItemsDir(FIXTURES);
+    const item = { ...items[0], slug: "kept", title: "Kept", updated: "2026-07-10" };
+    const once = reconcileArchiveRows(ARCHIVE_MD, [item]);
+    const twice = reconcileArchiveRows(once, [item]);
+    expect(twice).toBe(once);
+    expect(once.match(/archive\/kept\.md/g)?.length).toBe(1);
+  });
+
+  test("adds only the missing row when reconciling the full archive set (crash recovery)", () => {
+    const items = loadItemsDir(FIXTURES);
+    const indexed = { ...items[0], slug: "indexed", title: "Indexed", updated: "2026-07-05" };
+    const withOne = reconcileArchiveRows(ARCHIVE_MD, [indexed]);
+    // A later run finds the folder holds both the indexed item and one whose row a
+    // prior crash never wrote; only the missing row is added.
+    const orphaned = { ...items[0], slug: "orphaned", title: "Orphaned", updated: "2026-07-06" };
+    const result = reconcileArchiveRows(withOne, [indexed, orphaned]);
+    expect(result.match(/archive\/indexed\.md/g)?.length).toBe(1);
+    expect(result.match(/archive\/orphaned\.md/g)?.length).toBe(1);
   });
 });

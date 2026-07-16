@@ -1,10 +1,21 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import type { ItemMove } from "./archive.ts";
 
 export interface MoveLog {
   slug: string;
   message: string;
+}
+
+/** Move a tracked file with `git mv` so the change is recorded as a rename (git keeps
+ * the item file's history under `--follow`) and staged for the agent's commit. Returns
+ * false when git can't do it — the data repo isn't a git repo, or the file isn't
+ * tracked yet (a freshly filed item that was never committed) — so the caller falls
+ * back to a plain filesystem move. `fromRel`/`toRel` are repo-relative paths. */
+function gitMv(root: string, fromRel: string, toRel: string): boolean {
+  const result = spawnSync("git", ["-C", root, "mv", fromRel, toRel], { encoding: "utf8" });
+  return result.status === 0;
 }
 
 /** Executes a batch of item-file moves (items/ <-> for-delivery/ <-> archive/)
@@ -38,9 +49,14 @@ export function performMoves(root: string, moves: ItemMove[]): MoveLog[] {
     }
 
     mkdirSync(toDir, { recursive: true });
-    const raw = readFileSync(from, "utf8");
-    writeFileSync(to, raw);
-    unlinkSync(from);
+    // Prefer `git mv` (records a rename, preserving the item file's history); fall
+    // back to a filesystem move when the file isn't tracked or this isn't a git repo.
+    const toRel = `${move.to}/${move.item.slug}.md`;
+    if (!gitMv(root, move.item.path, toRel)) {
+      const raw = readFileSync(from, "utf8");
+      writeFileSync(to, raw);
+      unlinkSync(from);
+    }
     logs.push({ slug: move.item.slug, message: `moved (${move.from} -> ${move.to})` });
   }
 

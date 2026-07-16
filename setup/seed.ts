@@ -232,6 +232,17 @@ if (joinMode) {
   process.exit(0);
 }
 
+// New mode scaffolds into `root` and (on a fresh git init) `git add -A` — so a
+// non-empty target would sweep unrelated user files into the seed commit. Refuse it:
+// seed into a new or empty directory, or pass --join to wire an existing data repo.
+if (existsSync(root) && readdirSync(root).length > 0) {
+  console.error(
+    `refusing to seed into ${root}: directory is not empty. Seed into a new or empty ` +
+      `directory, or pass --join to wire an existing data repo.`,
+  );
+  process.exit(2);
+}
+
 await promptMissing(opts);
 const owner = opts.owner!;
 const branch = opts.branch ?? "master";

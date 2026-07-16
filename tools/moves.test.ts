@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { performMoves } from "./moves.ts";
 import type { ItemFile } from "./types.ts";
 
@@ -11,6 +12,12 @@ function tempRoot(): string {
   mkdirSync(join(root, "for-delivery"), { recursive: true });
   mkdirSync(join(root, "archive"), { recursive: true });
   return root;
+}
+
+function gitInitRepo(root: string): void {
+  spawnSync("git", ["-C", root, "init", "-q"]);
+  spawnSync("git", ["-C", root, "config", "user.email", "t@example.com"]);
+  spawnSync("git", ["-C", root, "config", "user.name", "Tester"]);
 }
 
 function item(overrides: Partial<ItemFile> & { slug: string; path: string }): ItemFile {
@@ -78,6 +85,50 @@ describe("performMoves", () => {
       expect(logs).toHaveLength(1);
       expect(logs[0].message).toContain("anomaly");
       expect(existsSync(join(root, "for-delivery", "ghost.md"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("records the move as a git rename when the file is tracked (preserves history)", () => {
+    const root = tempRoot();
+    try {
+      gitInitRepo(root);
+      writeFileSync(join(root, "for-delivery", "widget.md"), "---\nstate: accepted\n---\nBody.\n");
+      spawnSync("git", ["-C", root, "add", "-A"]);
+      spawnSync("git", ["-C", root, "commit", "-q", "-m", "seed"]);
+
+      const move = {
+        item: item({ slug: "widget", path: "for-delivery/widget.md", state: "accepted" }),
+        from: "for-delivery" as const,
+        to: "archive" as const,
+      };
+      performMoves(root, [move]);
+
+      expect(existsSync(join(root, "for-delivery", "widget.md"))).toBe(false);
+      expect(existsSync(join(root, "archive", "widget.md"))).toBe(true);
+      // Staged as a rename (R…), not delete-plus-untracked-add — so `git log --follow`
+      // keeps the item's history.
+      const status = spawnSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8" }).stdout;
+      expect(status).toMatch(/^R/m);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to a filesystem move when the repo is not git (untracked)", () => {
+    const root = tempRoot(); // no git init
+    try {
+      writeFileSync(join(root, "for-delivery", "widget.md"), "---\nstate: accepted\n---\nBody.\n");
+      const move = {
+        item: item({ slug: "widget", path: "for-delivery/widget.md" }),
+        from: "for-delivery" as const,
+        to: "archive" as const,
+      };
+      const logs = performMoves(root, [move]);
+      expect(logs).toEqual([{ slug: "widget", message: "moved (for-delivery -> archive)" }]);
+      expect(existsSync(join(root, "for-delivery", "widget.md"))).toBe(false);
+      expect(readFileSync(join(root, "archive", "widget.md"), "utf8")).toContain("Body.");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

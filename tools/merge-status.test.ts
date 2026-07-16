@@ -7,6 +7,7 @@ import {
   itemsToFlipMerged,
   parsePrUrl,
   planLandedCheck,
+  statusKeyFor,
   tokenPathForOrg,
   type PrStatus,
 } from "./merge-status.ts";
@@ -118,8 +119,10 @@ describe("planLandedCheck", () => {
 });
 
 describe("buildMergeReport", () => {
-  const statuses = (entries: PrStatus[]): Map<string, PrStatus> =>
-    new Map(entries.map((s) => [s.ref, s]));
+  // Test items default to project "atlas"; the status store is keyed by statusKey
+  // (project + ref), so mirror that here.
+  const statuses = (entries: PrStatus[], project = "atlas"): Map<string, PrStatus> =>
+    new Map(entries.map((s) => [statusKeyFor(project, s.ref), s]));
 
   test("flags a MERGED PR whose item is still awaiting review-merge as stale", () => {
     const items = [
@@ -219,11 +222,31 @@ describe("buildMergeReport", () => {
     const report = buildMergeReport(items, statuses([]));
     expect(report.rows.length).toBe(0);
   });
+
+  test("does not conflate two projects that share a branch name (git adapter)", () => {
+    // Regression: the git adapter's workRef is a bare branch. Two items in different
+    // projects both on `master` must resolve to their own status, not the first one
+    // fetched. The store is keyed by statusKey (project + ref), so the map has a
+    // distinct entry per project.
+    const items = [
+      item({ slug: "atlas-x", project: "atlas", state: "merged", links: { branch: "master" } }),
+      item({ slug: "blog-y", project: "blog", state: "implemented", links: { branch: "master" } }),
+    ];
+    const statusByKey = new Map<string, PrStatus>([
+      [statusKeyFor("atlas", "master"), { ref: "master", state: "MERGED" }],
+      [statusKeyFor("blog", "master"), { ref: "master", state: "OPEN" }],
+    ]);
+    const report = buildMergeReport(items, statusByKey);
+    const byslug = Object.fromEntries(report.rows.map((r) => [r.slug, r.state]));
+    expect(byslug).toEqual({ "atlas-x": "MERGED", "blog-y": "OPEN" });
+  });
 });
 
 describe("itemsToFlipMerged", () => {
-  const statuses = (entries: PrStatus[]): Map<string, PrStatus> =>
-    new Map(entries.map((s) => [s.ref, s]));
+  // Test items default to project "atlas"; the status store is keyed by statusKey
+  // (project + ref), so mirror that here.
+  const statuses = (entries: PrStatus[], project = "atlas"): Map<string, PrStatus> =>
+    new Map(entries.map((s) => [statusKeyFor(project, s.ref), s]));
 
   test("returns an implemented item whose PR is MERGED", () => {
     const items = [
@@ -269,6 +292,21 @@ describe("itemsToFlipMerged", () => {
       statuses([{ ref: "https://github.com/acme-org/atlas/pull/50", state: "OPEN" }]),
     );
     expect(flip).toEqual([]);
+  });
+
+  test("does not flip on another project's same-named branch landing", () => {
+    // Regression: `atlas` on `master` is still open; `blog` on `master` has landed.
+    // Keying by bare branch would flip atlas off blog's result. statusKey keeps them
+    // apart, so only the project whose own branch landed is flipped.
+    const items = [
+      item({ slug: "atlas-open", project: "atlas", state: "implemented", links: { branch: "master" } }),
+      item({ slug: "blog-landed", project: "blog", state: "implemented", links: { branch: "master" } }),
+    ];
+    const statusByKey = new Map<string, PrStatus>([
+      [statusKeyFor("atlas", "master"), { ref: "master", state: "OPEN" }],
+      [statusKeyFor("blog", "master"), { ref: "master", state: "MERGED" }],
+    ]);
+    expect(itemsToFlipMerged(items, statusByKey).map((i) => i.slug)).toEqual(["blog-landed"]);
   });
 });
 

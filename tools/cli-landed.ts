@@ -34,6 +34,7 @@ import {
   itemsToFlipMerged,
   parsePrUrl,
   planLandedCheck,
+  statusKey,
   tokenPathForOrg,
   workRef,
   type PrState,
@@ -150,24 +151,26 @@ if (checkable.length === 0) {
 
 console.log(`Checking ${checkable.length} item(s)…\n`);
 
-const statusByRef = new Map<string, PrStatus>();
+const statusByKey = new Map<string, PrStatus>();
 for (const item of checkable) {
-  // The plan's `ref` is the key both this store and the report's lookup use — always
-  // workRef(item), never the branch, so an item carrying both a PR and a branch link
-  // isn't stored-under-branch, looked-up-under-PR, and silently dropped.
+  // Key by statusKey(item) — project + workRef — so two projects sharing a branch
+  // name (git adapter: workRef is the bare branch) don't collide on one cached
+  // result. buildMergeReport / itemsToFlipMerged look up under the same key.
+  const key = statusKey(item);
+  if (!key) continue;
+  if (statusByKey.has(key)) continue;
   const plan = planLandedCheck(item, effectiveAdapter(item.project));
   if (!plan) continue;
-  if (statusByRef.has(plan.ref)) continue;
   if (plan.kind === "github") {
-    statusByRef.set(plan.ref, fetchPrStatus(plan.pr));
+    statusByKey.set(key, fetchPrStatus(plan.pr));
   } else if (plan.kind === "git") {
-    statusByRef.set(plan.ref, fetchGitStatus(item, plan.branch));
+    statusByKey.set(key, fetchGitStatus(item, plan.branch));
   } else {
-    statusByRef.set(plan.ref, { ref: plan.ref, error: plan.error });
+    statusByKey.set(key, { ref: plan.ref, error: plan.error });
   }
 }
 
-const report = buildMergeReport(checkable, statusByRef);
+const report = buildMergeReport(checkable, statusByKey);
 
 const icon = (state: PrState | "ERROR"): string =>
   state === "MERGED" ? "✓" : state === "ERROR" ? "!" : state === "CLOSED" ? "✗" : "·";
@@ -186,7 +189,7 @@ for (const row of report.rows) {
   );
 }
 
-const flippable = itemsToFlipMerged(checkable, statusByRef);
+const flippable = itemsToFlipMerged(checkable, statusByKey);
 
 if (apply) {
   if (!flippable.length) {

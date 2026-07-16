@@ -4,8 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadArchiveDir, loadForDeliveryDir, loadItemsDir } from "./parse.ts";
 import { runPreflight } from "./preflight.ts";
-import { printDanglingDeps, printPreflightReport, printValidationReport } from "./report.ts";
-import { validateItems } from "./validate.ts";
+import { printDanglingDeps, printDuplicateSlugs, printPreflightReport, printValidationReport } from "./report.ts";
+import { findDuplicateSlugs, validateItems } from "./validate.ts";
 import { buildUniverse, computeReadiness, danglingDeps } from "./readiness.ts";
 import { dclHead, stampedVersion } from "./version.ts";
 
@@ -26,6 +26,12 @@ printPreflightReport(report);
 
 const anomalies = validateItems([...items, ...forDeliveryItems]);
 printValidationReport(anomalies);
+
+// Duplicate slugs across items/, for-delivery/, and archive/: a slug is a file
+// identity, so a collision lets one item's file overwrite another's on a move and
+// misdirects depends-on resolution. An integrity error.
+const duplicateSlugs = findDuplicateSlugs([...items, ...forDeliveryItems, ...archiveItems]);
+printDuplicateSlugs(duplicateSlugs);
 
 // Dangling depends-on: a target slug that resolves to no item anywhere (items/,
 // for-delivery/, or archive/). The referrer can never become eligible, so it's an
@@ -49,6 +55,12 @@ if (stamped) {
   }
 }
 
-if (report.orphanRows.length || report.mismatches.length || anomalies.length || dangling.length) {
+if (
+  report.orphanRows.length ||
+  report.mismatches.length ||
+  anomalies.length ||
+  duplicateSlugs.length ||
+  dangling.length
+) {
   process.exit(1);
 }

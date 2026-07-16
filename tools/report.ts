@@ -1,5 +1,5 @@
 import type { PreflightReport } from "./preflight.ts";
-import type { ItemAnomaly } from "./validate.ts";
+import type { DuplicateSlug, ItemAnomaly } from "./validate.ts";
 import type { DanglingDep } from "./readiness.ts";
 
 /** Human-readable preflight summary, shared by the sync and check CLIs. */
@@ -37,6 +37,17 @@ export function printValidationReport(anomalies: ItemAnomaly[]): void {
     for (const message of anomaly.messages) {
       console.log(`  - ${anomaly.slug}: ${message}`);
     }
+  }
+}
+
+/** Human-readable duplicate-slug summary: one slug carried by more than one item
+ * file across folders. An integrity error — the sync CLI stops before writing and the
+ * check CLI exits non-zero. */
+export function printDuplicateSlugs(duplicates: DuplicateSlug[]): void {
+  if (!duplicates.length) return;
+  console.log(`\nDuplicate slugs (${duplicates.length} — same slug on more than one item file):`);
+  for (const dup of duplicates) {
+    console.log(`  - ${dup.slug}: ${dup.paths.join(", ")}`);
   }
 }
 

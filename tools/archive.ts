@@ -50,13 +50,17 @@ function archiveRow(item: ItemFile): string {
   return `| [${item.title}](archive/${item.slug}.md) | ${item.project} | ${item.updated} |`;
 }
 
-/** Append rows for newly archived items to ARCHIVE.md's text. Existing rows are left
- * untouched (append-only); the new batch is sorted most-recently-finished first,
- * matching the table's existing convention. No-op (returns `archiveText` unchanged)
- * when there's nothing new to archive. */
-export function appendArchiveRows(archiveText: string, newlyArchived: ItemFile[]): string {
-  if (!newlyArchived.length) return archiveText;
-  const rows = [...newlyArchived].sort((a, b) => b.updated.localeCompare(a.updated)).map(archiveRow);
+/** Reconcile ARCHIVE.md against the set of archived items — derived and idempotent.
+ * A row for an item already indexed (matched by its `archive/<slug>.md` link) is left
+ * untouched; only items with no row yet are appended, sorted most-recently-finished
+ * first. Because it reconciles against the archive/ folder rather than a one-shot
+ * "just moved" batch, a sync that crashed after moving a file but before indexing it
+ * is repaired on the next run — the move and the index become recoverable as one
+ * derived operation. No-op (returns `archiveText` unchanged) when nothing is missing. */
+export function reconcileArchiveRows(archiveText: string, archivedItems: ItemFile[]): string {
+  const missing = archivedItems.filter((item) => !archiveText.includes(`](archive/${item.slug}.md)`));
+  if (!missing.length) return archiveText;
+  const rows = [...missing].sort((a, b) => b.updated.localeCompare(a.updated)).map(archiveRow);
   const hasTable = archiveText.includes(ARCHIVE_TABLE_HEADER);
   const trimmed = archiveText.replace(/\n+$/, "");
   const prefix = hasTable ? trimmed : `${trimmed}\n\n${ARCHIVE_TABLE_HEADER}`;

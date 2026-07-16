@@ -91,6 +91,24 @@ describe("seed: new mode", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("--owner");
   });
+
+  test("refuses to seed into a non-empty directory (would commit unrelated files)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "loops-e2e-"));
+    writeFileSync(join(dir, "my-notes.txt"), "pre-existing user file\n");
+    const result = run(["run", SEED, dir, "--owner", "casey", "--skip-harness"]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("not empty");
+    // the user's file is untouched and no scaffold was written
+    expect(readFileSync(join(dir, "my-notes.txt"), "utf8")).toBe("pre-existing user file\n");
+    expect(existsSync(join(dir, "BOARD.md"))).toBe(false);
+  });
+
+  test("seeds into an existing empty directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "loops-e2e-"));
+    const result = run(["run", SEED, dir, "--owner", "casey", "--skip-harness"]);
+    expect(result.status).toBe(0);
+    expect(existsSync(join(dir, "BOARD.md"))).toBe(true);
+  });
 });
 
 describe("seeded repo passes the board tools", () => {
