@@ -81,8 +81,10 @@ sufficient basis for implementation?". Before implementing *any* item, judge it
 against self-qualification criteria 2 and 3 — no product decisions to invent, scope
 fits one repo and roughly one session — even when `auto` made it eligible. An item
 that fails either criterion is **spec-sized**: unless it has an owner-approved spec
-(state `spec-filed` or later, spec committed at `links.spec`) or carries the owner's
-explicit `spec: waived`, it is not implementable, whatever its autonomy. Its pickup
+(state `spec-filed` or later, with the spec reachable per loops-board → Specs vs.
+items — landed, or pushed on the item's recorded `links.branch`, which the
+implementation then bases on) or carries the owner's explicit `spec: waived`, it is
+not implementable, whatever its autonomy. Its pickup
 converts to spec-drafting — take it through refinement (purpose-clear branch, below)
 instead of steps 3–5. A refined item description is never a spec.
 
@@ -264,9 +266,10 @@ first, linking back to its source.
   approval async: one outbox entry (type `approval`), set `next-actor: owner`,
   `awaiting: approve`, and next-step "owner: approve spec draft in item file". On
   approval, promotion is agent work — commit the approved content to the project's
-  specs location (`PROJECTS.md`), set `links.spec`, annotate `## Refinement` as
-  promoted, flip the state to `spec-filed`; the item is then implementable under
-  the spec gate.
+  specs location (`PROJECTS.md`) on an agent branch pushed to the project remote,
+  record `links.spec` + `links.branch` + `links.head-sha`, annotate `## Refinement`
+  as promoted, flip the state to `spec-filed`; the item is then implementable under
+  the spec gate, based on that recorded branch/commit.
 - **Purpose vague**: don't research speculatively. Write a `## Questions for the
   owner` section with the specific questions that would unblock refinement, set
   `next-step` to "owner: answer questions in item file", mirror the top question to
