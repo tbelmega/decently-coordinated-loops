@@ -48,6 +48,26 @@ describe("gitLandedStatus", () => {
     expect(gitLandedStatus(dir, "feature/search", "master")).toEqual({ state: "PENDING" });
   });
 
+  test("an exact item range is LANDED after the branch advances with another item", () => {
+    const dir = fixtureRepo();
+    const baseSha = git(dir, "rev-parse", "master");
+    const firstHeadSha = git(dir, "rev-parse", "feature/search");
+    git(dir, "checkout", "-q", "feature/search");
+    writeFileSync(join(dir, "c.txt"), "later stacked work\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "add later item");
+    git(dir, "checkout", "-q", "master");
+    git(dir, "cherry-pick", firstHeadSha);
+
+    expect(gitLandedStatus(dir, "feature/search", "master")).toEqual({ state: "PENDING" });
+    expect(
+      gitLandedStatus(dir, "feature/search", "master", {
+        baseSha,
+        headSha: firstHeadSha,
+      }),
+    ).toEqual({ state: "LANDED" });
+  });
+
   test("a fully-behind branch (no unique commits) counts as LANDED", () => {
     const dir = fixtureRepo();
     git(dir, "cherry-pick", "feature/search");

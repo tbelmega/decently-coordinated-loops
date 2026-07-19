@@ -46,6 +46,8 @@ updated: 2026-07-06
 links:
   spec: docs/specs/2026-07-08-thing.md
   pr: https://github.com/example/pr/1
+  inventory: docs/inventory/current.md
+  parent-item: items/atlas-parent.md
 ---
 Body.
 `;
@@ -53,6 +55,36 @@ Body.
     expect(item.dependsOn).toEqual(["atlas-foundation", "atlas-other"]);
     expect(item.links.spec).toBe("docs/specs/2026-07-08-thing.md");
     expect(item.links.pr).toBe("https://github.com/example/pr/1");
+    expect(item.links.inventory).toBe("docs/inventory/current.md");
+    expect(item.links["parent-item"]).toBe("items/atlas-parent.md");
+  });
+
+  test("parses immutable handoff and stack-parent links", () => {
+    const text = `---
+title: "Stacked delivery slice"
+project: atlas
+state: implemented
+owner: agent-1
+autonomy: auto
+next-actor: owner
+awaiting: review-merge
+next-step: "Owner lands it"
+updated: 2026-07-19
+links:
+  branch: agents/worker-1--stacked-delivery-slice
+  stack-parent: first-delivery-slice
+  base-sha: abc123
+  head-sha: def456
+---
+Body.
+`;
+    const item = parseItemFileText("items/stacked-delivery-slice.md", text);
+    expect(item.links).toEqual({
+      branch: "agents/worker-1--stacked-delivery-slice",
+      stackParent: "first-delivery-slice",
+      baseSha: "abc123",
+      headSha: "def456",
+    });
   });
 
   test("omits awaiting when absent", () => {

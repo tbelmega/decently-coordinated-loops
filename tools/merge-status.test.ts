@@ -7,6 +7,7 @@ import {
   itemsToFlipMerged,
   parsePrUrl,
   planLandedCheck,
+  statusKey,
   statusKeyFor,
   tokenPathForOrg,
   type PrStatus,
@@ -93,6 +94,35 @@ describe("planLandedCheck", () => {
   test("git adapter with a branch link is keyed and checked by the branch", () => {
     const plan = planLandedCheck(item({ slug: "a", links: { branch: BRANCH } }), "git");
     expect(plan).toEqual({ kind: "git", ref: BRANCH, branch: BRANCH });
+  });
+
+  test("git adapter carries an immutable item range when both SHAs are recorded", () => {
+    const plan = planLandedCheck(
+      item({
+        slug: "a",
+        links: { branch: BRANCH, baseSha: "base123", headSha: "head456" },
+      }),
+      "git",
+    );
+    expect(plan).toEqual({
+      kind: "git",
+      ref: BRANCH,
+      branch: BRANCH,
+      baseSha: "base123",
+      headSha: "head456",
+    });
+  });
+
+  test("git adapter rejects a partial immutable range", () => {
+    const plan = planLandedCheck(
+      item({ slug: "a", links: { branch: BRANCH, headSha: "head456" } }),
+      "git",
+    );
+    expect(plan).toEqual({
+      kind: "error",
+      ref: BRANCH,
+      error: expect.stringContaining("base-sha and links.head-sha"),
+    });
   });
 
   test("git adapter with BOTH links keys by workRef (the PR URL), not the branch", () => {
@@ -239,6 +269,18 @@ describe("buildMergeReport", () => {
     const report = buildMergeReport(items, statusByKey);
     const byslug = Object.fromEntries(report.rows.map((r) => [r.slug, r.state]));
     expect(byslug).toEqual({ "atlas-x": "MERGED", "blog-y": "OPEN" });
+  });
+
+  test("does not conflate two items on the same persistent branch", () => {
+    const first = item({
+      slug: "first",
+      links: { branch: "agents/worker-1", baseSha: "base-a", headSha: "head-a" },
+    });
+    const second = item({
+      slug: "second",
+      links: { branch: "agents/worker-1", baseSha: "head-a", headSha: "head-b" },
+    });
+    expect(statusKey(first)).not.toBe(statusKey(second));
   });
 });
 

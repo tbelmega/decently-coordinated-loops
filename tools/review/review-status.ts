@@ -7,11 +7,14 @@ export interface ReviewEvidencePaths {
   markdownPath: string;
 }
 
-export function reviewEvidencePaths(repository: string, branch: string): ReviewEvidencePaths {
+export function reviewEvidencePaths(repository: string, branch: string, item?: string): ReviewEvidencePaths {
   const reviewDirectory = join(repository, ".reviews");
   const slug = branch.replaceAll(/[^a-zA-Z0-9._-]+/g, "-");
   const branchHash = createHash("sha256").update(branch).digest("hex").slice(0, 10);
-  const filename = `${slug}--${branchHash}`;
+  const itemSuffix = item
+    ? `--item-${item.replaceAll(/[^a-zA-Z0-9._-]+/g, "-")}--${createHash("sha256").update(item).digest("hex").slice(0, 10)}`
+    : "";
+  const filename = `${slug}--${branchHash}${itemSuffix}`;
   return {
     jsonPath: join(reviewDirectory, `${filename}.json`),
     markdownPath: join(reviewDirectory, `${filename}.md`),
@@ -19,6 +22,7 @@ export function reviewEvidencePaths(repository: string, branch: string): ReviewE
 }
 
 interface ReviewStatusBase {
+  item?: string;
   headSha: string;
   ledgerPath: string;
 }
@@ -100,6 +104,7 @@ export function renderReviewStatus(status: ReviewStatus): string {
   if (status.kind === "passed") {
     return [
       "REVIEW_STATUS=passed",
+      ...(status.item ? [`item=${JSON.stringify(status.item)}`] : []),
       `model=${JSON.stringify(status.model)}`,
       `rounds=${status.rounds}`,
       `head=${status.headSha}`,
@@ -108,6 +113,7 @@ export function renderReviewStatus(status: ReviewStatus): string {
   }
   return [
     `REVIEW_STATUS=${status.kind}`,
+    ...(status.item ? [`item=${JSON.stringify(status.item)}`] : []),
     `head=${status.headSha}`,
     `ledger=${status.ledgerPath}`,
     `reason=${JSON.stringify(status.reason)}`,

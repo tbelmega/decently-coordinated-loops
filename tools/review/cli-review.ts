@@ -37,6 +37,7 @@ import {
 
 interface StartOptions {
   baseRef: string;
+  item?: string;
   reviewer: Reviewer;
   model?: string;
 }
@@ -73,7 +74,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
 }
 
 function parseStartOptions(args: string[]): StartOptions {
-  const flags: { reviewer?: string; dataRepo?: string; model?: string } = {};
+  const flags: { reviewer?: string; dataRepo?: string; model?: string; item?: string } = {};
   let baseRef = "";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -82,6 +83,7 @@ function parseStartOptions(args: string[]): StartOptions {
     else if (arg === "--data-repo" && value) flags.dataRepo = value;
     else if (arg === "--reviewer" && value) flags.reviewer = value;
     else if (arg === "--model" && value) flags.model = value;
+    else if (arg === "--item" && value) flags.item = value;
     else if (arg.startsWith("--")) {
       throw new Error(`unknown or incomplete argument: ${arg}`);
     } else continue;
@@ -89,7 +91,7 @@ function parseStartOptions(args: string[]): StartOptions {
   }
   if (!baseRef) throw new Error("start requires --base <ref>");
   const { reviewer, model } = resolveReviewer(flags);
-  return { baseRef, reviewer, model };
+  return { baseRef, item: flags.item, reviewer, model };
 }
 
 function reviewPrompt(baseSha: string, headSha: string): string {
@@ -121,13 +123,14 @@ async function startReview(options: StartOptions): Promise<void> {
   try {
     const resolvedBaseSha = git(["rev-parse", "--verify", `${options.baseRef}^{commit}`]);
     const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
-    const paths = reviewEvidencePaths(repository, branch);
+    const paths = reviewEvidencePaths(repository, branch, options.item);
     const modelLabel = options.model ?? `${options.reviewer.id} (default)`;
     let ledger: ReviewLedger;
     let baseSha: string;
     try {
       ledger = readLedger(paths.jsonPath);
       if (ledger.branch !== branch) throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
+      if (ledger.item !== options.item) throw new Error("review item does not match the existing ledger");
       if (ledger.baseRef !== options.baseRef) throw new Error("review base ref does not match the existing ledger");
       baseSha = ledger.baseSha;
       const continuation = reviewCanContinue(
@@ -139,7 +142,7 @@ async function startReview(options: StartOptions): Promise<void> {
     } catch (error: unknown) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         baseSha = resolvedBaseSha;
-        ledger = createReviewLedger({ branch, baseRef: options.baseRef, baseSha });
+        ledger = createReviewLedger({ item: options.item, branch, baseRef: options.baseRef, baseSha });
       } else {
         throw error;
       }
@@ -175,6 +178,7 @@ async function startReview(options: StartOptions): Promise<void> {
 }
 
 interface DispositionOptions {
+  item?: string;
   findingId: string;
   kind: DispositionKind;
   reason: string;
@@ -195,7 +199,7 @@ function parseDispositionOptions(args: string[]): DispositionOptions {
     throw new Error("disposition requires --finding <id> --status <status> --reason <reason>");
   }
   if (!isDispositionKind(status)) throw new Error(`invalid disposition: ${status}`);
-  return { findingId, kind: status, reason };
+  return { item: values.get("--item"), findingId, kind: status, reason };
 }
 
 async function addDisposition(options: DispositionOptions): Promise<void> {
@@ -204,11 +208,12 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
   const repository = git(["rev-parse", "--show-toplevel"]);
   const releaseLock = await acquireReviewLock(repository, branch);
   try {
-    const paths = reviewEvidencePaths(repository, branch);
+    const paths = reviewEvidencePaths(repository, branch, options.item);
     const existingLedger = readLedger(paths.jsonPath);
     if (existingLedger.branch !== branch) {
       throw new Error(`review ledger branch is ${existingLedger.branch}, expected ${branch}`);
     }
+    if (existingLedger.item !== options.item) throw new Error("review item does not match the existing ledger");
     const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason);
     await writeLedger(ledger, paths);
     process.stdout.write(`${options.findingId} marked ${options.kind}\n`);
@@ -221,12 +226,12 @@ function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-function currentReviewStatus(): ReviewStatus {
+function currentReviewStatus(item?: string): ReviewStatus {
   const branch = git(["branch", "--show-current"]);
   if (!branch) throw new Error("review status requires a named branch");
   const repository = git(["rev-parse", "--show-toplevel"]);
   const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
-  const paths = reviewEvidencePaths(repository, branch);
+  const paths = reviewEvidencePaths(repository, branch, item);
   const ledgerPath = relative(repository, paths.markdownPath);
   const dirtyOutsideReviewEvidence = git([
     "status",
@@ -239,24 +244,39 @@ function currentReviewStatus(): ReviewStatus {
   if (dirtyOutsideReviewEvidence) {
     return {
       kind: "blocked",
+      ...(item ? { item } : {}),
       headSha,
       ledgerPath,
       reason: "working tree has uncommitted changes outside .reviews",
     };
   }
   try {
-    return evaluateReviewStatus(readLedger(paths.jsonPath), headSha, ledgerPath);
+    const ledger = readLedger(paths.jsonPath);
+    if (ledger.item !== item) throw new Error("review item does not match the selected ledger");
+    return { ...evaluateReviewStatus(ledger, headSha, ledgerPath), ...(item ? { item } : {}) };
   } catch (error: unknown) {
     if (isMissingFileError(error)) {
-      return { kind: "not_run", headSha, ledgerPath, reason: "no review ledger for current branch" };
+      return {
+        kind: "not_run",
+        ...(item ? { item } : {}),
+        headSha,
+        ledgerPath,
+        reason: item ? "no review ledger for current item" : "no review ledger for current branch",
+      };
     }
     const reason = error instanceof Error ? error.message : String(error);
-    return { kind: "blocked", headSha, ledgerPath, reason: `review evidence is invalid: ${reason}` };
+    return {
+      kind: "blocked",
+      ...(item ? { item } : {}),
+      headSha,
+      ledgerPath,
+      reason: `review evidence is invalid: ${reason}`,
+    };
   }
 }
 
-function printReviewStatus(): void {
-  const status = currentReviewStatus();
+function printReviewStatus(item?: string): void {
+  const status = currentReviewStatus(item);
   process.stdout.write(`${renderReviewStatus(status)}\n`);
   if (status.kind !== "passed") process.exitCode = 1;
 }
@@ -268,8 +288,9 @@ async function main(): Promise<void> {
   } else if (command === "disposition") {
     await addDisposition(parseDispositionOptions(args));
   } else if (command === "status") {
-    if (args.length > 0) throw new Error("status takes no arguments");
-    printReviewStatus();
+    if (args.length === 0) printReviewStatus();
+    else if (args.length === 2 && args[0] === "--item" && args[1]) printReviewStatus(args[1]);
+    else throw new Error("status accepts only --item <item-slug>");
   } else {
     throw new Error("usage: cli-review <start|disposition|status> [options]");
   }

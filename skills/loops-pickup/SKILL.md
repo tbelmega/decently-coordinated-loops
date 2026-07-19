@@ -33,6 +33,12 @@ Before claiming anything new, in order:
      `bun run landed` and record with `--apply` (or by hand: state `merged`,
      `next-actor: agent`, `autonomy: auto`, next-step per loops-board), then treat
      it as a verification pickup (see "Verify a landed item").
+4. **Acquire your documented permanent slot, if the project uses one.** Run landed
+   detection before changing branch state. Delete a local named stack branch only
+   after its exact `base-sha..head-sha` range reports LANDED and that landing is
+   recorded on the board. When the whole stack has landed, return the worktree to
+   its persistent base branch and bring that branch level with the integration
+   branch. Branch position by itself is never the cleanup proof.
 
 ## 1. Choose the project
 
@@ -120,11 +126,20 @@ board item first if none exists).
 
 - Follow the target repo's own agent rules (AGENTS.md/CLAUDE.md) and its
   `PROJECTS.md` entry for everything: worktree/branch policy, TDD, quality gate.
-  If a project's branch already has an open, un-landed change out for review, do
-  not stack a second feature on it — iterate on that review's feedback instead, or
-  pick work in another project.
-- Repos without agent rules: create a branch `pickup/<item-slug>`, never commit to
-  the integration branch directly.
+- **Documented permanent slots.** Resolve the worktree's persistent base branch and
+  its active board items. With no unlanded item, work on the persistent branch and
+  save its starting commit as `base-sha`. With one or two unlanded items, create
+  `<base-branch>--<item-slug>` from the current stack tip, record the tip item as
+  `stack-parent`, and save that parent's `head-sha` as the new `base-sha`. Three
+  unlanded items make the slot full; choose another slot or project. Unrecorded
+  ahead commits make the slot occupied until they are identified or parked.
+- **Slot cleanup.** At acquisition, remove stale local `--<item-slug>` branches whose
+  exact ranges are recorded LANDED, after switching away from each branch. A
+  rebase-shaped landing may require `git branch -D`; use it only with both the exact
+  landed result and board record. Keep remote branches unless project policy says
+  they are disposable.
+- Repos without a documented permanent-slot policy create `pickup/<item-slug>` from
+  the integration branch rather than committing to that branch directly.
 - Run the project's full quality gate before requesting review.
 
 ## 5. Deliver and iterate
@@ -133,9 +148,11 @@ board item first if none exists).
    bot, invoking another harness/agent on the branch, a review script — whatever
    the instance defines), referencing the spec. If the instance activated the
    bundled local reviewer (`loops.json → review.reviewer`), that is the mechanism —
-   drive it per the loops-review skill. Set item state `implemented`,
+   drive it per the loops-review skill with `--item <item-slug>` and the recorded
+   `base-sha`, so a stacked item is reviewed only against its parent HEAD. Set item state `implemented`,
    `next-actor: owner`, `awaiting: review-merge`, add the `pr:`/`branch:` link, log
-   line, commit + push the board. Landing the change on the integration branch is
+   `base-sha`, the reviewed `head-sha`, and `stack-parent` when stacked; then commit +
+   push the board. Landing the change on the integration branch is
    the owner's step (see Merge policy below).
 2. **Evaluate feedback technically** — implement what's right, respond with
    reasoning to what's wrong. Honor the mechanism's terminal "review complete"

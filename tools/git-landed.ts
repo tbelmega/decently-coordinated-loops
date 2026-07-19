@@ -13,6 +13,11 @@ export interface GitLandedResult {
   error?: string;
 }
 
+export interface GitItemRange {
+  baseSha: string;
+  headSha: string;
+}
+
 function git(repoDir: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
   const result = spawnSync("git", ["-C", repoDir, ...args], { encoding: "utf8" });
   return {
@@ -47,26 +52,39 @@ function integrationRef(repoDir: string, integrationBranch: string): string | nu
 }
 
 /** Pure query (no fetch — the caller refreshes remote refs if it wants freshness):
- * has every commit unique to `branch` landed, patch-equivalent, on the integration
- * branch? `git cherry <integration> <branch>` marks each branch commit `-` (an
- * equivalent patch exists upstream) or `+` (it doesn't); any `+` means PENDING.
- * An empty result means the branch has no unique commits — fully behind or equal —
- * which counts as LANDED (nothing is waiting). */
+ * has every commit in the immutable item range, or the legacy whole branch, landed
+ * patch-equivalent on the integration branch? `git cherry` marks each selected
+ * commit `-` (an equivalent patch exists upstream) or `+` (it doesn't); any `+`
+ * means PENDING. An empty result means nothing in the selected range is waiting. */
 export function gitLandedStatus(
   repoDir: string,
   branch: string,
   integrationBranch: string,
+  itemRange?: GitItemRange,
 ): GitLandedResult {
   const intRef = integrationRef(repoDir, integrationBranch);
   if (!intRef) {
     return { error: `integration branch "${integrationBranch}" not found in ${repoDir}` };
   }
-  const branchRef = resolveRef(repoDir, branch);
-  if (!branchRef) {
-    return { error: `branch "${branch}" not found in ${repoDir} (locally or on origin)` };
+  let headRef: string;
+  const cherryArgs = ["cherry", intRef];
+  if (itemRange) {
+    const base = git(repoDir, ["rev-parse", "--verify", "--quiet", `${itemRange.baseSha}^{commit}`]);
+    if (!base.ok) return { error: `base SHA "${itemRange.baseSha}" not found in ${repoDir}` };
+    const head = git(repoDir, ["rev-parse", "--verify", "--quiet", `${itemRange.headSha}^{commit}`]);
+    if (!head.ok) return { error: `head SHA "${itemRange.headSha}" not found in ${repoDir}` };
+    headRef = itemRange.headSha;
+    cherryArgs.push(headRef, itemRange.baseSha);
+  } else {
+    const branchRef = resolveRef(repoDir, branch);
+    if (!branchRef) {
+      return { error: `branch "${branch}" not found in ${repoDir} (locally or on origin)` };
+    }
+    headRef = branchRef;
+    cherryArgs.push(headRef);
   }
 
-  const cherry = git(repoDir, ["cherry", intRef, branchRef]);
+  const cherry = git(repoDir, cherryArgs);
   if (!cherry.ok) {
     return { error: `git cherry failed: ${cherry.stderr}` };
   }

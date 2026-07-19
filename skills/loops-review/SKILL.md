@@ -33,20 +33,23 @@ The reviewer CLI must be installed and the repo must be trusted git.
 Run from the **target repo** (not the data repo), on the branch under review:
 
 ```bash
-bun "$DCL_HOME/tools/review/cli-review.ts" start --base <integration-branch> --data-repo <data-repo>
+bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
+  --base <item-base-sha> --data-repo <data-repo>
 ```
 
 1. **Prep.** Run the target project's own typecheck + tests, commit the change, and
    ensure a clean working tree — the command fails closed on a dirty tree.
-2. **Start a round.** The command reviews the full `<base>..HEAD` change read-only and
-   writes `.reviews/<branch-slug>--<hash>.{json,md}`. `--reviewer` / `--model` override
-   the config for one run.
+2. **Start a round.** Use the exact commit at which this item began as `--base`. For a
+   stacked item this is its parent item's handoff HEAD. The command reviews
+   `<item-base-sha>..HEAD` read-only and writes an item-scoped ledger under `.reviews/`.
+   A persistent branch can therefore carry later items without reusing an earlier
+   item's terminal ledger. `--reviewer` / `--model` override the config for one run.
 3. **Disposition every finding.** Read the `.md` ledger, verify each finding against
    the actual code — do not accept performatively — and record one reasoned
    disposition each:
 
    ```bash
-   bun "$DCL_HOME/tools/review/cli-review.ts" disposition --finding R1-F1 \
+   bun "$DCL_HOME/tools/review/cli-review.ts" disposition --item <item-slug> --finding R1-F1 \
      --status accepted --reason "<technical reason>"
    ```
 
@@ -64,10 +67,12 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --base <integration-branch> --d
 Immediately before the final tracked-item handoff, run from the target repo:
 
 ```bash
-bun "$DCL_HOME/tools/review/cli-review.ts" status
+bun "$DCL_HOME/tools/review/cli-review.ts" status --item <item-slug>
 ```
 
-It validates the ledger against the current branch and HEAD. Exit 0 plus
+Use the item-scoped form for every tracked item; `status` without `--item` remains
+available for an owner-requested review that has no board item. It validates the
+selected ledger against the current branch and HEAD. Exit 0 plus
 `REVIEW_STATUS=passed` is the only evidence for `REVIEW: PASSED`; `blocked` and
 `not_run` exit nonzero and must be reported verbatim in the completion receipt. The
 status line includes the current HEAD and Markdown ledger path so the owner can audit
@@ -79,6 +84,9 @@ the claim without reading the implementation transcript.
   the network (enforced by the adapter's sandbox/plan mode). You implement the fixes.
 - A clean current-HEAD review is **evidence for the owner, not approval to merge.** Landing stays
   the owner's step per `HOUSE-RULES.md → Merge policy`.
+- Record the reviewed range as `links.base-sha` and `links.head-sha` on the item. A
+  stacked item also records `links.stack-parent`; these fields make the review and
+  later landing check independent of subsequent branch movement.
 - The JSON ledger is validated machine state; the Markdown is the human surface. Don't
   hand-edit finding text or the JSON. The command fails closed on a dirty tree, a
   changed `HEAD`, a mismatched base, missing dispositions, and the round cap; an

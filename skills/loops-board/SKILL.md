@@ -116,6 +116,9 @@ links:
   spec: docs/specs/...        # omit keys that don't apply
   branch: <agent branch>
   pr: <review URL, when the review mechanism is PR-based>
+  stack-parent: <preceding item in this worktree stack>
+  base-sha: <commit at which this item's implementation began>
+  head-sha: <reviewed handoff commit for this item>
 ---
 
 One short paragraph of context: what this is and why.
@@ -134,9 +137,11 @@ separately, so it can't go stale.
 A target is **satisfied** only when its work is on the project's integration branch —
 `bun run landed` reports it LANDED, or its state is `merged`/`tested`/`delivered`/
 `accepted`. A target still in `implemented` is **not** satisfied (review requested ≠
-landed; nor is `dropped`). Exception: a target also counts as satisfied when its
-branch **is the branch you are working in** (deliberate stacking within one slot).
-Another agent's unlanded branch never satisfies a dependency.
+landed; nor is `dropped`). Exception: deliberate stacking within one permanent slot
+may build on an unlanded target when the new item records that target as
+`links.stack-parent`, its `links.base-sha` equals the target's `links.head-sha`, and
+Git confirms that commit is the new branch's ancestor. This exact relationship
+satisfies a dependency for the stacked item; a shared branch name alone does not.
 
 **Descriptive vs prescriptive.** A *descriptive* item — documenting behavior that
 already exists (runbooks, references, "how it works" notes) — must declare

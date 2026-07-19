@@ -19,7 +19,8 @@ Entry template — copy for each new project:
 - verify gate: `<how a merged item is verified — hermetic commands, then functional checks>`
 - specs / follow-ups: `<where design docs and follow-up trackers live>`
 - review mechanism: `<per-project override of HOUSE-RULES.md's review mechanism, if any>`
-- notes: `<branch policy, credentials, anything agents must know>`
+- worktrees / branches: `<isolated per item, or permanent slot paths and their persistent base branches>`
+- notes: `<credentials and anything else agents must know>`
 ```
 
 Projects not listed here: register them (repo path + tracker locations) before doing

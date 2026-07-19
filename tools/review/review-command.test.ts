@@ -25,8 +25,11 @@ function createRepository(): { repository: string; headSha: string } {
   return { repository, headSha: git(repository, ["rev-parse", "HEAD"]) };
 }
 
-function runStatus(repository: string) {
-  return spawnSync("bun", ["run", CLI, "status"], { cwd: repository, encoding: "utf8" });
+function runStatus(repository: string, item?: string) {
+  return spawnSync("bun", ["run", CLI, "status", ...(item ? ["--item", item] : [])], {
+    cwd: repository,
+    encoding: "utf8",
+  });
 }
 
 describe("cli-review status", () => {
@@ -50,6 +53,36 @@ describe("cli-review status", () => {
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
       `REVIEW_STATUS=passed model="codex (default)" rounds=1 head=${headSha} ledger=${relative(repository, paths.markdownPath)}`,
+    );
+  });
+
+  test("selects item-scoped evidence when a persistent branch is reused", () => {
+    const { repository, headSha } = createRepository();
+    const firstPaths = reviewEvidencePaths(repository, "feature/review-receipt", "first-item");
+    const secondPaths = reviewEvidencePaths(repository, "feature/review-receipt", "second-item");
+    expect(firstPaths.jsonPath).not.toBe(secondPaths.jsonPath);
+    mkdirSync(dirname(secondPaths.jsonPath), { recursive: true });
+    const ledger = addReviewRound(
+      createReviewLedger({
+        item: "second-item",
+        branch: "feature/review-receipt",
+        baseRef: "parent-head",
+        baseSha: "base",
+      }),
+      {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: "2026-07-19T12:00:00Z",
+        review: { summary: "clean", findings: [] },
+      },
+    );
+    writeFileSync(secondPaths.jsonPath, `${JSON.stringify(ledger)}\n`);
+
+    const result = runStatus(repository, "second-item");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      `REVIEW_STATUS=passed item="second-item" model="codex (default)" rounds=1 head=${headSha} ledger=${relative(repository, secondPaths.markdownPath)}`,
     );
   });
 

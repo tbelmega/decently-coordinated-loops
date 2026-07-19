@@ -57,6 +57,7 @@ export interface ReviewRound {
 
 export interface ReviewLedger {
   version: 1;
+  item?: string;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -72,6 +73,7 @@ export interface ReviewFailure {
 }
 
 export interface CreateLedgerInput {
+  item?: string;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -158,6 +160,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
     : undefined;
   return {
     version: 1,
+    ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
     branch: requiredString(input, "branch", "review ledger"),
     baseRef: requiredString(input, "baseRef", "review ledger"),
     baseSha: requiredString(input, "baseSha", "review ledger"),
@@ -216,6 +219,7 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
   const lines = [
     "# Local review",
     "",
+    ...(ledger.item ? [`- Item: \`${ledger.item}\``] : []),
     `- Branch: \`${ledger.branch}\``,
     `- Base ref: \`${ledger.baseRef}\``,
     `- Base SHA: \`${ledger.baseSha}\``,

@@ -13,7 +13,17 @@ export function parseItemFileText(path: string, text: string): ItemFile {
   const fm = parseYaml(match[1]) as Record<string, unknown>;
 
   const slug = path.replace(/^(items|archive|for-delivery)\//, "").replace(/\.md$/, "");
-  const links = (fm.links ?? {}) as Links;
+  const rawLinks = (fm.links ?? {}) as Record<string, unknown>;
+  const links: Links = {};
+  for (const [key, value] of Object.entries(rawLinks)) {
+    if (typeof value === "string" && value.length > 0) links[key] = value;
+  }
+  links.stackParent = links["stack-parent"];
+  links.baseSha = links["base-sha"];
+  links.headSha = links["head-sha"];
+  delete links["stack-parent"];
+  delete links["base-sha"];
+  delete links["head-sha"];
   const dependsOn = Array.isArray(fm["depends-on"]) ? (fm["depends-on"] as string[]) : [];
 
   return {

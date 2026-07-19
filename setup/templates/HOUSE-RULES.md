@@ -43,6 +43,16 @@ this file before any unattended work.
      (e.g. "after the review mechanism signals complete with no outstanding
      comments, the agent may rebase onto the integration branch and push"). -->
 
+## Worktree and branch policy
+
+- TODO: For each project, choose either isolated item branches/worktrees or permanent
+  worktree slots and record the choice in `PROJECTS.md`.
+- Permanent slots use one persistent base branch per worktree. They may carry at most
+  three unlanded items in an ancestry chain; later items branch from the current tip
+  as `<base-branch>--<item-slug>` and record immutable handoff ranges. Acquire and
+  clean slots per loops-pickup. Owner-only landing remains in force unless the merge
+  policy above explicitly delegates it.
+
 ## Guardrails (additions)
 
 <!-- Extra never-do rules for this instance, on top of the loops-pickup defaults

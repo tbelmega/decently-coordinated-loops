@@ -7,10 +7,11 @@
 // override wins):
 //   - github: asks `gh pr view` for the PR's merge state (authoritative; correct
 //     for squash- and rebase-merges). Needs a `links.pr`.
-//   - git:    patch-id equivalence of the item's `links.branch` against the
-//     integration branch (see git-landed.ts) — for flows that don't go through a
-//     forge API. Correct for rebase landings; a squash-with-edits landing reads as
-//     PENDING (record those by hand).
+//   - git:    patch-id equivalence of the item's immutable `links.base-sha..head-sha`
+//     range, falling back to its whole `links.branch` for legacy items (see
+//     git-landed.ts) — for flows that don't go through a forge API. Correct for
+//     rebase landings; a squash-with-edits landing reads as PENDING (record those by
+//     hand).
 //
 // Default (read-only): never mutates item files or the board. `--apply`
 // additionally records observed landings — it flips `implemented -> merged` for
@@ -116,11 +117,14 @@ const fetchedRepos = new Set<string>();
 /** IO boundary, git adapter: refresh the integration branch's remote-tracking ref
  *  (best effort — offline is fine, the check then runs on the last-known state),
  *  then compare the item's branch by patch-id. */
-function fetchGitStatus(item: { project: string; slug: string }, branch: string): PrStatus {
+function fetchGitStatus(
+  item: { project: string; slug: string },
+  plan: { branch: string; baseSha?: string; headSha?: string },
+): PrStatus {
   const projectConfig = config.projects[item.project];
   if (!projectConfig?.repo) {
     return {
-      ref: branch,
+      ref: plan.branch,
       error: `project "${item.project}" has no repo configured in loops.json`,
     };
   }
@@ -134,9 +138,10 @@ function fetchGitStatus(item: { project: string; slug: string }, branch: string)
     });
   }
 
-  const result = gitLandedStatus(repoDir, branch, integrationBranch);
-  if (result.error) return { ref: branch, error: result.error };
-  return { ref: branch, state: result.state === "LANDED" ? "MERGED" : "OPEN" };
+  const itemRange = plan.baseSha && plan.headSha ? { baseSha: plan.baseSha, headSha: plan.headSha } : undefined;
+  const result = gitLandedStatus(repoDir, plan.branch, integrationBranch, itemRange);
+  if (result.error) return { ref: plan.branch, error: result.error };
+  return { ref: plan.branch, state: result.state === "LANDED" ? "MERGED" : "OPEN" };
 }
 
 const apply = process.argv.includes("--apply");
@@ -164,7 +169,7 @@ for (const item of checkable) {
   if (plan.kind === "github") {
     statusByKey.set(key, fetchPrStatus(plan.pr));
   } else if (plan.kind === "git") {
-    statusByKey.set(key, fetchGitStatus(item, plan.branch));
+    statusByKey.set(key, fetchGitStatus(item, plan));
   } else {
     statusByKey.set(key, { ref: plan.ref, error: plan.error });
   }
