@@ -66,6 +66,12 @@ describe("validateItem", () => {
     expect(validateItem(item({ autonomy: "supervized" }))[0]).toContain('autonomy "supervized"');
   });
 
+  test("accepts an absent or waived spec field but flags a typo", () => {
+    expect(validateItem(item({}))).toEqual([]);
+    expect(validateItem(item({ spec: "waived" }))).toEqual([]);
+    expect(validateItem(item({ spec: "waved" }))[0]).toContain('spec "waved" is not canonical');
+  });
+
   test("flags each blank required field with its own message", () => {
     expect(validateItem(item({ title: "" }))).toEqual(["title is required but empty"]);
     expect(validateItem(item({ project: "" }))).toEqual(["project is required but empty"]);

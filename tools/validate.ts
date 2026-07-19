@@ -24,6 +24,11 @@ export const CANONICAL_NEXT_ACTORS = new Set(["owner", "agent"]);
 /** "-" is the accepted sentinel for "unset" (legacy items and freshly-filed ideas). */
 export const CANONICAL_AUTONOMY = new Set(["auto", "supervised", "-"]);
 
+/** The only valid value of the optional `spec:` field — the owner's explicit waiver
+ * of the loops-pickup spec gate. A typo fails closed (no waiver), so this check is
+ * about surfacing the ignored intent, not about closing a bypass. */
+export const CANONICAL_SPEC = new Set(["waived"]);
+
 export const CANONICAL_AWAITING = new Set([
   "unblock",
   "review-merge",
@@ -77,6 +82,10 @@ export function validateItem(item: ItemFile): string[] {
 
   if (item.awaiting != null && !CANONICAL_AWAITING.has(item.awaiting)) {
     messages.push(`awaiting "${item.awaiting}" is not canonical`);
+  }
+
+  if (item.spec != null && !CANONICAL_SPEC.has(item.spec)) {
+    messages.push(`spec "${item.spec}" is not canonical (expected waived, or omit the field)`);
   }
 
   return messages;

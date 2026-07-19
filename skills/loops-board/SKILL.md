@@ -117,6 +117,8 @@ next-step: The single concrete next action. Mandatory — never leave stale.
 updated: YYYY-MM-DD
 links:
   spec: docs/specs/...        # omit keys that don't apply
+  spec-branch: <pushed agent branch carrying an approved, not-yet-landed spec>
+  spec-sha: <the spec commit on spec-branch>
   branch: <agent branch>
   pr: <review URL, when the review mechanism is PR-based>
   stack-parent: <preceding item in this worktree stack>
@@ -174,10 +176,12 @@ and survives the item's archival.
   flip the state to `spec-filed`, and log it.
 - **A `spec-filed` spec must be reachable by other agents.** Flip to `spec-filed`
   only when the spec commit is landed on the project's integration branch, or
-  pushed on an agent branch recorded as `links.branch` (+ `links.head-sha`); a spec
-  that exists only in a local checkout is not filed. Implementation of the item
-  bases on that recorded branch/commit — continuing it as a stack where the project
-  uses permanent slots — so the spec is always in the implementor's tree.
+  pushed on an agent branch recorded as `links.spec-branch` (+ `links.spec-sha`); a
+  spec that exists only in a local checkout is not filed. Implementation of the
+  item bases on that recorded branch/commit — continuing it as a stack where the
+  project uses permanent slots — so the spec is always in the implementor's tree.
+  (`links.branch`/`base-sha`/`head-sha` stay reserved for the reviewed
+  implementation range — the landed check reads them.)
 
 ## Update rules
 

@@ -30,6 +30,25 @@ Body text.
     expect(item.awaiting).toBe("approve");
     expect(item.updated).toBe("2026-07-01");
     expect(item.dependsOn).toEqual([]);
+    // No `spec:` key in the frontmatter → absent, not "".
+    expect(item.spec).toBeUndefined();
+  });
+
+  test("parses the owner's spec waiver", () => {
+    const text = `---
+title: "Waived item"
+project: alpha
+state: in-progress
+owner: "-"
+autonomy: auto
+next-actor: agent
+spec: waived
+next-step: "Build it"
+updated: 2026-07-19
+---
+Body.
+`;
+    expect(parseItemFileText("items/waived-item.md", text).spec).toBe("waived");
   });
 
   test("parses depends-on array and links block", () => {

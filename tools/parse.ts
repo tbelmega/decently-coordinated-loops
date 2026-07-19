@@ -44,6 +44,7 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     nextActor: String(fm["next-actor"] ?? ""),
     awaiting: fm.awaiting != null ? String(fm.awaiting) : undefined,
     fit: fm.fit != null ? String(fm.fit) : undefined,
+    spec: fm.spec != null ? String(fm.spec) : undefined,
     dependsOn,
     nextStep: String(fm["next-step"] ?? ""),
     updated: String(fm.updated ?? ""),
