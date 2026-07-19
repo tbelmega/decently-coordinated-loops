@@ -171,6 +171,13 @@ and survives the item's archival.
 - **Draft design content lives on the board** — the item's `## Refinement` section —
   until the owner approves it. Agents never commit unapproved design to a project
   repo unattended, not even on agent branches.
+- **Owner-facing drafts lead with the asks.** Whenever an item awaits the owner's
+  ruling (`next-actor: owner`, `awaiting: approve`/`decide`), a `### Decisions
+  needed` block — every open decision, one line each with a recommendation — sits
+  as the first section after the context paragraph, before any findings or design
+  narrative, so the owner can rule on all of them without reading further.
+  Supporting analysis follows, referenced from the decisions that rest on it.
+  Mirror the decisions to the outbox per loops-queues.
 - **Approval is the gate; promotion is agent work.** Approval arrives via the outbox
   (`awaiting: approve`) or an attended session. Once given: commit the approved
   content as the spec at the project's specs location, set `links.spec`, annotate
