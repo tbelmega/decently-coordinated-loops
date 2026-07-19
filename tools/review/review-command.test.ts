@@ -98,6 +98,29 @@ describe("cli-review status", () => {
     );
   });
 
+  test("blocks a ledger recorded for a different branch", () => {
+    const { repository, headSha } = createRepository();
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt");
+    mkdirSync(dirname(paths.jsonPath), { recursive: true });
+    const ledger = addReviewRound(
+      createReviewLedger({ branch: "another-branch", baseRef: "master", baseSha: "base" }),
+      {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: "2026-07-19T12:00:00Z",
+        review: { summary: "clean", findings: [] },
+      },
+    );
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+
+    const result = runStatus(repository);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout.trim()).toBe(
+      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="review evidence is invalid: review ledger branch is another-branch, expected feature/review-receipt"`,
+    );
+  });
+
   test("prints blocked when the branch ledger is invalid", () => {
     const { repository, headSha } = createRepository();
     const paths = reviewEvidencePaths(repository, "feature/review-receipt");

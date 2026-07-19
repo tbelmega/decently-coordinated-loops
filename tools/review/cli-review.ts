@@ -278,6 +278,11 @@ function currentReviewStatus(item?: string): ReviewStatus {
   try {
     const ledger = readLedger(paths.jsonPath);
     if (ledger.item !== item) throw new Error("review item does not match the selected ledger");
+    // The evidence path hashes the branch name, but that only guards against
+    // accidents — a copied ledger must not certify a different branch's review.
+    if (ledger.branch !== branch) {
+      throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
+    }
     return { ...evaluateReviewStatus(ledger, headSha, ledgerPath), ...(item ? { item } : {}) };
   } catch (error: unknown) {
     if (isMissingFileError(error)) {
