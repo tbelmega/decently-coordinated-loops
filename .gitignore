@@ -2,3 +2,6 @@
 /docs/specs/
 /node_modules/
 /docs/research/
+
+# Local review evidence (cli-review.ts ledgers)
+/.reviews/

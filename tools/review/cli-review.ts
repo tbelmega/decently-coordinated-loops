@@ -121,11 +121,30 @@ async function writeLedger(ledger: ReviewLedger, paths: { jsonPath: string; mark
   await writeFileAtomically(paths.markdownPath, renderReviewLedger(ledger));
 }
 
+// Anchor at the repo root: pathspecs are cwd-relative, so an unanchored check run
+// from a subdirectory would miss dirty files elsewhere. Review evidence under
+// .reviews is excluded — the tool writes it itself, and it must not wedge the next
+// round in repos that don't gitignore it.
+function dirtyOutsideReviewEvidence(repository: string): string {
+  return git([
+    "-C",
+    repository,
+    "status",
+    "--porcelain",
+    "--untracked-files=all",
+    "--",
+    ".",
+    ":(exclude).reviews/**",
+  ]);
+}
+
 async function startReview(options: StartOptions): Promise<void> {
-  if (git(["status", "--porcelain"])) throw new Error("working tree must be clean before review");
   const branch = git(["branch", "--show-current"]);
   if (!branch) throw new Error("review requires a named branch");
   const repository = git(["rev-parse", "--show-toplevel"]);
+  if (dirtyOutsideReviewEvidence(repository)) {
+    throw new Error("working tree must be clean before review");
+  }
   const releaseLock = await acquireReviewLock(repository, branch);
   try {
     const resolvedBaseSha = git(["rev-parse", "--verify", `${options.baseRef}^{commit}`]);
@@ -244,19 +263,7 @@ function currentReviewStatus(item?: string): ReviewStatus {
   const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
   const paths = reviewEvidencePaths(repository, branch, item);
   const ledgerPath = relative(repository, paths.markdownPath);
-  // Anchor at the repo root: pathspecs are cwd-relative, so an unanchored check run
-  // from a subdirectory would miss dirty files elsewhere and report a false `passed`.
-  const dirtyOutsideReviewEvidence = git([
-    "-C",
-    repository,
-    "status",
-    "--porcelain",
-    "--untracked-files=all",
-    "--",
-    ".",
-    ":(exclude).reviews/**",
-  ]);
-  if (dirtyOutsideReviewEvidence) {
+  if (dirtyOutsideReviewEvidence(repository)) {
     return {
       kind: "blocked",
       ...(item ? { item } : {}),
