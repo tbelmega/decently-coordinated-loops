@@ -68,6 +68,20 @@ describe("gitLandedStatus", () => {
     ).toEqual({ state: "LANDED" });
   });
 
+  test("a reversed item range is an error, never LANDED", () => {
+    const dir = fixtureRepo();
+    const baseSha = git(dir, "rev-parse", "master");
+    const headSha = git(dir, "rev-parse", "feature/search");
+
+    const result = gitLandedStatus(dir, "feature/search", "master", {
+      baseSha: headSha,
+      headSha: baseSha,
+    });
+
+    expect(result.state).toBeUndefined();
+    expect(result.error).toMatch(/not an ancestor/);
+  });
+
   test("a fully-behind branch (no unique commits) counts as LANDED", () => {
     const dir = fixtureRepo();
     git(dir, "cherry-pick", "feature/search");

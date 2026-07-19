@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { END_MARK, START_MARK } from "./config-block.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
 const SEED = join(DCL_HOME, "setup", "seed.ts");
@@ -201,6 +202,28 @@ describe("config block", () => {
     expect(after.split("LOOPS:START").length).toBe(2);
     // No .codex dir in this fake home — must not have been created.
     expect(existsSync(join(home, ".codex"))).toBe(false);
+  });
+
+  test("refreshes marker-bearing alternate Claude profiles but never seeds them", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    // Opted in: already carries the markered block.
+    mkdirSync(join(home, ".claude-work"), { recursive: true });
+    writeFileSync(
+      join(home, ".claude-work", "CLAUDE.md"),
+      `# Work rules\n${START_MARK}\nold block\n${END_MARK}\n`,
+    );
+    // Not opted in: no marker — must be left untouched.
+    mkdirSync(join(home, ".claude-scratch"), { recursive: true });
+    writeFileSync(join(home, ".claude-scratch", "CLAUDE.md"), "# Scratch rules\n");
+
+    const dir = seedNewRepo([], home);
+
+    const optedIn = readFileSync(join(home, ".claude-work", "CLAUDE.md"), "utf8");
+    expect(optedIn).toContain("# Work rules");
+    expect(optedIn).toContain(dir);
+    expect(optedIn).not.toContain("old block");
+    expect(readFileSync(join(home, ".claude-scratch", "CLAUDE.md"), "utf8")).toBe("# Scratch rules\n");
   });
 
   test("writes a Cursor .mdc rule when ~/.cursor exists, and refreshes idempotently", () => {

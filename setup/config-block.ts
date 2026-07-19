@@ -1,7 +1,7 @@
 // The markered agent-config block DCL installs into each harness's global config
 // file (e.g. ~/.claude/CLAUDE.md, ~/.codex/AGENTS.md). Idempotent upsert: an
 // existing block between the markers is replaced; otherwise the block is appended.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const START_MARK =
@@ -125,12 +125,25 @@ export function writeCursorRule(target: string, content: string): "created" | "r
 /** The harness global configs this machine appears to use: a target is included when
  * its harness directory already exists (we never create harness directories —
  * installing a harness is not our job). CLAUDE.md/AGENTS.md take a markered block;
- * Cursor takes a standalone rule under its (nested) rules dir. `home` is injectable
- * for tests. */
+ * Cursor takes a standalone rule under its (nested) rules dir. Alternate Claude Code
+ * profiles (CLAUDE_CONFIG_DIR=~/.claude-<name>) opt in by already carrying the
+ * marker in their CLAUDE.md — we refresh those but never seed them. `home` is
+ * injectable for tests. */
 export function detectConfigTargets(home: string): ConfigTarget[] {
   const targets: ConfigTarget[] = [];
   if (existsSync(join(home, ".claude"))) {
     targets.push({ path: join(home, ".claude", "CLAUDE.md"), kind: "block" });
+  }
+  for (const entry of readdirSync(home, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(".claude-")) continue;
+    const claudeMd = join(home, entry.name, "CLAUDE.md");
+    try {
+      if (readFileSync(claudeMd, "utf8").includes(START_MARK)) {
+        targets.push({ path: claudeMd, kind: "block" });
+      }
+    } catch {
+      // No CLAUDE.md in this profile — nothing to refresh.
+    }
   }
   if (existsSync(join(home, ".codex"))) {
     targets.push({ path: join(home, ".codex", "AGENTS.md"), kind: "block" });

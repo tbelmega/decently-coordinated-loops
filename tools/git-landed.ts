@@ -73,6 +73,14 @@ export function gitLandedStatus(
     if (!base.ok) return { error: `base SHA "${itemRange.baseSha}" not found in ${repoDir}` };
     const head = git(repoDir, ["rev-parse", "--verify", "--quiet", `${itemRange.headSha}^{commit}`]);
     if (!head.ok) return { error: `head SHA "${itemRange.headSha}" not found in ${repoDir}` };
+    // A malformed pair (reversed, or not an ancestry range at all) selects no commits,
+    // and empty `git cherry` output would read as LANDED — reject it instead.
+    const ancestry = git(repoDir, ["merge-base", "--is-ancestor", itemRange.baseSha, itemRange.headSha]);
+    if (!ancestry.ok) {
+      return {
+        error: `base SHA "${itemRange.baseSha}" is not an ancestor of head SHA "${itemRange.headSha}" in ${repoDir}`,
+      };
+    }
     headRef = itemRange.headSha;
     cherryArgs.push(headRef, itemRange.baseSha);
   } else {
