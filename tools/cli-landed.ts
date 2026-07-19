@@ -113,10 +113,14 @@ function fetchPrStatus(ref: string): PrStatus {
 }
 
 const fetchedRepos = new Set<string>();
+const fetchedItemBranches = new Set<string>();
 
 /** IO boundary, git adapter: refresh the integration branch's remote-tracking ref
  *  (best effort — offline is fine, the check then runs on the last-known state),
- *  then compare the item's branch by patch-id. */
+ *  then compare the item's branch by patch-id. A recorded base/head range also
+ *  fetches the item's branch first: the range SHAs may exist only on origin in a
+ *  checkout that never had the agent branch, and unlike the legacy whole-branch
+ *  path there is no origin/<branch> fallback at comparison time. */
 function fetchGitStatus(
   item: { project: string; slug: string },
   plan: { branch: string; baseSha?: string; headSha?: string },
@@ -139,6 +143,13 @@ function fetchGitStatus(
   }
 
   const itemRange = plan.baseSha && plan.headSha ? { baseSha: plan.baseSha, headSha: plan.headSha } : undefined;
+  const itemBranchKey = `${repoDir}\0${plan.branch}`;
+  if (itemRange && !fetchedItemBranches.has(itemBranchKey)) {
+    fetchedItemBranches.add(itemBranchKey);
+    spawnSync("git", ["-C", repoDir, "fetch", "--quiet", "origin", plan.branch], {
+      encoding: "utf8",
+    });
+  }
   const result = gitLandedStatus(repoDir, plan.branch, integrationBranch, itemRange);
   if (result.error) return { ref: plan.branch, error: result.error };
   return { ref: plan.branch, state: result.state === "LANDED" ? "MERGED" : "OPEN" };
