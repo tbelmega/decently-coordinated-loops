@@ -72,6 +72,15 @@ describe("validateItem", () => {
     expect(validateItem(item({ spec: "waved" }))[0]).toContain('spec "waved" is not canonical');
   });
 
+  test("requires links.spec on a spec-filed item", () => {
+    expect(
+      validateItem(item({ state: "spec-filed", links: { spec: "docs/specs/x.md" } })),
+    ).toEqual([]);
+    expect(validateItem(item({ state: "spec-filed" }))[0]).toContain(
+      "spec-filed requires a links.spec",
+    );
+  });
+
   test("requires spec-branch and spec-sha as a pair", () => {
     const paired = { "spec-branch": "pickup/x-spec", "spec-sha": "abc123" };
     expect(validateItem(item({ links: paired }))).toEqual([]);

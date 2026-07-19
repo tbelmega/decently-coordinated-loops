@@ -88,6 +88,13 @@ export function validateItem(item: ItemFile): string[] {
     messages.push(`spec "${item.spec}" is not canonical (expected waived, or omit the field)`);
   }
 
+  // `spec-filed` claims an approved spec exists — without links.spec the claim is
+  // unauditable and the pickup spec gate can't resolve it (loops-board → Specs vs.
+  // items). Presence-only: the validator can't verify approval or reachability.
+  if (item.state === "spec-filed" && !item.links.spec) {
+    messages.push("state spec-filed requires a links.spec entry (the approved spec's location)");
+  }
+
   // A promoted-but-unlanded spec is only reachable through the pair; one without the
   // other leaves the pickup gate unable to pin the spec commit (loops-board →
   // Specs vs. items).

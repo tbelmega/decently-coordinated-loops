@@ -165,7 +165,9 @@ and survives the item's archival.
 - **`spec-filed` means**: an owner-approved spec is committed in the project repo at
   `links.spec`. Skipping `spec-filed` on the way to `in-progress` is legitimate only
   for items small enough that the item description suffices (loops-pickup → Spec
-  gate) or carrying the owner's explicit `spec: waived`.
+  gate) or carrying the owner's explicit `spec: waived`. `bun run check` enforces the
+  metadata: a `spec-filed` item without `links.spec` is an integrity failure
+  (presence-only — approval and reachability stay the agent's judgment at pickup).
 - **Draft design content lives on the board** — the item's `## Refinement` section —
   until the owner approves it. Agents never commit unapproved design to a project
   repo unattended, not even on agent branches.
