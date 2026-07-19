@@ -88,6 +88,15 @@ export function validateItem(item: ItemFile): string[] {
     messages.push(`spec "${item.spec}" is not canonical (expected waived, or omit the field)`);
   }
 
+  // A promoted-but-unlanded spec is only reachable through the pair; one without the
+  // other leaves the pickup gate unable to pin the spec commit (loops-board →
+  // Specs vs. items).
+  const specBranch = item.links["spec-branch"];
+  const specSha = item.links["spec-sha"];
+  if ((specBranch && !specSha) || (!specBranch && specSha)) {
+    messages.push("links.spec-branch and links.spec-sha must be recorded together");
+  }
+
   return messages;
 }
 

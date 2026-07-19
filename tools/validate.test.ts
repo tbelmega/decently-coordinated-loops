@@ -72,6 +72,17 @@ describe("validateItem", () => {
     expect(validateItem(item({ spec: "waved" }))[0]).toContain('spec "waved" is not canonical');
   });
 
+  test("requires spec-branch and spec-sha as a pair", () => {
+    const paired = { "spec-branch": "pickup/x-spec", "spec-sha": "abc123" };
+    expect(validateItem(item({ links: paired }))).toEqual([]);
+    expect(validateItem(item({ links: { "spec-branch": "pickup/x-spec" } }))[0]).toContain(
+      "must be recorded together",
+    );
+    expect(validateItem(item({ links: { "spec-sha": "abc123" } }))[0]).toContain(
+      "must be recorded together",
+    );
+  });
+
   test("flags each blank required field with its own message", () => {
     expect(validateItem(item({ title: "" }))).toEqual(["title is required but empty"]);
     expect(validateItem(item({ project: "" }))).toEqual(["project is required but empty"]);
