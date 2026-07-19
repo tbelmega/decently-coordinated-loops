@@ -75,6 +75,17 @@ If you pick a self-qualified item, say so in the item log and the review
 description. If several items are eligible, pick the lowest-risk one, not the most
 interesting one.
 
+**Spec gate — `autonomy: auto` approves unattended pickup, never spec-skipping.**
+`auto` answers "may an agent work this unattended?", not "is the description a
+sufficient basis for implementation?". Before implementing *any* item, judge it
+against self-qualification criteria 2 and 3 — no product decisions to invent, scope
+fits one repo and roughly one session — even when `auto` made it eligible. An item
+that fails either criterion is **spec-sized**: unless it has an owner-approved spec
+(state `spec-filed` or later, spec committed at `links.spec`) or carries the owner's
+explicit `spec: waived`, it is not implementable, whatever its autonomy. Its pickup
+converts to spec-drafting — take it through refinement (purpose-clear branch, below)
+instead of steps 3–5. A refined item description is never a spec.
+
 **`merged` items are their own work-type.** Any `merged` item is eligible (it is
 `autonomy: auto` / `next-actor: agent` by construction) but its work is
 *verification*, not implementation — take it through "Verify a landed item" instead
@@ -245,10 +256,17 @@ first, linking back to its source.
 
 - **Purpose clear**: research the codebase (map current behavior, affected files,
   existing conventions) and write a `## Refinement` section into the item file:
-  findings, a proposed approach or draft-spec outline, effort/risk notes, and every
-  remaining product decision as an explicit question. If it becomes spec-ready, say
-  so in `next-step`. Do **not** file specs or ADRs in the project repo unattended —
-  refinement lives on the board until the owner promotes it.
+  findings, a proposed approach or draft spec, effort/risk notes, and every
+  remaining product decision as an explicit question. Do **not** commit specs or
+  ADRs to the project repo unattended — draft design lives on the board until the
+  owner approves it (loops-board → Specs vs. items). When the draft is
+  approval-ready (open questions answered or explicitly deferrable), request
+  approval async: one outbox entry (type `approval`), set `next-actor: owner`,
+  `awaiting: approve`, and next-step "owner: approve spec draft in item file". On
+  approval, promotion is agent work — commit the approved content to the project's
+  specs location (`PROJECTS.md`), set `links.spec`, annotate `## Refinement` as
+  promoted, flip the state to `spec-filed`; the item is then implementable under
+  the spec gate.
 - **Purpose vague**: don't research speculatively. Write a `## Questions for the
   owner` section with the specific questions that would unblock refinement, set
   `next-step` to "owner: answer questions in item file", mirror the top question to

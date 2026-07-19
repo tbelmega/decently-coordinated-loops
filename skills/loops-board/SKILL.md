@@ -108,6 +108,9 @@ awaiting: unblock | review-merge | deliver | accept | approve | decide
 fit: optional one-line capability hint (e.g. "mechanical, spec is exact" or
   "needs frontier — cross-module design judgment"); set when filing, refining,
   or passing on the item (loops-pickup capability gate)
+spec: waived   # optional — the owner's explicit call that this item needs no
+  spec despite its size; `autonomy: auto` alone never implies this
+  (loops-pickup → Spec gate)
 depends-on: [item-slug, ...]   # items whose LANDED output this one needs; omit if
   none. Mandatory for descriptive items (below)
 next-step: The single concrete next action. Mandatory — never leave stale.
@@ -149,6 +152,26 @@ already exists (runbooks, references, "how it works" notes) — must declare
 driving what gets built (specs, plans, ADRs) — declares no such dependency.
 
 An item with any unsatisfied dependency is not eligible for pickup (loops-pickup).
+
+## Specs vs. items
+
+The item is lifecycle + coordination; it never *becomes* the spec. The spec lives in
+the project repo at its registered specs location (`PROJECTS.md`), referenced via
+`links.spec` — there it versions with the code it governs, shows up in review diffs,
+and survives the item's archival.
+
+- **`spec-filed` means**: an owner-approved spec is committed in the project repo at
+  `links.spec`. Skipping `spec-filed` on the way to `in-progress` is legitimate only
+  for items small enough that the item description suffices (loops-pickup → Spec
+  gate) or carrying the owner's explicit `spec: waived`.
+- **Draft design content lives on the board** — the item's `## Refinement` section —
+  until the owner approves it. Agents never commit unapproved design to a project
+  repo unattended, not even on agent branches.
+- **Approval is the gate; promotion is agent work.** Approval arrives via the outbox
+  (`awaiting: approve`) or an attended session. Once given: commit the approved
+  content as the spec at the project's specs location, set `links.spec`, annotate
+  the `## Refinement` section as promoted (the spec is now the source of truth),
+  flip the state to `spec-filed`, and log it.
 
 ## Update rules
 
