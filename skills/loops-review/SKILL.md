@@ -63,7 +63,9 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    failure, stale review, or the three-round cap is `BLOCKED`; escalate it to the owner
    rather than claiming completion. When the owner later decides a deferred finding,
    record that decision as a new disposition (reason citing the owner) — only
-   `deferred-to-human` may be superseded — then continue the round loop.
+   `deferred-to-human` may be superseded — then continue the round loop. When the
+   owner authorizes rounds beyond the cap, pass `--max-rounds <n>` to `start` and log
+   the authorization on the item; never extend the cap on your own judgment.
 
 ## Completion status
 

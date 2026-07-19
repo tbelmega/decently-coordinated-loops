@@ -41,6 +41,8 @@ interface StartOptions {
   item?: string;
   reviewer: Reviewer;
   model?: string;
+  /** Owner-authorized round-cap extension (`--max-rounds`); default cap is 3. */
+  maxRounds?: number;
 }
 
 function git(args: string[]): string {
@@ -77,6 +79,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
 function parseStartOptions(args: string[]): StartOptions {
   const flags: { reviewer?: string; dataRepo?: string; model?: string; item?: string } = {};
   let baseRef = "";
+  let maxRounds: number | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     const value = args[index + 1];
@@ -85,14 +88,19 @@ function parseStartOptions(args: string[]): StartOptions {
     else if (arg === "--reviewer" && value) flags.reviewer = value;
     else if (arg === "--model" && value) flags.model = value;
     else if (arg === "--item" && value) flags.item = value;
-    else if (arg.startsWith("--")) {
+    else if (arg === "--max-rounds" && value) {
+      maxRounds = Number(value);
+      if (!Number.isInteger(maxRounds) || maxRounds < 1) {
+        throw new Error("--max-rounds must be a positive integer");
+      }
+    } else if (arg.startsWith("--")) {
       throw new Error(`unknown or incomplete argument: ${arg}`);
     } else continue;
     index += 1;
   }
   if (!baseRef) throw new Error("start requires --base <ref>");
   const { reviewer, model } = resolveReviewer(flags);
-  return { baseRef, item: flags.item, reviewer, model };
+  return { baseRef, item: flags.item, reviewer, model, maxRounds };
 }
 
 function reviewPrompt(baseSha: string, headSha: string, priorNotes: string[]): string {
@@ -164,7 +172,7 @@ async function startReview(options: StartOptions): Promise<void> {
           headSha: round.headSha,
           findings: round.findings.map((finding) => ({ id: finding.id, disposition: finding.disposition?.kind })),
         })),
-        undefined,
+        options.maxRounds,
         headSha,
       );
       if (!continuation.allowed) throw new Error(continuation.reason || "review cannot continue");
