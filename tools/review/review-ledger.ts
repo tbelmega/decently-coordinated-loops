@@ -207,12 +207,32 @@ export function recordDisposition(
     findings: round.findings.map((finding) => {
       if (finding.id !== findingId) return finding;
       found = true;
-      if (finding.disposition) throw new Error(`${findingId} already has a disposition`);
+      // Only a deferred-to-human disposition may be superseded — it parks a finding on
+      // the owner, and the owner's eventual decision needs a sanctioned way back into
+      // the ledger (hand-editing is forbidden). All other dispositions are immutable.
+      if (finding.disposition && finding.disposition.kind !== "deferred-to-human") {
+        throw new Error(`${findingId} already has a disposition`);
+      }
       return { ...finding, disposition: { kind, reason } };
     }),
   }));
   if (!found) throw new Error(`finding ${findingId} not found`);
   return { ...ledger, rounds };
+}
+
+/** Prompt notes about previously dispositioned findings. Each round runs a fresh
+ *  reviewer with no memory, so without these a rejected false positive gets re-raised
+ *  every round and a clean confirmation round is unreachable — every disagreement
+ *  would dead-end at the round cap. Accepted findings are omitted: their fixes are new
+ *  code the next round must genuinely re-review. */
+export function priorDispositionNotes(ledger: ReviewLedger): string[] {
+  return ledger.rounds.flatMap((round) =>
+    round.findings.flatMap((finding) =>
+      finding.disposition && finding.disposition.kind !== "accepted"
+        ? [`${finding.id} "${finding.title}" — ${finding.disposition.kind}: ${finding.disposition.reason}`]
+        : [],
+    ),
+  );
 }
 
 export function renderReviewLedger(ledger: ReviewLedger): string {

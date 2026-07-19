@@ -25,9 +25,9 @@ function createRepository(): { repository: string; headSha: string } {
   return { repository, headSha: git(repository, ["rev-parse", "HEAD"]) };
 }
 
-function runStatus(repository: string, item?: string) {
+function runStatus(repository: string, item?: string, cwd = repository) {
   return spawnSync("bun", ["run", CLI, "status", ...(item ? ["--item", item] : [])], {
-    cwd: repository,
+    cwd,
     encoding: "utf8",
   });
 }
@@ -129,6 +129,31 @@ describe("cli-review status", () => {
     writeFileSync(`${repository}/uncommitted.txt`, "not reviewed\n");
 
     const result = runStatus(repository);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout.trim()).toBe(
+      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="working tree has uncommitted changes outside .reviews"`,
+    );
+  });
+
+  test("still blocks on dirty files elsewhere when run from a subdirectory", () => {
+    const { repository, headSha } = createRepository();
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt");
+    mkdirSync(dirname(paths.jsonPath), { recursive: true });
+    const ledger = addReviewRound(
+      createReviewLedger({ branch: "feature/review-receipt", baseRef: "master", baseSha: "base" }),
+      {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: "2026-07-19T12:00:00Z",
+        review: { summary: "clean", findings: [] },
+      },
+    );
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    writeFileSync(`${repository}/uncommitted.txt`, "not reviewed\n");
+    mkdirSync(`${repository}/sub`);
+
+    const result = runStatus(repository, undefined, `${repository}/sub`);
 
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe(

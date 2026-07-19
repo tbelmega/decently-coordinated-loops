@@ -3,6 +3,7 @@ import {
   addReviewRound,
   createReviewLedger,
   parseReview,
+  priorDispositionNotes,
   recordDisposition,
   renderReviewLedger,
   reviewCanContinue,
@@ -66,6 +67,39 @@ describe("recordDisposition", () => {
 
   test("rejects an empty reason", () => {
     expect(() => recordDisposition(seed, "R1-F1", "accepted", "")).toThrow(/reason/);
+  });
+
+  test("allows superseding only a deferred-to-human disposition", () => {
+    const deferred = recordDisposition(seed, "R1-F1", "deferred-to-human", "owner call needed");
+    const resolved = recordDisposition(deferred, "R1-F1", "rejected", "owner: not reproducible");
+    expect(resolved.rounds[0].findings[0].disposition).toEqual({
+      kind: "rejected",
+      reason: "owner: not reproducible",
+    });
+    expect(() => recordDisposition(resolved, "R1-F1", "accepted", "changed my mind")).toThrow(
+      /already has a disposition/,
+    );
+  });
+});
+
+describe("priorDispositionNotes", () => {
+  test("lists rejected and deferred findings but omits accepted and pending ones", () => {
+    const secondFinding = { ...finding, title: "unused import" };
+    const thirdFinding = { ...finding, title: "flaky retry" };
+    let ledger = addReviewRound(createReviewLedger({ branch: "f", baseRef: "master", baseSha: "b" }), {
+      headSha: "h",
+      model: "m",
+      reviewedAt: "t",
+      review: { summary: "three issues", findings: [finding, secondFinding, thirdFinding] },
+    });
+    ledger = recordDisposition(ledger, "R1-F1", "rejected", "not reproducible");
+    ledger = recordDisposition(ledger, "R1-F2", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "R1-F3", "deferred-to-human", "owner call");
+
+    expect(priorDispositionNotes(ledger)).toEqual([
+      'R1-F1 "off-by-one" — rejected: not reproducible',
+      'R1-F3 "flaky retry" — deferred-to-human: owner call',
+    ]);
   });
 });
 

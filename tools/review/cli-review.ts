@@ -17,6 +17,7 @@ import {
   createReviewLedger,
   parseReview,
   parseReviewLedger,
+  priorDispositionNotes,
   recordDisposition,
   recordReviewFailure,
   renderReviewLedger,
@@ -94,12 +95,18 @@ function parseStartOptions(args: string[]): StartOptions {
   return { baseRef, item: flags.item, reviewer, model };
 }
 
-function reviewPrompt(baseSha: string, headSha: string): string {
+function reviewPrompt(baseSha: string, headSha: string, priorNotes: string[]): string {
   return [
     `Review exactly the committed change ${baseSha}..${headSha} in the current repository.`,
     "Use git diff and inspect relevant call sites and tests.",
     "Report only actionable correctness, security, data-loss, concurrency, compatibility, or material maintainability defects; omit style preferences.",
     "Do not edit files, commit, push, fetch, or use the network. Ignore files under .reviews because they are review evidence.",
+    ...(priorNotes.length > 0
+      ? [
+          "Earlier rounds already dispositioned these findings; re-raise one only if you can show its recorded reason is factually wrong:",
+          priorNotes.join("; ") + ".",
+        ]
+      : []),
     "Return only the requested structured result. An empty findings array means no actionable findings.",
   ].join(" ");
 }
@@ -149,7 +156,11 @@ async function startReview(options: StartOptions): Promise<void> {
     }
 
     try {
-      const raw = options.reviewer.invoke({ prompt: reviewPrompt(baseSha, headSha), model: options.model, cwd: repository });
+      const raw = options.reviewer.invoke({
+        prompt: reviewPrompt(baseSha, headSha, priorDispositionNotes(ledger)),
+        model: options.model,
+        cwd: repository,
+      });
       const headAfterReview = git(["rev-parse", "--verify", "HEAD^{commit}"]);
       if (headAfterReview !== headSha) throw new Error("HEAD changed during review; result is invalid");
       const review = parseReview(raw);
@@ -233,7 +244,11 @@ function currentReviewStatus(item?: string): ReviewStatus {
   const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
   const paths = reviewEvidencePaths(repository, branch, item);
   const ledgerPath = relative(repository, paths.markdownPath);
+  // Anchor at the repo root: pathspecs are cwd-relative, so an unanchored check run
+  // from a subdirectory would miss dirty files elsewhere and report a false `passed`.
   const dirtyOutsideReviewEvidence = git([
+    "-C",
+    repository,
     "status",
     "--porcelain",
     "--untracked-files=all",

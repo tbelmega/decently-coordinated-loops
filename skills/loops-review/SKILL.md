@@ -55,12 +55,15 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
 
    Status is `accepted`, `rejected`, `already-addressed`, or `deferred-to-human`.
 4. **Implement** the accepted findings, re-run the project's checks, commit.
-5. **Start again** against the same base. Each round is independent and reviews the
-   whole change from scratch (never a resumed conversation).
+5. **Start again** against the same base. Each round is a fresh conversation reviewing
+   the whole change from scratch; the prompt carries prior non-accepted dispositions so
+   the reviewer doesn't blindly re-raise what was already rejected or deferred.
 6. **Stop with `PASSED`** only on a clean round covering the current HEAD. Rejected
    findings get one clean confirmation round. A deferred-to-human finding, reviewer
    failure, stale review, or the three-round cap is `BLOCKED`; escalate it to the owner
-   rather than claiming completion.
+   rather than claiming completion. When the owner later decides a deferred finding,
+   record that decision as a new disposition (reason citing the owner) — only
+   `deferred-to-human` may be superseded — then continue the round loop.
 
 ## Completion status
 

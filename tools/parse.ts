@@ -18,12 +18,19 @@ export function parseItemFileText(path: string, text: string): ItemFile {
   for (const [key, value] of Object.entries(rawLinks)) {
     if (typeof value === "string" && value.length > 0) links[key] = value;
   }
-  links.stackParent = links["stack-parent"];
-  links.baseSha = links["base-sha"];
-  links.headSha = links["head-sha"];
-  delete links["stack-parent"];
-  delete links["base-sha"];
-  delete links["head-sha"];
+  // Rename the kebab-case frontmatter keys to their typed camelCase fields — but only
+  // when present, so absent links don't become own-properties with `undefined` values.
+  for (const [from, to] of [
+    ["stack-parent", "stackParent"],
+    ["base-sha", "baseSha"],
+    ["head-sha", "headSha"],
+  ] as const) {
+    const value = links[from];
+    if (value !== undefined) {
+      links[to] = value;
+      delete links[from];
+    }
+  }
   const dependsOn = Array.isArray(fm["depends-on"]) ? (fm["depends-on"] as string[]) : [];
 
   return {

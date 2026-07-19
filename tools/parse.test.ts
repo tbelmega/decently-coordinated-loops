@@ -57,6 +57,8 @@ Body.
     expect(item.links.pr).toBe("https://github.com/example/pr/1");
     expect(item.links.inventory).toBe("docs/inventory/current.md");
     expect(item.links["parent-item"]).toBe("items/atlas-parent.md");
+    // Absent stack fields must be absent keys, not own-properties set to undefined.
+    expect(Object.keys(item.links)).toEqual(["spec", "pr", "inventory", "parent-item"]);
   });
 
   test("parses immutable handoff and stack-parent links", () => {
