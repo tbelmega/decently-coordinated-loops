@@ -189,6 +189,12 @@ describe("config block", () => {
     expect(claudeMd).toContain("LOOPS:START");
     expect(claudeMd).toContain(dir);
     expect(claudeMd).toContain("casey");
+    expect(claudeMd).toContain("IMPLEMENTATION: COMPLETE|INCOMPLETE");
+    expect(claudeMd).toContain("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN");
+    expect(claudeMd).toContain(
+      "after all of its internal tasks and commits are complete and final\nverification passes",
+    );
+    expect(claudeMd).not.toContain("Do not review after each internal");
 
     // Re-running replaces the block instead of duplicating it.
     const rerun = run(["run", SEED, dir, "--join", "--owner", "casey"], { home });

@@ -83,9 +83,14 @@ describe("reviewCanContinue", () => {
     expect(reviewCanContinue([{ findings: [] }]).reason).toMatch(/no actionable findings/);
   });
 
-  test("stops when the latest round is terminal (all rejected/deferred)", () => {
+  test("allows a clean confirmation round after all findings are rejected", () => {
     const rounds = [{ findings: [{ id: "R1-F1", disposition: "rejected" as const }] }];
-    expect(reviewCanContinue(rounds).reason).toMatch(/terminal/);
+    expect(reviewCanContinue(rounds).allowed).toBe(true);
+  });
+
+  test("stops when a finding is deferred to the owner", () => {
+    const rounds = [{ findings: [{ id: "R1-F1", disposition: "deferred-to-human" as const }] }];
+    expect(reviewCanContinue(rounds).reason).toMatch(/deferred/);
   });
 
   test("allows another round when the latest has an accepted finding to act on", () => {

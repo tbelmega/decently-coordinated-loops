@@ -1,16 +1,19 @@
 ---
 name: loops-review
-description: Use to run the bundled local, forge-independent code review — an independent reviewer model (Codex/Claude/Cursor) reviews a finished change on the current branch, you disposition each finding and iterate, no PR or forge required
+description: Use when completing a tracked implementation item *if* the bundled local reviewer is configured. Also use when the owner *requests* local review. - An independent model reviews the branch, you disposition findings, iterate, and report current-HEAD status
 ---
 
 # Local code review
 
-DCL ships an optional review mechanism: an independent reviewer model reviews the
+DCL ships an optional-to-activate review mechanism: an independent reviewer model reviews the
 committed change on your branch and returns structured findings, which you evaluate
 and disposition. It is **forge-independent** — no GitHub, no PR — so it works on any
 trusted local git repo. This is one way to satisfy `loops-pickup` step 5's "request
 review per `HOUSE-RULES.md → Review mechanism`"; an instance opts in by setting a
-reviewer.
+reviewer. **Once configured, it is the completion gate for every implemented board item,
+including attended work on a named spec or plan.** Run it once after all internal tasks
+and commits are complete and final verification passes
+without waiting for the owner to invoke this skill.
 
 ## Activation (one line)
 
@@ -51,15 +54,30 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --base <integration-branch> --d
 4. **Implement** the accepted findings, re-run the project's checks, commit.
 5. **Start again** against the same base. Each round is independent and reviews the
    whole change from scratch (never a resumed conversation).
-6. **Stop** on a clean round, when the remaining findings are all rejected/deferred, or
-   at the three-round cap the command enforces. Escalate persistent disagreement to the
-   owner rather than looping.
+6. **Stop with `PASSED`** only on a clean round covering the current HEAD. Rejected
+   findings get one clean confirmation round. A deferred-to-human finding, reviewer
+   failure, stale review, or the three-round cap is `BLOCKED`; escalate it to the owner
+   rather than claiming completion.
+
+## Completion status
+
+Immediately before the final tracked-item handoff, run from the target repo:
+
+```bash
+bun "$DCL_HOME/tools/review/cli-review.ts" status
+```
+
+It validates the ledger against the current branch and HEAD. Exit 0 plus
+`REVIEW_STATUS=passed` is the only evidence for `REVIEW: PASSED`; `blocked` and
+`not_run` exit nonzero and must be reported verbatim in the completion receipt. The
+status line includes the current HEAD and Markdown ledger path so the owner can audit
+the claim without reading the implementation transcript.
 
 ## Rules
 
 - The reviewer runs **read-only** — it never edits, commits, pushes, fetches, or uses
   the network (enforced by the adapter's sandbox/plan mode). You implement the fixes.
-- A clean review is **evidence for the owner, not approval to merge.** Landing stays
+- A clean current-HEAD review is **evidence for the owner, not approval to merge.** Landing stays
   the owner's step per `HOUSE-RULES.md → Merge policy`.
 - The JSON ledger is validated machine state; the Markdown is the human surface. Don't
   hand-edit finding text or the JSON. The command fails closed on a dirty tree, a

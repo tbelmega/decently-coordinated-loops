@@ -25,8 +25,8 @@ from the fleet is one board. Both trend toward empty.
 
 ## Two layers
 
-- **This repo (shared, public):** the workflow contract as four agent skills
-  (`loops-board`, `loops-queues`, `loops-pickup`, `loops-setup`), the board tools,
+- **This repo (shared, public):** the workflow contract as five agent skills
+  (`loops-board`, `loops-queues`, `loops-pickup`, `loops-review`, `loops-setup`), the board tools,
   seed templates, and the installer. Update with `git pull` + `./install.sh`.
 - **Your data repo (private, one per user):** the board, items, queues, project
   registry — and your local policy in `HOUSE-RULES.md` (model roster, review
@@ -66,6 +66,11 @@ Run from the data-repo root:
 | `bun run check` | Report-only integrity check: board vs item files, closed-set validation, version-stamp drift. |
 | `bun run sync` | Regenerate `BOARD.md` from the item files, move items between `items/`/`for-delivery/`/`archive/` per state. Lock-guarded and idempotent — safe for agents to run. |
 | `bun run landed [--apply]` | Detect which items' work has landed on the integration branch — via the forge API (`github` adapter) or pure git patch-id comparison (`git` adapter). `--apply` records the landings. |
+
+If the bundled local reviewer is active, run it once from the target project at the
+final handoff of a tracked item. `cli-review.ts status` verifies that a clean review
+covers the current HEAD and prints the one-line
+evidence agents place in their completion receipt.
 
 `BOARD.md` is a derived projection: never hand-resolve its merge conflicts — take
 either side and re-run `bun run sync`.

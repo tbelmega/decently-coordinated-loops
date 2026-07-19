@@ -326,13 +326,8 @@ export function reviewCanContinue(rounds: RoundState[], limit = 3): { allowed: b
   if (latestRound && latestRound.findings.length === 0) {
     return { allowed: false, reason: "latest review round has no actionable findings" };
   }
-  if (
-    latestRound &&
-    latestRound.findings.every(
-      (finding) => finding.disposition === "rejected" || finding.disposition === "deferred-to-human",
-    )
-  ) {
-    return { allowed: false, reason: "latest review round is terminal without code changes" };
+  if (latestRound?.findings.some((finding) => finding.disposition === "deferred-to-human")) {
+    return { allowed: false, reason: "latest review round has a finding deferred to the owner" };
   }
   return { allowed: true };
 }

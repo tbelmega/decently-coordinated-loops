@@ -16,7 +16,7 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 | `OUTBOX.md` | The mirror: everything agents need from {{OWNER}}, answerable in one line each. |
 | `PROJECTS.md` | Per-project registry: repo paths (which drive the participation gate), gates, tracker locations. |
 | `HOUSE-RULES.md` | Cross-project local policy the DCL skills defer to. |
-| `loops.json` | Machine-read config: priorities, integration branch, landed adapter, tokens. |
+| `loops.json` | Machine-read config: priorities, integration branch, landed and review adapters, tokens. |
 
 ## Commands (run from this directory)
 
@@ -26,7 +26,7 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 - `bun run ready` — the dependency gate: which items' `depends-on` targets are satisfied.
 - `bun run restamp` — advance `.loops-version` after reviewing a DCL upgrade.
 
-## Local code review (optional)
+## Local code review
 
 If `loops.json → review.reviewer` is set (`bun run setup` offers this), an independent
 reviewer model reviews a finished branch read-only, with no forge/PR. Drive it from the
@@ -34,6 +34,13 @@ target repo per the loops-review skill:
 
 ```bash
 bun "{{DCL_HOME}}/tools/review/cli-review.ts" start --base <branch> --data-repo <this repo>
+```
+
+Once configured, agents run the review automatically at the final handoff of a tracked
+item. The current-HEAD gate is:
+
+```bash
+bun "{{DCL_HOME}}/tools/review/cli-review.ts" status
 ```
 
 Contracts and protocols: the `loops-board`, `loops-queues`, `loops-pickup`,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// `bun cli-review.ts <start|disposition> [options]` — drive a local, forge-independent
+// `bun cli-review.ts <start|disposition|status> [options]` — drive a local, forge-independent
 // code review of the committed change on the current branch, using the reviewer
 // adapter this instance activated (loops.json → review). Runs from the *target* repo,
 // like the participation gate; resolve the data repo via --data-repo or $LOOPS_DATA_REPO.
@@ -10,8 +10,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { createHash } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { loadConfig } from "../config.ts";
 import {
   addReviewRound,
@@ -29,6 +28,12 @@ import {
 import { acquireReviewLock } from "./review-lock.ts";
 import { writeFileAtomically } from "./atomic-write.ts";
 import { getReviewer, isReviewerId, reviewerIds, type Reviewer } from "./reviewers.ts";
+import {
+  evaluateReviewStatus,
+  renderReviewStatus,
+  reviewEvidencePaths,
+  type ReviewStatus,
+} from "./review-status.ts";
 
 interface StartOptions {
   baseRef: string;
@@ -97,17 +102,6 @@ function reviewPrompt(baseSha: string, headSha: string): string {
   ].join(" ");
 }
 
-function reviewPaths(repository: string, branch: string): { jsonPath: string; markdownPath: string } {
-  const reviewDirectory = join(repository, ".reviews");
-  const slug = branch.replaceAll(/[^a-zA-Z0-9._-]+/g, "-");
-  const branchHash = createHash("sha256").update(branch).digest("hex").slice(0, 10);
-  const filename = `${slug}--${branchHash}`;
-  return {
-    jsonPath: join(reviewDirectory, `${filename}.json`),
-    markdownPath: join(reviewDirectory, `${filename}.md`),
-  };
-}
-
 function readLedger(path: string): ReviewLedger {
   return parseReviewLedger(JSON.parse(readFileSync(path, "utf8")));
 }
@@ -127,7 +121,7 @@ async function startReview(options: StartOptions): Promise<void> {
   try {
     const resolvedBaseSha = git(["rev-parse", "--verify", `${options.baseRef}^{commit}`]);
     const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
-    const paths = reviewPaths(repository, branch);
+    const paths = reviewEvidencePaths(repository, branch);
     const modelLabel = options.model ?? `${options.reviewer.id} (default)`;
     let ledger: ReviewLedger;
     let baseSha: string;
@@ -210,7 +204,7 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
   const repository = git(["rev-parse", "--show-toplevel"]);
   const releaseLock = await acquireReviewLock(repository, branch);
   try {
-    const paths = reviewPaths(repository, branch);
+    const paths = reviewEvidencePaths(repository, branch);
     const existingLedger = readLedger(paths.jsonPath);
     if (existingLedger.branch !== branch) {
       throw new Error(`review ledger branch is ${existingLedger.branch}, expected ${branch}`);
@@ -223,14 +217,61 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
   }
 }
 
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function currentReviewStatus(): ReviewStatus {
+  const branch = git(["branch", "--show-current"]);
+  if (!branch) throw new Error("review status requires a named branch");
+  const repository = git(["rev-parse", "--show-toplevel"]);
+  const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
+  const paths = reviewEvidencePaths(repository, branch);
+  const ledgerPath = relative(repository, paths.markdownPath);
+  const dirtyOutsideReviewEvidence = git([
+    "status",
+    "--porcelain",
+    "--untracked-files=all",
+    "--",
+    ".",
+    ":(exclude).reviews/**",
+  ]);
+  if (dirtyOutsideReviewEvidence) {
+    return {
+      kind: "blocked",
+      headSha,
+      ledgerPath,
+      reason: "working tree has uncommitted changes outside .reviews",
+    };
+  }
+  try {
+    return evaluateReviewStatus(readLedger(paths.jsonPath), headSha, ledgerPath);
+  } catch (error: unknown) {
+    if (isMissingFileError(error)) {
+      return { kind: "not_run", headSha, ledgerPath, reason: "no review ledger for current branch" };
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    return { kind: "blocked", headSha, ledgerPath, reason: `review evidence is invalid: ${reason}` };
+  }
+}
+
+function printReviewStatus(): void {
+  const status = currentReviewStatus();
+  process.stdout.write(`${renderReviewStatus(status)}\n`);
+  if (status.kind !== "passed") process.exitCode = 1;
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "start") {
     await startReview(parseStartOptions(args));
   } else if (command === "disposition") {
     await addDisposition(parseDispositionOptions(args));
+  } else if (command === "status") {
+    if (args.length > 0) throw new Error("status takes no arguments");
+    printReviewStatus();
   } else {
-    throw new Error("usage: cli-review <start|disposition> [options]");
+    throw new Error("usage: cli-review <start|disposition|status> [options]");
   }
 }
 

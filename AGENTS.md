@@ -10,9 +10,9 @@ the workflow, that's the skills under `skills/`.)
 - `tools/` — the board CLIs (`cli-check`, `cli-sync`, `cli-landed`) and their
   library modules. Pure logic is separated from IO boundaries; keep it that way.
 - `tools/review/` — the optional local review mechanism: the model-agnostic core
-  (ledger, lock, atomic write) plus `reviewers.ts`, where each reviewer CLI (Codex/
-  Claude/Cursor) is one adapter. Adding a reviewer = one adapter + its output-parse
-  tests; the core never names a specific tool.
+  (ledger, current-HEAD status, lock, atomic write) plus `reviewers.ts`, where each
+  reviewer CLI (Codex/Claude/Cursor) is one adapter. Adding a reviewer = one adapter
+  + its output-parse tests; the core never names a specific tool.
 - `setup/` — `seed.ts`, the config-block writer, and `templates/` for seeded data
   repos.
 - `install.sh` — machine wiring (skill symlinks, seed chaining). Bash only.

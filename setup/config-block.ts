@@ -41,7 +41,28 @@ the outbox" and "interview me" are handled there too. When ${owner} says "pick u
 the next available piece of work" (or similar) without naming an item, follow the
 loops-pickup skill. Read \`${dataRepo}/HOUSE-RULES.md\` before any unattended work —
 it holds this instance's local policy. If this harness can't load skills by name,
-read them from \`${dclHome}/skills/*/SKILL.md\`.`;
+read them from \`${dclHome}/skills/*/SKILL.md\`.
+
+## Completion review
+At the final implementation handoff of a registered work-stream item — attended or
+unattended, after all of its internal tasks and commits are complete and final
+verification passes — resolve \`${dataRepo}/HOUSE-RULES.md → Review mechanism\` and
+initiate it without waiting for an explicit request. If \`loops.json → review.reviewer\`
+is set, load loops-review and drive the bundled reviewer; a clean review of the current
+HEAD is its passing terminal signal.
+
+Begin that final item handoff with this receipt, using only these states and including
+concise command, HEAD, URL, or ledger evidence after the dash:
+
+    IMPLEMENTATION: COMPLETE|INCOMPLETE
+    VERIFICATION: PASSED|FAILED|NOT RUN
+    REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN
+
+\`REQUESTED\` means an asynchronous tool or human has the review but has not completed
+it; \`WAIVED\` requires the owner's explicit opt-out. Do not claim the overall item
+complete when its required review has not passed. If the bundled reviewer is active,
+run its \`status\` command immediately before the receipt; only its
+\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`.`;
 }
 
 /** The block DCL upserts between markers inside a shared config file

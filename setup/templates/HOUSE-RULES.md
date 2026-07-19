@@ -29,7 +29,9 @@ this file before any unattended work.
 - Bundled option: DCL ships a local, forge-independent reviewer (an independent
   model — Codex/Claude/Cursor — reviews the branch read-only). Activate it by setting
   `review.reviewer` in `loops.json` (`bun run setup` offers this); agents then drive
-  it per the loops-review skill. The terminal signal is a clean review round.
+  it automatically for the final handoff of attended and unattended tracked items per
+  the loops-review skill after all internal tasks and final verification are complete.
+  The terminal signal is a clean review round covering the current HEAD.
 - TODO: keep the bundled reviewer, or define your own mechanism here.
 
 ## Merge policy
