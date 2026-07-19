@@ -34,6 +34,7 @@ export interface FindingState {
 
 export interface RoundState {
   findings: FindingState[];
+  headSha?: string;
 }
 
 export interface ReviewDisposition {
@@ -339,7 +340,11 @@ export function parseReview(input: unknown): Review {
   };
 }
 
-export function reviewCanContinue(rounds: RoundState[], limit = 3): { allowed: boolean; reason?: string } {
+export function reviewCanContinue(
+  rounds: RoundState[],
+  limit = 3,
+  currentHeadSha?: string,
+): { allowed: boolean; reason?: string } {
   for (const round of rounds) {
     for (const finding of round.findings) {
       if (!finding.disposition) return { allowed: false, reason: `${finding.id} has no disposition` };
@@ -352,6 +357,19 @@ export function reviewCanContinue(rounds: RoundState[], limit = 3): { allowed: b
   }
   if (latestRound?.findings.some((finding) => finding.disposition === "deferred-to-human")) {
     return { allowed: false, reason: "latest review round has a finding deferred to the owner" };
+  }
+  // Accepting a finding is a commitment to fix it. Re-running at the same HEAD would
+  // let a clean round certify the branch with the accepted defect still in the tree
+  // (a fresh reviewer isn't guaranteed to re-find it) — the fix must be committed first.
+  if (
+    currentHeadSha &&
+    latestRound?.headSha === currentHeadSha &&
+    latestRound.findings.some((finding) => finding.disposition === "accepted")
+  ) {
+    return {
+      allowed: false,
+      reason: "latest round has accepted findings — implement and commit them before the next round",
+    };
   }
   return { allowed: true };
 }

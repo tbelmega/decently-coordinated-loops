@@ -161,8 +161,11 @@ async function startReview(options: StartOptions): Promise<void> {
       baseSha = ledger.baseSha;
       const continuation = reviewCanContinue(
         ledger.rounds.map((round) => ({
+          headSha: round.headSha,
           findings: round.findings.map((finding) => ({ id: finding.id, disposition: finding.disposition?.kind })),
         })),
+        undefined,
+        headSha,
       );
       if (!continuation.allowed) throw new Error(continuation.reason || "review cannot continue");
     } catch (error: unknown) {

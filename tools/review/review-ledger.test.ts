@@ -127,6 +127,12 @@ describe("reviewCanContinue", () => {
     expect(reviewCanContinue(rounds).reason).toMatch(/deferred/);
   });
 
+  test("refuses another round at an unchanged HEAD after an accepted finding", () => {
+    const rounds = [{ headSha: "same", findings: [{ id: "R1-F1", disposition: "accepted" as const }] }];
+    expect(reviewCanContinue(rounds, 3, "same").reason).toMatch(/implement and commit/);
+    expect(reviewCanContinue(rounds, 3, "fixed").allowed).toBe(true);
+  });
+
   test("allows another round when the latest has an accepted finding to act on", () => {
     const rounds = [{ findings: [{ id: "R1-F1", disposition: "accepted" as const }] }];
     expect(reviewCanContinue(rounds).allowed).toBe(true);
