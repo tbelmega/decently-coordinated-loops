@@ -57,6 +57,12 @@ The term count matters: don't step until the values repeat. When `N` does not di
 24 the sequence only repeats after 24 terms — stepping by 5 from 14 walks through
 every hour of the day, which would schedule **hourly**, not five-hourly.
 
+**This conversion only holds for `N` under 24 hours.** An hour-list repeats daily, so
+it cannot express a cadence of a day or longer: "every 48 hours" collapses to a single
+hour firing *every* 24. For `N >= 24`, either use day-stepping if the harness's cron
+supports it, or stop and ask the owner — registering a job that fires twice as often
+as authorized is worse than not registering one.
+
 When `24 % N != 0`, the day-wrap gap is shorter than the others (4h in the example
 above). That is inherent, not a bug — state it in the confirmation rather than
 silently rounding the cadence to something that divides 24.
