@@ -57,15 +57,29 @@ The term count matters: don't step until the values repeat. When `N` does not di
 24 the sequence only repeats after 24 terms — stepping by 5 from 14 walks through
 every hour of the day, which would schedule **hourly**, not five-hourly.
 
-**This conversion only holds for `N` under 24 hours.** An hour-list repeats daily, so
-it cannot express a cadence of a day or longer: "every 48 hours" collapses to a single
-hour firing *every* 24. For `N >= 24`, either use day-stepping if the harness's cron
-supports it, or stop and ask the owner — registering a job that fires twice as often
-as authorized is worse than not registering one.
+### Check the wrap gap before registering
 
-When `24 % N != 0`, the day-wrap gap is shorter than the others (4h in the example
-above). That is inherent, not a bug — state it in the confirmation rather than
-silently rounding the cadence to something that divides 24.
+An hour-list repeats daily, so when `24 % N != 0` the final gap of the day is shorter
+than the rest: `wrap = 24 - N * (ceil(24/N) - 1)`. Compute it every time — it degrades
+badly as `N` approaches 24, and the failure is silent.
+
+| `N` | fires | wrap gap | |
+| --- | --- | --- | --- |
+| 5 | 5×/day | 4h | fine — 80% of the interval, disclose and proceed |
+| 10 | 3×/day | 4h | thin — ask first |
+| 23 | 2×/day | **1h** | two firings an hour apart; never register this silently |
+
+Rule: proceed when the wrap gap is at least **half of `N`**, and say the number out
+loud in the confirmation. Below half, stop and put the choice to the owner — a
+rounded cadence that divides 24, an interval-capable scheduler if the harness has
+one, or a firing that no-ops unless `N` hours have actually elapsed since the last
+pickup. Do not quietly register the compressed schedule.
+
+**Above 24 hours the conversion doesn't hold at all.** A daily hour-list cannot
+express a cadence of a day or longer: "every 48 hours" collapses to a single hour
+firing *every* 24. For `N >= 24`, use day-stepping if the harness's cron supports it,
+or stop and ask. Registering a job that fires twice as often as authorized is worse
+than not registering one.
 
 Two adjustments:
 
