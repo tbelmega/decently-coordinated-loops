@@ -41,9 +41,14 @@ answers on `> A:` lines, in any order; partial answers and "later" are valid.
 **Entry contract:**
 
 - Append entries under `## Open` with a sequential ID. One decision per entry, ≤6
-  lines: type (`question` | `proposal` | `approval`), project, source link (item
-  file, spec), the ask itself, options where the answer space is known, and an
-  empty `> A:` line.
+  lines: type (`question` | `proposal` | `approval` | `decision`), project, source
+  link (item file, spec), the ask itself, options where the answer space is known,
+  and an empty `> A:` line.
+- `decision` entries (provisional rule — adopted 2026-07-20, to be reviewed after
+  real-world use) record a call the agent already made and acted on under the
+  loops-pickup provisional-decision band: what was decided, why, and "object to
+  reverse". They don't block the item, but they count against the cap and are
+  routed like any answer — an objection reopens the decision on the item.
 - Every question only the owner can answer that you write into an item file gets
   mirrored here — the item file holds the context, the outbox is where the owner
   finds it.

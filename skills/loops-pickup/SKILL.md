@@ -232,9 +232,17 @@ failure captured. Never weaken a check to get to green.
   project's existing remotes.
 - No new external services, paid resources, or secrets/credential changes.
 - No force-pushes to shared branches; never touch another agent's worktree/branch.
-- Spec ambiguity that requires a product decision: don't guess. Set the item
-  `blocked`, write the specific question into `next-step`, log it, commit — then
-  take the next candidate.
+- Spec ambiguity that requires a product decision: graded. (Provisional rule —
+  adopted 2026-07-20, to be reviewed after real-world use.) When you have a
+  plausible recommendation, the decision is cheap to reverse — count wasted work
+  and the owner's review time, not just the code revert — and the item carries at
+  most two such calls, **decide provisionally**: record the decision and reasoning
+  on the item, file an outbox `decision` entry (loops-queues), keep working on the
+  agent branch, and lead the review request with the provisional decisions.
+  Anything expensive to reverse, any one-way door (data disclosure, migrations,
+  legal, spend), or a third open decision: don't guess — set the item `blocked`,
+  write the specific question into `next-step`, log it, commit, take the next
+  candidate.
 - Plus everything under `HOUSE-RULES.md → Guardrails (additions)`.
 
 ## Asks go to the outbox
