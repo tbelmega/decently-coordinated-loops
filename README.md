@@ -25,8 +25,9 @@ from the fleet is one board. Both trend toward empty.
 
 ## Two layers
 
-- **This repo (shared, public):** the workflow contract as five agent skills
-  (`loops-board`, `loops-queues`, `loops-pickup`, `loops-review`, `loops-setup`), the board tools,
+- **This repo (shared, public):** the workflow contract as six agent skills
+  (`loops-board`, `loops-queues`, `loops-pickup`, `loops-dispatch`, `loops-review`,
+  `loops-setup`), the board tools,
   seed templates, and the installer. Update with `git pull` + `./install.sh`.
 - **Your data repo (private, one per user):** the board, items, queues, project
   registry — and your local policy in `HOUSE-RULES.md` (model roster, review

@@ -52,8 +52,9 @@ path and owner name. Existing files are never overwritten; re-running is safe.
 3. For a new repo: have the user add a git remote and push — origin is the source
    of truth across machines.
 4. Point the user at the other skills: loops-board (contract), loops-queues
-   (inbox/outbox), loops-pickup (unattended work), loops-review (the bundled local
-   code reviewer, if activated).
+   (inbox/outbox), loops-pickup (unattended work), loops-dispatch (standing a session
+   up as a periodic dispatcher), loops-review (the bundled local code reviewer, if
+   activated).
 
 ## Updating an instance
 

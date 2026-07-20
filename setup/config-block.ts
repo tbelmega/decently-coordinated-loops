@@ -39,7 +39,9 @@ items per the loops-queues skill. Questions, proposals, and approvals that only
 ${owner} can resolve go into \`${dataRepo}/OUTBOX.md\` per the same skill; "process
 the outbox" and "interview me" are handled there too. When ${owner} says "pick up
 the next available piece of work" (or similar) without naming an item, follow the
-loops-pickup skill. Read \`${dataRepo}/HOUSE-RULES.md\` before any unattended work —
+loops-pickup skill. When ${owner} asks you to set yourself up for dispatch duty (or
+to inspect or stop a running dispatcher), follow the loops-dispatch skill.
+Read \`${dataRepo}/HOUSE-RULES.md\` before any unattended work —
 it holds this instance's local policy. If this harness can't load skills by name,
 read them from \`${dclHome}/skills/*/SKILL.md\`.
 

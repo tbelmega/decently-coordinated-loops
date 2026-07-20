@@ -44,5 +44,6 @@ bun "{{DCL_HOME}}/tools/review/cli-review.ts" status
 ```
 
 Contracts and protocols: the `loops-board`, `loops-queues`, `loops-pickup`,
-`loops-review`, and `loops-setup` skills — installed into your harness's skills tree,
+`loops-dispatch`, `loops-review`, and `loops-setup` skills — installed into your
+harness's skills tree,
 or readable at `{{DCL_HOME}}/skills/`.

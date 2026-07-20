@@ -321,7 +321,12 @@ cadence (tuning: `HOUSE-RULES.md → Dispatch`). Suggested prompt:
 > the protocol, babysit any review you open, and never land changes or deploy.
 
 The scheduling mechanism is **harness-specific** — an in-session cron in one harness, a
-system scheduler in another, unavailable in a third. Before relying on it, read
-`references/periodic-dispatch.md` for the mechanics and failure modes (written for
-session-bound cron harnesses). Use only the automation your harness actually provides;
-never imitate a feature your harness lacks.
+system scheduler in another, unavailable in a third. Use only the automation your
+harness actually provides; never imitate a feature your harness lacks.
+
+**Setting a dispatcher up is the loops-dispatch skill's job** — it resolves the
+cadence from house rules, converts it to the harness's scheduler, registers the job,
+and reports the session-bound and expiry caveats. Load it when the owner asks for
+dispatch duty rather than wiring a schedule by hand. `references/periodic-dispatch.md`
+holds the underlying mechanics and failure modes (written for session-bound cron
+harnesses).
