@@ -81,12 +81,21 @@ firing *every* 24. For `N >= 24`, use day-stepping if the harness's cron support
 or stop and ask. Registering a job that fires twice as often as authorized is worse
 than not registering one.
 
-Two adjustments:
+Three adjustments:
 
 - **Pick an off-minute.** Not `:00` or `:30` — every scheduler on the planet fires
   there. Reuse the setup minute, or nudge a few minutes off.
+- **Nudge it earlier, never later.** The hour list includes the setup hour, so a
+  minute later in the current hour fires almost immediately: registering at 14:23 with
+  `26 14,19,…` fires in three minutes, not in `N` hours. Choosing a minute at or
+  before the current one puts the first firing a full interval out.
 - **Apply a stagger offset** only if house rules ask for one. Some instances
   explicitly waive staggering; don't add it unasked.
+
+An immediate first pickup is a legitimate thing to want — the owner asking for
+dispatch duty often wants work starting now. Make it a decision, not an accident:
+either start that first pickup deliberately and say so, or keep the first firing a
+full `N` hours out.
 
 Exactness is approximate by nature: jobs fire only while the session is idle, so a
 pickup still running at the next fire time pushes it out. Don't design around
