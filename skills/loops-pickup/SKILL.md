@@ -43,8 +43,13 @@ Before claiming anything new, in order:
 ## 1. Choose the project
 
 Read `BOARD.md`. The `Priorities:` line ranks projects; work the highest-priority
-project that has an eligible item. Within a project, prefer items whose state is
-closest to done (finish over start).
+project that has an eligible item.
+
+**Flow principle — keep available agent capacity productive while minimizing work
+in progress.** Within that project, choose the eligible item furthest along the
+lifecycle: finish before starting. Address review feedback, verify merged work, and
+continue in-progress work before opening earlier-stage work. When candidates are at
+the same lifecycle stage, choose the lowest-risk one.
 
 ## 2. Find an eligible item
 
@@ -72,8 +77,7 @@ An item is eligible for unattended pickup when **either**:
   5. it clears every guardrail below.
 
 If you pick a self-qualified item, say so in the item log and the review
-description. If several items are eligible, pick the lowest-risk one, not the most
-interesting one.
+description.
 
 **Spec gate — `autonomy: auto` approves unattended pickup, never spec-skipping.**
 `auto` answers "may an agent work this unattended?", not "is the description a
@@ -91,8 +95,8 @@ instead of steps 3–5. A refined item description is never a spec.
 **`merged` items are their own work-type.** Any `merged` item is eligible (it is
 `autonomy: auto` / `next-actor: agent` by construction) but its work is
 *verification*, not implementation — take it through "Verify a landed item" instead
-of steps 3–5. Verifying landed work is lower-risk than starting new work; prefer it
-when any is pending.
+of steps 3–5. Under the flow principle, this later lifecycle stage takes precedence
+over starting new implementation.
 
 **Capability gate — can this get delivered from here?** Judge fit against
 `HOUSE-RULES.md → Harnesses & model roster` (sweet spots, watch-outs, standing
