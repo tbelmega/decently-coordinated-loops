@@ -108,12 +108,32 @@ state from the board, so the prompt carries no context from this conversation be
 the standing restrictions:
 
 > Periodic dispatch: pick up the next available piece of work per the loops-pickup
-> skill. You are running unattended — deliver a change for review or refinement per
-> the protocol, babysit any review you open, and never land changes or deploy.
+> skill. You are running unattended — complete the full prior-obligation sweep,
+> then perform substantive eligible work in this firing; preflight bookkeeping does
+> not complete the wakeup, and only substantial work in progress inherited from the
+> previous turn may itself be the substantive outcome. Deliver a change for review
+> or refinement per the protocol, babysit any review you open, and never land
+> changes or deploy. Before going idle, publish all durable item and board state,
+> then schedule a one-shot prompt containing exactly `/compact` for the next minute.
 
 If the owner restricted the session to one project, name it in the prompt as a hard
 constraint — loops-pickup must then consider only that project's items and treat
 everything else as out of scope, even when a higher-priority item exists elsewhere.
+
+### Compact after each firing
+
+Claude Code's `/compact` is a prompt command, not a command the model can invoke as
+the final action inside its current response. The recurring pickup prompt therefore
+instructs each firing to use `CronCreate` after its work is durable: schedule a
+**one-shot** prompt containing exactly `/compact` for the next minute, then finish
+the current turn. Scheduled prompts run between turns; if the pickup is still
+finishing when the minute arrives, the command waits until that response ends.
+
+Never schedule compaction before updating, committing, and pushing the item/board
+state needed to re-hydrate the next firing. Do not create a second recurring job for
+compaction — one one-shot per completed firing preserves the required ordering. If
+the harness cannot schedule or invoke compaction, say so during setup and omit the
+claim that each firing compacts; never simulate support it does not have.
 
 ## 5. Register, then confirm concretely
 

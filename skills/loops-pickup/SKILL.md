@@ -40,6 +40,19 @@ Before claiming anything new, in order:
    its persistent base branch and bring that branch level with the integration
    branch. Branch position by itself is never the cleanup proof.
 
+**Periodic firings complete the sweep and then do substantive work.** In a periodic
+dispatch wakeup, steps 1–4 are one mandatory preflight sweep, not alternative
+stopping points. Handle every applicable step in order, then continue through
+project and item selection and perform substantive eligible work in the same
+firing. Routing a queue entry, updating or syncing board state, recording a
+landing, parking work, or maintaining a slot does not by itself complete the
+wakeup. The sole exception is continuation of substantial work in progress
+inherited from the previous turn — for example, an implementation left half-done
+when that agent exhausted its usage limit. That continuation may be the firing's
+substantive outcome. Otherwise keep going until the protocol produces substantive
+implementation, verification, refinement, or cleanup work, or reaches one of its
+real stop conditions.
+
 ## 1. Choose the project
 
 Read `BOARD.md`. The `Priorities:` line ranks projects; work the highest-priority
@@ -354,9 +367,14 @@ A long-lived session can hold a recurring job that fires the pickup prompt on a
 cadence (tuning: `HOUSE-RULES.md → Dispatch`). Suggested prompt:
 
 > Periodic dispatch: pick up the next available piece of work per the loops-pickup
-> skill. You are running unattended — deliver a change for review or refinement per
-> the protocol, babysit any review you open, and resolve landing and development-
-> deployment authority from the house rules; never make other deployments.
+> skill. You are running unattended — complete the full prior-obligation sweep,
+> then perform substantive eligible work in this firing; preflight bookkeeping does
+> not complete the wakeup, and only substantial work in progress inherited from the
+> previous turn may itself be the substantive outcome. Deliver a change for review
+> or refinement per the protocol, babysit any review you open, and resolve landing
+> and development-deployment authority from the house rules; never make other
+> deployments. Before going idle, publish all durable item and board state, then use
+> the harness-supported compaction mechanism described by the dispatcher setup.
 
 The scheduling mechanism is **harness-specific** — an in-session cron in one harness, a
 system scheduler in another, unavailable in a third. Use only the automation your
