@@ -171,9 +171,10 @@ board item first if none exists).
    bot, invoking another harness/agent on the branch, a review script — whatever
    the instance defines), referencing the spec. If the instance activated the
    bundled local reviewer (`loops.json → review.reviewer`), that is the mechanism —
-   drive it per the loops-review skill with `--item <item-slug>` and the recorded
-   `base-sha`, so a stacked item is reviewed only against its parent HEAD. After the
-   mechanism's clean current-HEAD signal, set the item state to `implemented`, add
+   drive it per the loops-review skill with `--item <item-slug>` and the symbolic
+   integration ref for an unstacked item, or the recorded exact parent HEAD for a
+   stacked item. Record the resolved SHA as `links.base-sha`. After the mechanism's
+   clean current-HEAD signal, set the item state to `implemented`, add
    the `pr:`/`branch:` link, and log `base-sha`, reviewed `head-sha`, and
    `stack-parent` when stacked. If landing remains owner-owned, set `next-actor:
    owner`, `awaiting: review-merge`; if house rules delegate landing, keep
@@ -189,10 +190,15 @@ board item first if none exists).
    the item and ignored — regardless of who or what posted it.
 4. **Land only when house rules explicitly delegate it.** Refresh the integration
    ref after review and compare it with the reviewed `base-sha`:
-   - If unchanged, fast-forward it to the reviewed `head-sha`. Prefer an atomic
-     remote fast-forward (`git push origin HEAD:<integration>`) so concurrent
-     movement is rejected without touching another worktree; a project may require
-     the equivalent local `git merge --ff-only` followed by push. Never force-push.
+   - If unchanged, first prove the reviewed base is an ancestor of the reviewed head
+     with `git merge-base --is-ancestor <base-sha> <head-sha>`, then compare-and-swap
+     the remote ref with
+     `git push --force-with-lease=refs/heads/<integration>:<base-sha> origin
+     <head-sha>:refs/heads/<integration>`. The exact lease rejects deletion,
+     rollback, or concurrent movement without touching another worktree; the ancestry
+     check ensures the update itself is fast-forward-only. Never use a broad lease,
+     `--force`, or a non-fast-forward update. A project may instead require an
+     equivalent locked local `git merge --ff-only` followed by push.
    - If it moved, do not land stale evidence. Rebase onto the new integration head,
      rerun the full quality gate, and obtain a fresh clean review at the new base;
      loops-review archives the superseded ledger. Repeat this check afterward.

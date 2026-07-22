@@ -41,10 +41,12 @@ this file before any unattended work.
   agents never merge or deploy unattended.
 
 <!-- To delegate landing to agents, replace the default with exact conditions. Require
-     a pre-review rebase + full gate, a clean current-HEAD review, and an atomic
-     fast-forward only while integration still equals the reviewed base. If it moved,
-     require rebase + gate + fresh review. State whether an integration push may
-     trigger an authorized development deployment; keep release/prod boundaries
+     a pre-review rebase + full gate, a clean current-HEAD review, and an exact
+     expected-old-SHA compare-and-swap only while integration still equals the
+     reviewed base. Require proof that the reviewed base is an ancestor of the
+     reviewed head before using the narrowly scoped force-with-lease. If integration
+     moved, require rebase + gate + fresh review. State whether an integration push
+     may trigger an authorized development deployment; keep release/prod boundaries
      explicit. -->
 
 ## Worktree and branch policy

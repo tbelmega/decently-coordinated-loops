@@ -76,8 +76,9 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
 rebased onto its new head, the old review cannot certify the rebased commits. Rerun
 the full quality gate and start review again with the same symbolic `--base`. Once
 all earlier findings are dispositioned and none is deferred, the CLI archives the
-old evidence and starts a fresh ledger at the newly resolved base. It refuses review
-when that base is not an ancestor of the current `HEAD`.
+old evidence and starts a fresh ledger at the newly resolved base. A latest-round
+accepted finding must first receive a subsequent review confirming the fix. The CLI
+refuses review when the new base is not an ancestor of the current `HEAD`.
 
 ## Completion status
 

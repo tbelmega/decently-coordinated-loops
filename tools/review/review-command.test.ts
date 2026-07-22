@@ -301,4 +301,48 @@ describe("cli-review start", () => {
     expect(refreshed.rounds).toHaveLength(1);
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
   });
+
+  test("does not supersede a latest-round accepted finding", () => {
+    const { repository, baseSha, headSha } = createReviewRepository();
+    const item = "accepted-finding";
+    const dataRepo = createReviewDataRepo(5);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), { recursive: true });
+    let ledger = addReviewRound(
+      createReviewLedger({ item, branch: "feature/review-receipt", baseRef: baseSha, baseSha }),
+      {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: "2026-07-21T12:00:00Z",
+        review: {
+          summary: "fix required",
+          findings: [{
+            priority: "P1",
+            title: "Defect",
+            evidence: "The defect remains",
+            impact: "Incorrect behavior",
+            direction: "Fix it",
+            confidence: "high",
+          }],
+        },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "Will fix");
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+
+    const result = runStart(repository, dataRepo, item);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("accepted finding");
+    const unchanged = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(unchanged.rounds).toHaveLength(1);
+    expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(false);
+  });
 });

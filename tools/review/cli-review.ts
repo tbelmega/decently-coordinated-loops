@@ -146,6 +146,9 @@ function archiveReviewEvidence(
 }
 
 function assertBaseRefreshCanSupersede(ledger: ReviewLedger): void {
+  if (ledger.rounds.at(-1)?.findings.some((finding) => finding.disposition?.kind === "accepted")) {
+    throw new Error("review base changed while the latest round has an accepted finding awaiting confirmation");
+  }
   for (const round of ledger.rounds) {
     for (const finding of round.findings) {
       if (!finding.disposition) throw new Error(`${finding.id} has no disposition`);
