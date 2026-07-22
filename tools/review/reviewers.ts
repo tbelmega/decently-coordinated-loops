@@ -25,6 +25,9 @@ export interface ReviewRequest {
   prompt: string;
   /** Explicit model id, or undefined to use the CLI's own default. */
   model?: string;
+  /** Reasoning-effort override, or undefined to use the CLI's own default. Only the
+   * codex adapter consumes this (via -c model_reasoning_effort); others ignore it. */
+  effort?: string;
   /** Repository root to run the reviewer in. */
   cwd: string;
 }
@@ -103,6 +106,31 @@ function runCaptured(bin: string, args: string[], cwd: string, tool: string): st
   return result.stdout;
 }
 
+/** Assembles the `codex exec` argv. Extracted (pure) so the model/effort seams are
+ * unit-tested: --model and -c model_reasoning_effort are added only when supplied, and
+ * the effort override is TOML-quoted to match codex's `-c key=value` parsing. */
+export function buildCodexArgs(opts: {
+  model?: string;
+  effort?: string;
+  schemaPath: string;
+  outputPath: string;
+  prompt: string;
+}): string[] {
+  return [
+    "exec",
+    ...(opts.model ? ["--model", opts.model] : []),
+    ...(opts.effort ? ["-c", `model_reasoning_effort="${opts.effort}"`] : []),
+    "--ephemeral",
+    "--sandbox",
+    "read-only",
+    "--output-schema",
+    opts.schemaPath,
+    "--output-last-message",
+    opts.outputPath,
+    opts.prompt,
+  ];
+}
+
 const codex: Reviewer = {
   id: "codex",
   binEnv: "CODEX_BIN",
@@ -114,18 +142,13 @@ const codex: Reviewer = {
       const schemaPath = join(directory, "schema.json");
       writeFileSync(schemaPath, `${JSON.stringify(schemaObject())}\n`);
       const outputPath = join(directory, "result.json");
-      const args = [
-        "exec",
-        ...(request.model ? ["--model", request.model] : []),
-        "--ephemeral",
-        "--sandbox",
-        "read-only",
-        "--output-schema",
+      const args = buildCodexArgs({
+        model: request.model,
+        effort: request.effort,
         schemaPath,
-        "--output-last-message",
         outputPath,
-        request.prompt,
-      ];
+        prompt: request.prompt,
+      });
       const result = spawnSync(resolveBin(codex), args, { cwd: request.cwd, stdio: "inherit" });
       if (result.error) throw new Error(`could not run codex (${resolveBin(codex)}): ${result.error.message}`);
       if (result.status !== 0) throw new Error(`codex exited with code ${result.status ?? "unknown"}`);

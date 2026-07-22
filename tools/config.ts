@@ -14,6 +14,9 @@ export interface ReviewConfig {
   reviewer?: string;
   /** Optional model id override; omit to use the reviewer CLI's own default. */
   model?: string;
+  /** Reasoning-effort override passed to the reviewer CLI (codex: model_reasoning_effort);
+   * omit to use the CLI's own default. */
+  effort?: string;
   /** Maximum review rounds for one base; omit to use DCL's public default. */
   maxRounds?: number;
 }
@@ -49,6 +52,9 @@ function validateReviewConfig(review: ReviewConfig): ReviewConfig {
     (typeof review.maxRounds !== "number" || !Number.isInteger(review.maxRounds) || review.maxRounds < 1)
   ) {
     throw new Error("review.maxRounds must be a positive integer");
+  }
+  if (review.effort !== undefined && (typeof review.effort !== "string" || review.effort.trim() === "")) {
+    throw new Error("review.effort must be a non-empty string");
   }
   return review;
 }

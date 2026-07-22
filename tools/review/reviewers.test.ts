@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildCodexArgs,
   getReviewer,
   isReviewerId,
   parseClaudeOutput,
@@ -54,6 +55,41 @@ describe("parseCursorOutput", () => {
   test("throws when the envelope reports an error", () => {
     const stdout = JSON.stringify({ is_error: true, result: "denied" });
     expect(() => parseCursorOutput(stdout)).toThrow(/cursor review reported an error/);
+  });
+});
+
+describe("buildCodexArgs", () => {
+  const fixed = { schemaPath: "/tmp/s.json", outputPath: "/tmp/o.json", prompt: "review a..b" };
+
+  test("always carries the read-only exec surface and the prompt last", () => {
+    const args = buildCodexArgs(fixed);
+    expect(args[0]).toBe("exec");
+    expect(args).toContain("--ephemeral");
+    expect(args.join(" ")).toContain("--sandbox read-only");
+    expect(args).toContain("--output-schema");
+    expect(args).toContain("--output-last-message");
+    expect(args.at(-1)).toBe("review a..b");
+  });
+
+  test("adds --model only when a model is given", () => {
+    expect(buildCodexArgs(fixed)).not.toContain("--model");
+    const args = buildCodexArgs({ ...fixed, model: "gpt-5.6-terra" });
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("gpt-5.6-terra");
+  });
+
+  test("adds the reasoning-effort config override only when effort is given", () => {
+    expect(buildCodexArgs(fixed).join(" ")).not.toContain("model_reasoning_effort");
+    const args = buildCodexArgs({ ...fixed, effort: "high" });
+    const flag = args.indexOf("-c");
+    expect(flag).toBeGreaterThanOrEqual(0);
+    expect(args[flag + 1]).toBe('model_reasoning_effort="high"');
+  });
+
+  test("model and effort compose", () => {
+    const args = buildCodexArgs({ ...fixed, model: "gpt-5.6-sol", effort: "high" }).join(" ");
+    expect(args).toContain("--model gpt-5.6-sol");
+    expect(args).toContain('-c model_reasoning_effort="high"');
   });
 });
 

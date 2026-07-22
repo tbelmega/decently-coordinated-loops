@@ -57,7 +57,7 @@ describe("loadConfig", () => {
         landedAdapter: "github" as const,
         githubTokens: { "acme-org": "~/.secrets/gh-acme" },
         projects: { atlas: { repo: "acme-org/atlas", landedAdapter: "git" as const } },
-        review: { reviewer: "claude", model: "claude-opus-4-8", maxRounds: 5 },
+        review: { reviewer: "claude", model: "claude-opus-4-8", maxRounds: 5, effort: "high" },
       };
       writeFileSync(join(root, "loops.json"), JSON.stringify(full));
       expect(loadConfig(root)).toEqual(full);
@@ -72,6 +72,18 @@ describe("loadConfig", () => {
       try {
         writeFileSync(join(root, "loops.json"), JSON.stringify({ review: { maxRounds } }));
         expect(() => loadConfig(root)).toThrow(/review\.maxRounds must be a positive integer/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("rejects a review effort that is not a non-empty string", () => {
+    for (const effort of ["", "   ", 5, true]) {
+      const root = tempRoot();
+      try {
+        writeFileSync(join(root, "loops.json"), JSON.stringify({ review: { effort } }));
+        expect(() => loadConfig(root)).toThrow(/review\.effort must be a non-empty string/);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

@@ -29,6 +29,7 @@ import {
 import { acquireReviewLock } from "./review-lock.ts";
 import { writeFileAtomically } from "./atomic-write.ts";
 import { getReviewer, isReviewerId, reviewerIds, type Reviewer } from "./reviewers.ts";
+import { reviewPrompt } from "./review-prompt.ts";
 import {
   evaluateReviewStatus,
   renderReviewStatus,
@@ -41,6 +42,8 @@ interface StartOptions {
   item?: string;
   reviewer: Reviewer;
   model?: string;
+  /** Reasoning-effort override from config or `--effort`; undefined uses the CLI default. */
+  effort?: string;
   /** Effective round cap from config or an owner-authorized `--max-rounds` override. */
   maxRounds?: number;
 }
@@ -58,9 +61,10 @@ function expandHome(path: string, home: string): string {
 
 /** Resolves which reviewer + model to use: explicit flags win, else the data repo's
  * loops.json `review` block (from --data-repo or $LOOPS_DATA_REPO). */
-function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: string }): {
+function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string }): {
   reviewer: Reviewer;
   model?: string;
+  effort?: string;
   maxRounds?: number;
 } {
   const home = process.env.HOME ?? homedir();
@@ -77,12 +81,13 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   return {
     reviewer: getReviewer(id),
     model: flags.model ?? config?.review.model,
+    effort: flags.effort ?? config?.review.effort,
     maxRounds: config?.review.maxRounds,
   };
 }
 
 function parseStartOptions(args: string[]): StartOptions {
-  const flags: { reviewer?: string; dataRepo?: string; model?: string; item?: string } = {};
+  const flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string; item?: string } = {};
   let baseRef = "";
   let maxRounds: number | undefined;
   for (let index = 0; index < args.length; index += 1) {
@@ -92,6 +97,7 @@ function parseStartOptions(args: string[]): StartOptions {
     else if (arg === "--data-repo" && value) flags.dataRepo = value;
     else if (arg === "--reviewer" && value) flags.reviewer = value;
     else if (arg === "--model" && value) flags.model = value;
+    else if (arg === "--effort" && value) flags.effort = value;
     else if (arg === "--item" && value) flags.item = value;
     else if (arg === "--max-rounds" && value) {
       maxRounds = Number(value);
@@ -104,24 +110,8 @@ function parseStartOptions(args: string[]): StartOptions {
     index += 1;
   }
   if (!baseRef) throw new Error("start requires --base <ref>");
-  const { reviewer, model, maxRounds: configuredMaxRounds } = resolveReviewer(flags);
-  return { baseRef, item: flags.item, reviewer, model, maxRounds: maxRounds ?? configuredMaxRounds };
-}
-
-function reviewPrompt(baseSha: string, headSha: string, priorNotes: string[]): string {
-  return [
-    `Review exactly the committed change ${baseSha}..${headSha} in the current repository.`,
-    "Use git diff and inspect relevant call sites and tests.",
-    "Report only actionable correctness, security, data-loss, concurrency, compatibility, or material maintainability defects; omit style preferences.",
-    "Do not edit files, commit, push, fetch, or use the network. Ignore files under .reviews because they are review evidence.",
-    ...(priorNotes.length > 0
-      ? [
-          "Earlier rounds already dispositioned these findings; re-raise one only if you can show its recorded reason is factually wrong:",
-          priorNotes.join("; ") + ".",
-        ]
-      : []),
-    "Return only the requested structured result. An empty findings array means no actionable findings.",
-  ].join(" ");
+  const { reviewer, model, effort, maxRounds: configuredMaxRounds } = resolveReviewer(flags);
+  return { baseRef, item: flags.item, reviewer, model, effort, maxRounds: maxRounds ?? configuredMaxRounds };
 }
 
 function readLedger(path: string): ReviewLedger {
@@ -230,6 +220,7 @@ async function startReview(options: StartOptions): Promise<void> {
       const raw = options.reviewer.invoke({
         prompt: reviewPrompt(baseSha, headSha, priorDispositionNotes(ledger)),
         model: options.model,
+        effort: options.effort,
         cwd: repository,
       });
       const headAfterReview = git(["rev-parse", "--verify", "HEAD^{commit}"]);
