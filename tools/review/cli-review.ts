@@ -200,7 +200,7 @@ async function startReview(options: StartOptions): Promise<void> {
       ledger = readLedger(paths.jsonPath);
       if (ledger.branch !== branch) throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
       if (ledger.item !== options.item) throw new Error("review item does not match the existing ledger");
-      if (ledger.baseRef !== options.baseRef || ledger.baseSha !== resolvedBaseSha) {
+      if (ledger.baseSha !== resolvedBaseSha) {
         assertBaseRefreshCanSupersede(ledger, headSha);
         archiveReviewEvidence(ledger, paths);
         baseSha = resolvedBaseSha;

@@ -276,6 +276,42 @@ describe("cli-review start", () => {
     expect(updated.rounds[4].findings).toEqual([]);
   });
 
+  test("does not reset the round cap when only the base-ref spelling changes", () => {
+    const { repository, baseSha, headSha } = createReviewRepository();
+    const item = "same-base-different-ref";
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), { recursive: true });
+    let ledger = createReviewLedger({ item, branch: "feature/review-receipt", baseRef: "master", baseSha });
+    for (let roundNumber = 1; roundNumber <= 5; roundNumber += 1) {
+      ledger = addReviewRound(ledger, {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: `2026-07-21T12:00:0${roundNumber}Z`,
+        review: {
+          summary: "non-actionable suggestion",
+          findings: [{
+            priority: "P2",
+            title: "Suggestion",
+            evidence: "Not a defect",
+            impact: "None",
+            direction: "Keep the implementation",
+            confidence: "high",
+          }],
+        },
+      });
+      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not an actionable defect");
+    }
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+
+    const result = runStart(repository, createReviewDataRepo(5), item, baseSha);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("round limit of 5 reached");
+    const unchanged = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(unchanged.rounds).toHaveLength(5);
+    expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(false);
+  });
+
   test("starts fresh evidence after the reviewed base changes", () => {
     const { repository, baseSha } = createReviewRepository();
     const item = "refreshed-base";
