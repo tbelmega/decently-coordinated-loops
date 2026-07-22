@@ -145,8 +145,12 @@ function archiveReviewEvidence(
   }
 }
 
-function assertBaseRefreshCanSupersede(ledger: ReviewLedger): void {
-  if (ledger.rounds.at(-1)?.findings.some((finding) => finding.disposition?.kind === "accepted")) {
+function assertBaseRefreshCanSupersede(ledger: ReviewLedger, headSha: string): void {
+  const latestRound = ledger.rounds.at(-1);
+  if (
+    latestRound?.headSha === headSha &&
+    latestRound.findings.some((finding) => finding.disposition?.kind === "accepted")
+  ) {
     throw new Error("review base changed while the latest round has an accepted finding awaiting confirmation");
   }
   for (const round of ledger.rounds) {
@@ -197,7 +201,7 @@ async function startReview(options: StartOptions): Promise<void> {
       if (ledger.branch !== branch) throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
       if (ledger.item !== options.item) throw new Error("review item does not match the existing ledger");
       if (ledger.baseRef !== options.baseRef || ledger.baseSha !== resolvedBaseSha) {
-        assertBaseRefreshCanSupersede(ledger);
+        assertBaseRefreshCanSupersede(ledger, headSha);
         archiveReviewEvidence(ledger, paths);
         baseSha = resolvedBaseSha;
         ledger = createReviewLedger({ item: options.item, branch, baseRef: options.baseRef, baseSha });

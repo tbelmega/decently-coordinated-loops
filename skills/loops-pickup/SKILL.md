@@ -260,7 +260,9 @@ failure captured. Never weaken a check to get to green.
 - No publishing to external services beyond pushing branches/review requests to the
   project's existing remotes.
 - No new external services, paid resources, or secrets/credential changes.
-- No force-pushes to shared branches; never touch another agent's worktree/branch.
+- No force-pushes to shared branches except the delegated landing operation's exact
+  expected-old-SHA lease after its ancestry check; never use a broad lease or `--force`.
+  Never touch another agent's worktree/branch.
 - Spec ambiguity that requires a product decision: graded. (Provisional rule —
   adopted 2026-07-20, to be reviewed after real-world use.) When you have a
   plausible recommendation, the decision is cheap to reverse — count wasted work
@@ -347,7 +349,8 @@ cadence (tuning: `HOUSE-RULES.md → Dispatch`). Suggested prompt:
 
 > Periodic dispatch: pick up the next available piece of work per the loops-pickup
 > skill. You are running unattended — deliver a change for review or refinement per
-> the protocol, babysit any review you open, and never land changes or deploy.
+> the protocol, babysit any review you open, and resolve landing and development-
+> deployment authority from the house rules; never make other deployments.
 
 The scheduling mechanism is **harness-specific** — an in-session cron in one harness, a
 system scheduler in another, unavailable in a third. Use only the automation your

@@ -302,7 +302,7 @@ describe("cli-review start", () => {
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
   });
 
-  test("does not supersede a latest-round accepted finding", () => {
+  test("starts a fresh confirming review after an accepted fix is rebased", () => {
     const { repository, baseSha, headSha } = createReviewRepository();
     const item = "accepted-finding";
     const dataRepo = createReviewDataRepo(5);
@@ -339,10 +339,10 @@ describe("cli-review start", () => {
 
     const result = runStart(repository, dataRepo, item);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("accepted finding");
-    const unchanged = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
-    expect(unchanged.rounds).toHaveLength(1);
-    expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(false);
+    expect(result.status).toBe(0);
+    const refreshed = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(refreshed.rounds).toHaveLength(1);
+    expect(refreshed.rounds[0].findings).toEqual([]);
+    expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
   });
 });

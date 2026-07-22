@@ -63,7 +63,8 @@ this file before any unattended work.
 
 <!-- Extra never-do rules for this instance, on top of the loops-pickup defaults
      (no undelegated merging, no undelegated deploys, no secrets/credential changes,
-     no new external services, no force-pushes to shared branches). -->
+     no new external services, no force-pushes to shared branches except the exact
+     ancestry-checked expected-SHA lease delegated by the merge policy). -->
 
 - TODO: add instance-specific boundaries, or remove this placeholder.
 
