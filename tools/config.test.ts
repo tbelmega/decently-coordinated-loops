@@ -57,12 +57,24 @@ describe("loadConfig", () => {
         landedAdapter: "github" as const,
         githubTokens: { "acme-org": "~/.secrets/gh-acme" },
         projects: { atlas: { repo: "acme-org/atlas", landedAdapter: "git" as const } },
-        review: { reviewer: "claude", model: "claude-opus-4-8" },
+        review: { reviewer: "claude", model: "claude-opus-4-8", maxRounds: 5 },
       };
       writeFileSync(join(root, "loops.json"), JSON.stringify(full));
       expect(loadConfig(root)).toEqual(full);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an invalid configured review round cap", () => {
+    for (const maxRounds of [0, -1, 1.5, "5"]) {
+      const root = tempRoot();
+      try {
+        writeFileSync(join(root, "loops.json"), JSON.stringify({ review: { maxRounds } }));
+        expect(() => loadConfig(root)).toThrow(/review\.maxRounds must be a positive integer/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     }
   });
 });

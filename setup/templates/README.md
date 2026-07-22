@@ -37,7 +37,8 @@ bun "{{DCL_HOME}}/tools/review/cli-review.ts" start --base <branch> --data-repo 
 ```
 
 Once configured, agents run the review automatically at the final handoff of a tracked
-item. The current-HEAD gate is:
+item. Set the optional positive integer `review.maxRounds` to override DCL's default
+cap of 3. The current-HEAD gate is:
 
 ```bash
 bun "{{DCL_HOME}}/tools/review/cli-review.ts" status

@@ -31,7 +31,8 @@ this file before any unattended work.
   `review.reviewer` in `loops.json` (`bun run setup` offers this); agents then drive
   it automatically for the final handoff of attended and unattended tracked items per
   the loops-review skill after all internal tasks and final verification are complete.
-  The terminal signal is a clean review round covering the current HEAD.
+  The terminal signal is a clean review round covering the current HEAD. Optionally
+  set the positive integer `review.maxRounds`; the public default is 3.
 - TODO: keep the bundled reviewer, or define your own mechanism here.
 
 ## Merge policy
@@ -39,9 +40,12 @@ this file before any unattended work.
 - Default: the owner lands agent branches on the integration branch (rebase);
   agents never merge or deploy unattended.
 
-<!-- To delegate landing to agents, replace the default with the exact conditions
-     (e.g. "after the review mechanism signals complete with no outstanding
-     comments, the agent may rebase onto the integration branch and push"). -->
+<!-- To delegate landing to agents, replace the default with exact conditions. Require
+     a pre-review rebase + full gate, a clean current-HEAD review, and an atomic
+     fast-forward only while integration still equals the reviewed base. If it moved,
+     require rebase + gate + fresh review. State whether an integration push may
+     trigger an authorized development deployment; keep release/prod boundaries
+     explicit. -->
 
 ## Worktree and branch policy
 
@@ -56,8 +60,8 @@ this file before any unattended work.
 ## Guardrails (additions)
 
 <!-- Extra never-do rules for this instance, on top of the loops-pickup defaults
-     (no merging, no deploys, no secrets/credential changes, no new external
-     services, no force-pushes to shared branches). -->
+     (no undelegated merging, no undelegated deploys, no secrets/credential changes,
+     no new external services, no force-pushes to shared branches). -->
 
 - TODO: add instance-specific boundaries, or remove this placeholder.
 

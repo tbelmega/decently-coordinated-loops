@@ -14,9 +14,9 @@ write, and git push atomicity is the coordination primitive.
 3. **Agents pick up eligible work unattended** — implement on agent branches,
    request review through whatever mechanism you configure (a forge PR with a
    review bot, another agent, a script), and iterate on feedback.
-4. **You land branches on the integration branch** (agents never merge unattended
-   unless you explicitly delegate it) — silently; agents detect landings
-   themselves and verify them against your project's gates.
+4. **Branches land on the integration branch** — by you by default, or by agents
+   only under the exact review and fast-forward conditions you delegate in house
+   rules. Agents detect landings and verify them against your project's gates.
 5. **Questions flow back to you** through an outbox file, answerable one line at a
    time, whenever you have a minute.
 

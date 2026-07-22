@@ -14,6 +14,8 @@ export interface ReviewConfig {
   reviewer?: string;
   /** Optional model id override; omit to use the reviewer CLI's own default. */
   model?: string;
+  /** Maximum review rounds for one base; omit to use DCL's public default. */
+  maxRounds?: number;
 }
 
 export interface LoopsConfig {
@@ -41,6 +43,16 @@ function defaults(): LoopsConfig {
   };
 }
 
+function validateReviewConfig(review: ReviewConfig): ReviewConfig {
+  if (
+    review.maxRounds !== undefined &&
+    (typeof review.maxRounds !== "number" || !Number.isInteger(review.maxRounds) || review.maxRounds < 1)
+  ) {
+    throw new Error("review.maxRounds must be a positive integer");
+  }
+  return review;
+}
+
 /** Loads `loops.json` from the data-repo root. A missing file yields all defaults
  * (owner ""). A present file is merged field-by-field over the defaults, so a
  * partial config (e.g. just `{"owner": "casey"}`) still gets sane values for
@@ -58,6 +70,6 @@ export function loadConfig(root: string): LoopsConfig {
     landedAdapter: raw.landedAdapter ?? base.landedAdapter,
     githubTokens: raw.githubTokens ?? base.githubTokens,
     projects: raw.projects ?? base.projects,
-    review: raw.review ?? base.review,
+    review: validateReviewConfig(raw.review ?? base.review),
   };
 }

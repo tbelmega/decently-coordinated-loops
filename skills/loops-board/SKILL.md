@@ -60,12 +60,14 @@ can note in `HOUSE-RULES.md` that the tail collapses (e.g. `tested` flows straig
 Recording `merged` is a single move that also sets `next-actor: agent`,
 `autonomy: auto`, and `next-step: "Verify per the project verify gate, then flip to
 tested"` — so a landed item is immediately agent-pickable with nothing owed by the
-owner. `bun run landed --apply` writes exactly these. The `next-actor: owner` waits
-map to `awaiting`:
+owner. `bun run landed --apply` writes exactly these. The post-implementation actor
+depends on the instance merge policy: owner-owned landings wait in `review-merge`,
+while explicitly delegated landings remain agent-owned:
 
 | State | next-actor | awaiting |
 | --- | --- | --- |
 | `implemented` | owner | `review-merge` |
+| `implemented` | agent | — |
 | `merged` | agent | — |
 | `tested` | owner | `deliver` |
 | `delivered` | owner | `accept` |

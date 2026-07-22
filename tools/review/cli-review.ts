@@ -8,9 +8,9 @@
 // .reviews/ carries rounds + per-finding dispositions and fails closed on a dirty tree,
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { loadConfig } from "../config.ts";
 import {
   addReviewRound,
@@ -41,7 +41,7 @@ interface StartOptions {
   item?: string;
   reviewer: Reviewer;
   model?: string;
-  /** Owner-authorized round-cap extension (`--max-rounds`); default cap is 3. */
+  /** Effective round cap from config or an owner-authorized `--max-rounds` override. */
   maxRounds?: number;
 }
 
@@ -61,6 +61,7 @@ function expandHome(path: string, home: string): string {
 function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: string }): {
   reviewer: Reviewer;
   model?: string;
+  maxRounds?: number;
 } {
   const home = process.env.HOME ?? homedir();
   const config = flags.dataRepo ? loadConfig(resolve(expandHome(flags.dataRepo, home))) : undefined;
@@ -73,7 +74,11 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     );
   }
   if (!isReviewerId(id)) throw new Error(`unknown reviewer "${id}" — expected one of ${reviewerIds.join(", ")}`);
-  return { reviewer: getReviewer(id), model: flags.model ?? config?.review.model };
+  return {
+    reviewer: getReviewer(id),
+    model: flags.model ?? config?.review.model,
+    maxRounds: config?.review.maxRounds,
+  };
 }
 
 function parseStartOptions(args: string[]): StartOptions {
@@ -99,8 +104,8 @@ function parseStartOptions(args: string[]): StartOptions {
     index += 1;
   }
   if (!baseRef) throw new Error("start requires --base <ref>");
-  const { reviewer, model } = resolveReviewer(flags);
-  return { baseRef, item: flags.item, reviewer, model, maxRounds };
+  const { reviewer, model, maxRounds: configuredMaxRounds } = resolveReviewer(flags);
+  return { baseRef, item: flags.item, reviewer, model, maxRounds: maxRounds ?? configuredMaxRounds };
 }
 
 function reviewPrompt(baseSha: string, headSha: string, priorNotes: string[]): string {
@@ -127,6 +132,28 @@ async function writeLedger(ledger: ReviewLedger, paths: { jsonPath: string; mark
   mkdirSync(dirname(paths.jsonPath), { recursive: true });
   await writeFileAtomically(paths.jsonPath, `${JSON.stringify(ledger, null, 2)}\n`);
   await writeFileAtomically(paths.markdownPath, renderReviewLedger(ledger));
+}
+
+function archiveReviewEvidence(
+  ledger: ReviewLedger,
+  paths: { jsonPath: string; markdownPath: string },
+): void {
+  const suffix = `${ledger.baseSha.slice(0, 12)}-${Date.now()}`;
+  for (const path of [paths.jsonPath, paths.markdownPath]) {
+    if (!existsSync(path)) continue;
+    renameSync(path, join(dirname(path), `superseded-${suffix}-${basename(path)}`));
+  }
+}
+
+function assertBaseRefreshCanSupersede(ledger: ReviewLedger): void {
+  for (const round of ledger.rounds) {
+    for (const finding of round.findings) {
+      if (!finding.disposition) throw new Error(`${finding.id} has no disposition`);
+      if (finding.disposition.kind === "deferred-to-human") {
+        throw new Error("review base changed while a finding is deferred to the owner");
+      }
+    }
+  }
 }
 
 // Anchor at the repo root: pathspecs are cwd-relative, so an unanchored check run
@@ -157,6 +184,7 @@ async function startReview(options: StartOptions): Promise<void> {
   try {
     const resolvedBaseSha = git(["rev-parse", "--verify", `${options.baseRef}^{commit}`]);
     const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
+    git(["merge-base", "--is-ancestor", resolvedBaseSha, headSha]);
     const paths = reviewEvidencePaths(repository, branch, options.item);
     const modelLabel = options.model ?? `${options.reviewer.id} (default)`;
     let ledger: ReviewLedger;
@@ -165,17 +193,23 @@ async function startReview(options: StartOptions): Promise<void> {
       ledger = readLedger(paths.jsonPath);
       if (ledger.branch !== branch) throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
       if (ledger.item !== options.item) throw new Error("review item does not match the existing ledger");
-      if (ledger.baseRef !== options.baseRef) throw new Error("review base ref does not match the existing ledger");
-      baseSha = ledger.baseSha;
-      const continuation = reviewCanContinue(
-        ledger.rounds.map((round) => ({
-          headSha: round.headSha,
-          findings: round.findings.map((finding) => ({ id: finding.id, disposition: finding.disposition?.kind })),
-        })),
-        options.maxRounds,
-        headSha,
-      );
-      if (!continuation.allowed) throw new Error(continuation.reason || "review cannot continue");
+      if (ledger.baseRef !== options.baseRef || ledger.baseSha !== resolvedBaseSha) {
+        assertBaseRefreshCanSupersede(ledger);
+        archiveReviewEvidence(ledger, paths);
+        baseSha = resolvedBaseSha;
+        ledger = createReviewLedger({ item: options.item, branch, baseRef: options.baseRef, baseSha });
+      } else {
+        baseSha = ledger.baseSha;
+        const continuation = reviewCanContinue(
+          ledger.rounds.map((round) => ({
+            headSha: round.headSha,
+            findings: round.findings.map((finding) => ({ id: finding.id, disposition: finding.disposition?.kind })),
+          })),
+          options.maxRounds,
+          headSha,
+        );
+        if (!continuation.allowed) throw new Error(continuation.reason || "review cannot continue");
+      }
     } catch (error: unknown) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         baseSha = resolvedBaseSha;

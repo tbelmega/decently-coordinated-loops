@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { addReviewRound, createReviewLedger } from "./review-ledger.ts";
+import { addReviewRound, createReviewLedger, recordDisposition } from "./review-ledger.ts";
 import { reviewEvidencePaths } from "./review-status.ts";
 
 const CLI = resolve(import.meta.dirname, "cli-review.ts");
@@ -23,6 +23,61 @@ function createRepository(): { repository: string; headSha: string } {
   git(repository, ["add", "change.txt"]);
   git(repository, ["commit", "-q", "-m", "Add change"]);
   return { repository, headSha: git(repository, ["rev-parse", "HEAD"]) };
+}
+
+function createReviewRepository(): { repository: string; baseSha: string; headSha: string } {
+  const repository = mkdtempSync(`${tmpdir()}/loops-review-start-`);
+  git(repository, ["init", "-q", "-b", "master"]);
+  git(repository, ["config", "user.email", "test@example.com"]);
+  git(repository, ["config", "user.name", "Test"]);
+  writeFileSync(`${repository}/base.txt`, "base\n");
+  git(repository, ["add", "base.txt"]);
+  git(repository, ["commit", "-q", "-m", "Add base"]);
+  const baseSha = git(repository, ["rev-parse", "HEAD"]);
+  git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+  writeFileSync(`${repository}/change.txt`, "review me\n");
+  git(repository, ["add", "change.txt"]);
+  git(repository, ["commit", "-q", "-m", "Add change"]);
+  return { repository, baseSha, headSha: git(repository, ["rev-parse", "HEAD"]) };
+}
+
+function createReviewDataRepo(maxRounds: number): string {
+  const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+  writeFileSync(
+    `${dataRepo}/loops.json`,
+    `${JSON.stringify({ review: { reviewer: "codex", maxRounds } })}\n`,
+  );
+  return dataRepo;
+}
+
+function createFakeCodex(): string {
+  const directory = mkdtempSync(`${tmpdir()}/loops-fake-codex-`);
+  const executable = `${directory}/codex`;
+  writeFileSync(
+    executable,
+    [
+      "#!/usr/bin/env bun",
+      "const args = Bun.argv.slice(2);",
+      'const outputIndex = args.indexOf("--output-last-message");',
+      'if (outputIndex < 0 || !args[outputIndex + 1]) throw new Error("missing output path");',
+      'await Bun.write(args[outputIndex + 1], JSON.stringify({ summary: "clean", findings: [] }));',
+      "",
+    ].join("\n"),
+  );
+  chmodSync(executable, 0o755);
+  return executable;
+}
+
+function runStart(repository: string, dataRepo: string, item: string, baseRef = "master") {
+  return spawnSync(
+    "bun",
+    ["run", CLI, "start", "--item", item, "--base", baseRef, "--data-repo", dataRepo],
+    {
+      cwd: repository,
+      encoding: "utf8",
+      env: { ...process.env, CODEX_BIN: createFakeCodex() },
+    },
+  );
 }
 
 function runStatus(repository: string, item?: string, cwd = repository) {
@@ -182,5 +237,68 @@ describe("cli-review status", () => {
     expect(result.stdout.trim()).toBe(
       `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="working tree has uncommitted changes outside .reviews"`,
     );
+  });
+});
+
+describe("cli-review start", () => {
+  test("uses the configured five-round cap", () => {
+    const { repository, baseSha, headSha } = createReviewRepository();
+    const item = "five-round-review";
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), { recursive: true });
+    let ledger = createReviewLedger({ item, branch: "feature/review-receipt", baseRef: "master", baseSha });
+    for (let roundNumber = 1; roundNumber <= 4; roundNumber += 1) {
+      ledger = addReviewRound(ledger, {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: `2026-07-21T12:00:0${roundNumber}Z`,
+        review: {
+          summary: "non-actionable suggestion",
+          findings: [{
+            priority: "P2",
+            title: "Suggestion",
+            evidence: "Not a defect",
+            impact: "None",
+            direction: "Keep the implementation",
+            confidence: "high",
+          }],
+        },
+      });
+      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not an actionable defect");
+    }
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+
+    const result = runStart(repository, createReviewDataRepo(5), item);
+
+    expect(result.status).toBe(0);
+    const updated = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(updated.rounds).toHaveLength(5);
+    expect(updated.rounds[4].findings).toEqual([]);
+  });
+
+  test("starts fresh evidence after the reviewed base changes", () => {
+    const { repository, baseSha } = createReviewRepository();
+    const item = "refreshed-base";
+    const dataRepo = createReviewDataRepo(5);
+    const first = runStart(repository, dataRepo, item, baseSha);
+    expect(first.status).toBe(0);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    const newBaseSha = git(repository, ["rev-parse", "HEAD"]);
+    expect(newBaseSha).not.toBe(baseSha);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+
+    const second = runStart(repository, dataRepo, item);
+
+    expect(second.status).toBe(0);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const refreshed = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(refreshed.baseSha).toBe(newBaseSha);
+    expect(refreshed.rounds).toHaveLength(1);
+    expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
   });
 });

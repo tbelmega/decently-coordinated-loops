@@ -20,12 +20,14 @@ without waiting for the owner to invoke this skill.
 `loops.json → review` in the data repo selects the adapter:
 
 ```json
-"review": { "reviewer": "claude", "model": "<optional model id>" }
+"review": { "reviewer": "claude", "model": "<optional model id>", "maxRounds": 5 }
 ```
 
 `reviewer` is `codex`, `claude`, or `cursor`; `model` is optional (omit to use the
-reviewer CLI's own default). `bun run setup` offers to set this by detecting which
-reviewer CLIs are installed — so a fresh instance is prompted rather than missing it.
+reviewer CLI's own default). `maxRounds` is an optional positive integer; omit it to
+use DCL's public default of 3. `bun run setup` offers to set the reviewer by detecting
+which reviewer CLIs are installed — so a fresh instance is prompted rather than
+missing it.
 The reviewer CLI must be installed and the repo must be trusted git.
 
 ## The loop
@@ -34,13 +36,15 @@ Run from the **target repo** (not the data repo), on the branch under review:
 
 ```bash
 bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
-  --base <item-base-sha> --data-repo <data-repo>
+  --base <integration-ref-or-stack-parent-sha> --data-repo <data-repo>
 ```
 
 1. **Prep.** Run the target project's own typecheck + tests, commit the change, and
    ensure a clean working tree — the command fails closed on a dirty tree.
-2. **Start a round.** Use the exact commit at which this item began as `--base`. For a
-   stacked item this is its parent item's handoff HEAD. The command reviews
+2. **Start a round.** After the pre-review sync/rebase required by loops-pickup, use
+   the refreshed integration ref as `--base`. For a stacked item whose parent has not
+   landed, use its parent item's exact handoff HEAD. The command resolves and records
+   the exact base SHA, then reviews
    `<item-base-sha>..HEAD` read-only and writes an item-scoped ledger under `.reviews/`.
    A persistent branch can therefore carry later items without reusing an earlier
    item's terminal ledger. `--reviewer` / `--model` override the config for one run.
@@ -60,12 +64,20 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    the reviewer doesn't blindly re-raise what was already rejected or deferred.
 6. **Stop with `PASSED`** only on a clean round covering the current HEAD. Rejected
    findings get one clean confirmation round. A deferred-to-human finding, reviewer
-   failure, stale review, or the three-round cap is `BLOCKED`; escalate it to the owner
-   rather than claiming completion. When the owner later decides a deferred finding,
-   record that decision as a new disposition (reason citing the owner) — only
-   `deferred-to-human` may be superseded — then continue the round loop. When the
-   owner authorizes rounds beyond the cap, pass `--max-rounds <n>` to `start` and log
-   the authorization on the item; never extend the cap on your own judgment.
+   failure, stale review, or configured round cap is `BLOCKED`; escalate it to the
+   owner rather than claiming completion. When the owner later decides a deferred
+   finding, record that decision as a new disposition (reason citing the owner) —
+   only `deferred-to-human` may be superseded — then continue the round loop. When
+   the owner authorizes rounds beyond the configured cap, pass `--max-rounds <n>` to
+   `start` and log the authorization on the item; never extend the cap on your own
+   judgment.
+
+**Changed review base.** If the integration branch moves after review and the item is
+rebased onto its new head, the old review cannot certify the rebased commits. Rerun
+the full quality gate and start review again with the same symbolic `--base`. Once
+all earlier findings are dispositioned and none is deferred, the CLI archives the
+old evidence and starts a fresh ledger at the newly resolved base. It refuses review
+when that base is not an ancestor of the current `HEAD`.
 
 ## Completion status
 
@@ -87,8 +99,9 @@ the claim without reading the implementation transcript.
 
 - The reviewer runs **read-only** — it never edits, commits, pushes, fetches, or uses
   the network (enforced by the adapter's sandbox/plan mode). You implement the fixes.
-- A clean current-HEAD review is **evidence for the owner, not approval to merge.** Landing stays
-  the owner's step per `HOUSE-RULES.md → Merge policy`.
+- A clean current-HEAD review is landing evidence, not landing authority. Resolve
+  authority and the exact fast-forward conditions from `HOUSE-RULES.md → Merge
+  policy`.
 - Record the reviewed range as `links.base-sha` and `links.head-sha` on the item. A
   stacked item also records `links.stack-parent`; these fields make the review and
   later landing check independent of subsequent branch movement.
