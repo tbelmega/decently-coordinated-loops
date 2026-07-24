@@ -3,6 +3,15 @@
 // render is the human surface. Model-agnostic — a reviewer adapter (reviewers.ts)
 // produces a Review; everything here is pure.
 
+import type {ReviewAuditPass} from "../config.ts";
+import type {
+  FindingOrigin,
+  ReviewCoverage,
+  ReviewMetrics,
+  ReviewObligationResult,
+} from "./review-audit.ts";
+import type {ReviewManifest} from "./review-manifest.ts";
+
 export const priorities = ["P0", "P1", "P2", "P3"] as const;
 export const confidenceLevels = ["high", "medium", "low"] as const;
 export const dispositionKinds = ["accepted", "rejected", "already-addressed", "deferred-to-human"] as const;
@@ -20,6 +29,12 @@ export interface Finding {
   impact: string;
   direction: string;
   confidence: Confidence;
+  origin?: FindingOrigin;
+  passes?: ReviewAuditPass[];
+  identity?: string;
+  firstSeenRound?: number;
+  obligationId?: string;
+  repeatedFrom?: string[];
 }
 
 export interface Review {
@@ -54,6 +69,15 @@ export interface ReviewRound {
   reviewedAt: string;
   summary: string;
   findings: LedgerFinding[];
+  audit?: ReviewRoundAudit;
+}
+
+export interface ReviewRoundAudit {
+  kind: "full" | "remediation" | "base-delta";
+  manifest: ReviewManifest;
+  passes: {pass: ReviewAuditPass; summary: string; coverage: ReviewCoverage}[];
+  obligations: ReviewObligationResult[];
+  metrics: ReviewMetrics;
 }
 
 export interface ReviewLedger {
@@ -62,6 +86,7 @@ export interface ReviewLedger {
   branch: string;
   baseRef: string;
   baseSha: string;
+  patchIds?: string[];
   rounds: ReviewRound[];
   failures?: ReviewFailure[];
 }
@@ -78,6 +103,7 @@ export interface CreateLedgerInput {
   branch: string;
   baseRef: string;
   baseSha: string;
+  patchIds?: string[];
 }
 
 export interface AddRoundInput {
@@ -85,6 +111,15 @@ export interface AddRoundInput {
   model: string;
   reviewedAt: string;
   review: Review;
+  audit?: ReviewRoundAudit;
+}
+
+export interface AcceptedFindingObligation {
+  findingId: string;
+  title: string;
+  evidence: string;
+  direction: string;
+  dispositionReason: string;
 }
 
 export function isDispositionKind(value: unknown): value is DispositionKind {
@@ -128,6 +163,20 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       return {
         ...finding,
         id: requiredString(findingInput, "id", `${path}.findings[${findingIndex}]`),
+        ...(isFindingOrigin(findingInput.origin) ? {origin: findingInput.origin} : {}),
+        ...(isReviewAuditPassArray(findingInput.passes) ? {passes: findingInput.passes} : {}),
+        ...(optionalString(findingInput, "identity", `${path}.findings[${findingIndex}]`)
+          ? {identity: String(findingInput.identity)}
+          : {}),
+        ...(typeof findingInput.firstSeenRound === "number" &&
+        Number.isInteger(findingInput.firstSeenRound) &&
+        findingInput.firstSeenRound > 0
+          ? {firstSeenRound: findingInput.firstSeenRound}
+          : {}),
+        ...(optionalString(findingInput, "obligationId", `${path}.findings[${findingIndex}]`)
+          ? {obligationId: String(findingInput.obligationId)}
+          : {}),
+        ...(isStringArray(findingInput.repeatedFrom) ? {repeatedFrom: findingInput.repeatedFrom} : {}),
         ...(disposition ? { disposition } : {}),
       };
     });
@@ -142,6 +191,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       reviewedAt: requiredString(roundInput, "reviewedAt", path),
       summary: parsedReview.summary,
       findings,
+      ...(isReviewRoundAudit(roundInput.audit) ? {audit: roundInput.audit} : {}),
     };
   });
   if (input.failures !== undefined && !Array.isArray(input.failures)) {
@@ -165,6 +215,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
     branch: requiredString(input, "branch", "review ledger"),
     baseRef: requiredString(input, "baseRef", "review ledger"),
     baseSha: requiredString(input, "baseSha", "review ledger"),
+    ...(isStringArray(input.patchIds) ? {patchIds: input.patchIds} : {}),
     rounds,
     ...(failures ? { failures } : {}),
   };
@@ -190,9 +241,33 @@ export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): Revi
           ...finding,
           id: `R${number}-F${index + 1}`,
         })),
+        ...(input.audit ? {audit: input.audit} : {}),
       },
     ],
   };
+}
+
+export function acceptedFindingObligations(_ledger: ReviewLedger): AcceptedFindingObligation[] {
+  const fixedFindingIds = new Set(
+    _ledger.rounds.flatMap((round) =>
+      round.audit?.obligations
+        .filter((obligation) => obligation.status === "fixed")
+        .map((obligation) => obligation.findingId) ?? [],
+    ),
+  );
+  return _ledger.rounds.flatMap((round) =>
+    round.findings.flatMap((finding) =>
+      finding.disposition?.kind === "accepted" && !fixedFindingIds.has(finding.id)
+        ? [{
+            findingId: finding.id,
+            title: finding.title,
+            evidence: finding.evidence,
+            direction: finding.direction,
+            dispositionReason: finding.disposition.reason,
+          }]
+        : [],
+    ),
+  );
 }
 
 export function recordDisposition(
@@ -274,11 +349,43 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         "",
         `- Location: ${location}`,
         `- Confidence: ${finding.confidence}`,
+        ...(finding.origin ? [`- Origin: ${finding.origin}`] : []),
+        ...(finding.passes?.length ? [`- Passes: ${finding.passes.join(", ")}`] : []),
+        ...(finding.repeatedFrom?.length ? [`- Repeated from: ${finding.repeatedFrom.join(", ")}`] : []),
+        ...(finding.firstSeenRound ? [`- First seen round: ${finding.firstSeenRound}`] : []),
+        ...(finding.obligationId ? [`- Remediation obligation: ${finding.obligationId}`] : []),
         `- Evidence: ${finding.evidence}`,
         `- Impact: ${finding.impact}`,
         `- Direction: ${finding.direction}`,
         `- Disposition: ${finding.disposition ? `**${finding.disposition.kind}** — ${finding.disposition.reason}` : "pending"}`,
       );
+    }
+    if (round.audit) {
+      const metrics = round.audit.metrics;
+      lines.push(
+        "",
+        "### Audit evidence",
+        "",
+        `- Kind: ${round.audit.kind}`,
+        `- Passes: ${round.audit.passes.map((pass) => pass.pass).join(", ")}`,
+        `- Coverage: complete for ${round.audit.manifest.files.length} reviewable files, ${round.audit.manifest.files.reduce((count, file) => count + file.hunks.length, 0)} hunks, and ${round.audit.manifest.instructionFiles.length} instruction files`,
+        `- Remediation focus: ${round.audit.manifest.remediationFiles?.length ?? 0} files`,
+        `- Base-delta focus: ${round.audit.manifest.baseDeltaFiles?.length ?? 0} files`,
+        `- Findings by pass: diff=${metrics.findingsByPass.diff}, integration=${metrics.findingsByPass.integration}, adversarial=${metrics.findingsByPass.adversarial}`,
+        `- Findings by priority: P0=${metrics.findingsByPriority.P0}, P1=${metrics.findingsByPriority.P1}, P2=${metrics.findingsByPriority.P2}, P3=${metrics.findingsByPriority.P3}`,
+        `- Findings by origin: original=${metrics.findingsByOrigin.original}, remediation=${metrics.findingsByOrigin.remediation}, base-delta=${metrics.findingsByOrigin["base-delta"]}, unknown=${metrics.findingsByOrigin.unknown}`,
+        `- Repeated findings: ${metrics.repeatedFindings}`,
+        `- Late P0/P1 findings: ${metrics.lateHighPriorityFindings}`,
+        `- Unchanged-HEAD drift: ${metrics.unchangedHeadDrift ? "yes" : "no"}`,
+        ...(metrics.declineRatio === undefined ? [] : [`- Decline ratio: ${metrics.declineRatio}`]),
+      );
+      if (round.audit.obligations.length === 0) {
+        lines.push("- Remediation obligations: none");
+      } else {
+        for (const obligation of round.audit.obligations) {
+          lines.push(`- Remediation obligation ${obligation.findingId}: ${obligation.status} — ${obligation.evidence}`);
+        }
+      }
     }
   }
   return `${lines.join("\n")}\n`;
@@ -286,6 +393,106 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+function isStringArray(input: unknown): input is string[] {
+  return Array.isArray(input) && input.every((value) => typeof value === "string");
+}
+
+function isReviewAuditPassArray(input: unknown): input is ReviewAuditPass[] {
+  return Array.isArray(input) && input.every((value) =>
+    value === "diff" || value === "integration" || value === "adversarial"
+  );
+}
+
+function isFindingOrigin(input: unknown): input is FindingOrigin {
+  return input === "original" || input === "remediation" || input === "base-delta" || input === "unknown";
+}
+
+function isReviewFileCoverage(input: unknown): input is {path: string; hunks: string[]} {
+  return isRecord(input) && typeof input.path === "string" && isStringArray(input.hunks);
+}
+
+function isReviewCoverage(input: unknown): input is ReviewCoverage {
+  return (
+    isRecord(input) &&
+    Array.isArray(input.files) &&
+    input.files.every(isReviewFileCoverage) &&
+    isStringArray(input.instructionFiles) &&
+    isStringArray(input.callsites)
+  );
+}
+
+function isReviewManifest(input: unknown): input is ReviewManifest {
+  return (
+    isRecord(input) &&
+    typeof input.baseSha === "string" &&
+    typeof input.headSha === "string" &&
+    Array.isArray(input.files) &&
+    input.files.every(isReviewFileCoverage) &&
+    Array.isArray(input.metadataFiles) &&
+    input.metadataFiles.every(isReviewFileCoverage) &&
+    (input.metadataPaths === undefined || isStringArray(input.metadataPaths)) &&
+    (input.remediationFiles === undefined ||
+      (Array.isArray(input.remediationFiles) && input.remediationFiles.every(isReviewFileCoverage))) &&
+    (input.baseDeltaFiles === undefined ||
+      (Array.isArray(input.baseDeltaFiles) && input.baseDeltaFiles.every(isReviewFileCoverage))) &&
+    isStringArray(input.instructionFiles) &&
+    Array.isArray(input.contextReferences) &&
+    input.contextReferences.every(
+      (reference) =>
+        isRecord(reference) &&
+        typeof reference.label === "string" &&
+        typeof reference.path === "string" &&
+        typeof reference.digest === "string",
+    ) &&
+    isStringArray(input.patchIds)
+  );
+}
+
+function isReviewObligationResult(input: unknown): input is ReviewObligationResult {
+  return (
+    isRecord(input) &&
+    typeof input.findingId === "string" &&
+    (input.status === "fixed" || input.status === "incomplete" || input.status === "regressed") &&
+    typeof input.evidence === "string"
+  );
+}
+
+function isNumericRecord(input: unknown, keys: string[]): boolean {
+  return isRecord(input) && keys.every((key) => typeof input[key] === "number");
+}
+
+function isReviewMetrics(input: unknown): input is ReviewMetrics {
+  return (
+    isRecord(input) &&
+    isNumericRecord(input.findingsByPass, ["diff", "integration", "adversarial"]) &&
+    isNumericRecord(input.findingsByPriority, ["P0", "P1", "P2", "P3"]) &&
+    isNumericRecord(input.findingsByOrigin, ["original", "remediation", "base-delta", "unknown"]) &&
+    typeof input.repeatedFindings === "number" &&
+    typeof input.lateHighPriorityFindings === "number" &&
+    typeof input.unchangedHeadDrift === "boolean" &&
+    (input.declineRatio === undefined || typeof input.declineRatio === "number")
+  );
+}
+
+function isReviewRoundAudit(input: unknown): input is ReviewRoundAudit {
+  return (
+    isRecord(input) &&
+    (input.kind === "full" || input.kind === "remediation" || input.kind === "base-delta") &&
+    isReviewManifest(input.manifest) &&
+    Array.isArray(input.passes) &&
+    input.passes.every(
+      (pass) =>
+        isRecord(pass) &&
+        (pass.pass === "diff" || pass.pass === "integration" || pass.pass === "adversarial") &&
+        typeof pass.summary === "string" &&
+        isReviewCoverage(pass.coverage),
+    ) &&
+    Array.isArray(input.obligations) &&
+    input.obligations.every(isReviewObligationResult) &&
+    isReviewMetrics(input.metrics)
+  );
 }
 
 function requiredString(record: Record<string, unknown>, key: string, path: string): string {
@@ -340,6 +547,10 @@ export function parseReview(input: unknown): Review {
   };
 }
 
+// `rounds` is a single item+patch-series ledger (a changed patch series starts fresh;
+// a patch-equivalent rebase retains it), so `limit` bounds one unit of work — not a branch's lifetime. It
+// breaks the accept-fix-reintroduce loop where each round's fix spawns the next round's
+// finding; it is not a budget across the several units a long-lived branch may carry.
 export function reviewCanContinue(
   rounds: RoundState[],
   limit = 3,

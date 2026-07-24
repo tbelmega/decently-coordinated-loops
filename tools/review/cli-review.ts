@@ -8,14 +8,16 @@
 // .reviews/ carries rounds + per-finding dispositions and fails closed on a dirty tree,
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { loadConfig } from "../config.ts";
+import { loadConfig, reviewAuditPasses, type ReviewAuditPass } from "../config.ts";
+import { parseItemFileText } from "../parse.ts";
 import {
+  acceptedFindingObligations,
   addReviewRound,
   createReviewLedger,
-  parseReview,
   parseReviewLedger,
   priorDispositionNotes,
   recordDisposition,
@@ -25,11 +27,26 @@ import {
   isDispositionKind,
   type DispositionKind,
   type ReviewLedger,
+  type ReviewRoundAudit,
 } from "./review-ledger.ts";
+import {
+  auditFindingIdentity,
+  combineReviewPasses,
+  computeReviewMetrics,
+  parseReviewPass,
+  type PriorFindingIdentity,
+  type ReviewPassResult,
+} from "./review-audit.ts";
+import {
+  buildReviewManifest,
+  matchesMetadataPath,
+  type ReviewContextReference,
+  type ReviewManifest,
+} from "./review-manifest.ts";
 import { acquireReviewLock } from "./review-lock.ts";
 import { writeFileAtomically } from "./atomic-write.ts";
 import { getReviewer, isReviewerId, reviewerIds, type Reviewer } from "./reviewers.ts";
-import { reviewPrompt } from "./review-prompt.ts";
+import { reviewPrompt, type ReviewContextDocument } from "./review-prompt.ts";
 import {
   evaluateReviewStatus,
   renderReviewStatus,
@@ -46,6 +63,9 @@ interface StartOptions {
   effort?: string;
   /** Effective round cap from config or an owner-authorized `--max-rounds` override. */
   maxRounds?: number;
+  auditPasses: ReviewAuditPass[];
+  metadataPaths: string[];
+  dataRepo?: string;
 }
 
 function git(args: string[]): string {
@@ -66,9 +86,13 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   model?: string;
   effort?: string;
   maxRounds?: number;
+  auditPasses: ReviewAuditPass[];
+  metadataPaths: string[];
+  dataRepo?: string;
 } {
   const home = process.env.HOME ?? homedir();
-  const config = flags.dataRepo ? loadConfig(resolve(expandHome(flags.dataRepo, home))) : undefined;
+  const dataRepo = flags.dataRepo ? resolve(expandHome(flags.dataRepo, home)) : undefined;
+  const config = dataRepo ? loadConfig(dataRepo) : undefined;
   const id = flags.reviewer ?? config?.review.reviewer;
   if (!id) {
     throw new Error(
@@ -83,6 +107,9 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     model: flags.model ?? config?.review.model,
     effort: flags.effort ?? config?.review.effort,
     maxRounds: config?.review.maxRounds,
+    auditPasses: config?.review.auditPasses ?? [...reviewAuditPasses],
+    metadataPaths: config?.review.metadataPaths ?? [],
+    dataRepo,
   };
 }
 
@@ -110,8 +137,18 @@ function parseStartOptions(args: string[]): StartOptions {
     index += 1;
   }
   if (!baseRef) throw new Error("start requires --base <ref>");
-  const { reviewer, model, effort, maxRounds: configuredMaxRounds } = resolveReviewer(flags);
-  return { baseRef, item: flags.item, reviewer, model, effort, maxRounds: maxRounds ?? configuredMaxRounds };
+  const configured = resolveReviewer(flags);
+  return {
+    baseRef,
+    item: flags.item,
+    reviewer: configured.reviewer,
+    model: configured.model,
+    effort: configured.effort,
+    maxRounds: maxRounds ?? configured.maxRounds,
+    auditPasses: configured.auditPasses,
+    metadataPaths: configured.metadataPaths,
+    dataRepo: configured.dataRepo,
+  };
 }
 
 function readLedger(path: string): ReviewLedger {
@@ -170,6 +207,150 @@ function dirtyOutsideReviewEvidence(repository: string): string {
   ]);
 }
 
+function gitPatchIds(repository: string, baseSha: string, headSha: string): string[] {
+  const commits = git(["-C", repository, "rev-list", "--reverse", `${baseSha}..${headSha}`])
+    .split("\n")
+    .filter(Boolean);
+  const patchIds: string[] = [];
+  for (const commit of commits) {
+    const patch = spawnSync("git", ["-C", repository, "show", "--pretty=format:", "--patch", commit], {
+      encoding: "utf8",
+    });
+    if (patch.status !== 0) throw new Error(patch.stderr?.toString().trim() || `git show ${commit} failed`);
+    const identity = spawnSync("git", ["patch-id", "--stable"], {encoding: "utf8", input: patch.stdout});
+    if (identity.status !== 0) throw new Error(identity.stderr?.toString().trim() || "git patch-id failed");
+    const patchId = identity.stdout.trim().split(/\s+/)[0];
+    if (patchId) patchIds.push(patchId);
+  }
+  return patchIds.sort();
+}
+
+function discoverInstructionFiles(repository: string): string[] {
+  return git(["-C", repository, "ls-files"])
+    .split("\n")
+    .filter((path) =>
+      path === "AGENTS.md" ||
+      path.endsWith("/AGENTS.md") ||
+      path === "CLAUDE.md" ||
+      path.endsWith("/CLAUDE.md") ||
+      path.startsWith(".cursor/rules/") && path.endsWith(".mdc"),
+    )
+    .sort();
+}
+
+function contextDigest(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function loadReviewContext(
+  repository: string,
+  dataRepo: string | undefined,
+  item: string | undefined,
+): {documents: ReviewContextDocument[]; references: ReviewContextReference[]} {
+  if (!dataRepo || !item) return {documents: [], references: []};
+  const itemPath = ["items", "for-delivery", "archive"]
+    .map((directory) => join(dataRepo, directory, `${item}.md`))
+    .find(existsSync);
+  if (!itemPath) throw new Error(`tracked review item ${item} was not found in the data repo`);
+  const itemContent = readFileSync(itemPath, "utf8");
+  const documents: ReviewContextDocument[] = [{label: "item", path: itemPath, content: itemContent}];
+  const parsedItem = parseItemFileText(relative(dataRepo, itemPath), itemContent);
+  const specLink = parsedItem.links.spec;
+  if (specLink) {
+    const specPath = [resolve(dataRepo, specLink), resolve(repository, specLink)].find(existsSync);
+    if (!specPath) throw new Error(`linked review spec ${specLink} was not found`);
+    documents.push({label: "spec", path: specPath, content: readFileSync(specPath, "utf8")});
+  }
+  return {
+    documents,
+    references: documents.map((document) => {
+      const dataRepoPath = relative(dataRepo, document.path);
+      const repositoryPath = relative(repository, document.path);
+      const portablePath = !dataRepoPath.startsWith("..")
+        ? dataRepoPath
+        : !repositoryPath.startsWith("..")
+          ? repositoryPath
+          : basename(document.path);
+      return {
+        label: document.label,
+        path: portablePath,
+        digest: contextDigest(document.content),
+      };
+    }),
+  };
+}
+
+function createManifest(
+  repository: string,
+  baseSha: string,
+  headSha: string,
+  metadataPaths: string[],
+  contextReferences: ReviewContextReference[],
+  patchIds: string[],
+  baseDeltaRange?: {baseSha: string; headSha: string},
+  remediationRange?: {baseSha: string; headSha: string},
+): ReviewManifest {
+  const primaryDiff = git([
+    "-C",
+    repository,
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--unified=0",
+    `${baseSha}..${headSha}`,
+    "--",
+  ]);
+  const baseDeltaDiff = baseDeltaRange
+    ? git([
+        "-C",
+        repository,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--unified=0",
+        `${baseDeltaRange.baseSha}..${baseDeltaRange.headSha}`,
+        "--",
+      ])
+    : "";
+  const remediationDiff = remediationRange
+    ? git([
+        "-C",
+        repository,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--unified=0",
+        `${remediationRange.baseSha}..${remediationRange.headSha}`,
+        "--",
+      ])
+    : "";
+  return buildReviewManifest({
+    baseSha,
+    headSha,
+    diffText: [primaryDiff, baseDeltaDiff].filter(Boolean).join("\n"),
+    remediationDiffText: remediationDiff,
+    baseDeltaDiffText: baseDeltaDiff,
+    metadataPaths,
+    instructionFiles: discoverInstructionFiles(repository),
+    contextReferences,
+    patchIds,
+  });
+}
+
+function patchSeriesEqual(left: string[] | undefined, right: string[]): boolean {
+  return Boolean(left) && JSON.stringify(left) === JSON.stringify(right);
+}
+
+function priorFindingIdentities(ledger: ReviewLedger): PriorFindingIdentity[] {
+  return ledger.rounds.flatMap((round) =>
+    round.findings.map((finding) => ({
+      id: finding.id,
+      identity: auditFindingIdentity(finding),
+      firstSeenRound: round.number,
+    })),
+  );
+}
+
 async function startReview(options: StartOptions): Promise<void> {
   const branch = git(["branch", "--show-current"]);
   if (!branch) throw new Error("review requires a named branch");
@@ -184,17 +365,37 @@ async function startReview(options: StartOptions): Promise<void> {
     git(["merge-base", "--is-ancestor", resolvedBaseSha, headSha]);
     const paths = reviewEvidencePaths(repository, branch, options.item);
     const modelLabel = options.model ?? `${options.reviewer.id} (default)`;
+    const context = loadReviewContext(repository, options.dataRepo, options.item);
+    const currentPatchIds = gitPatchIds(repository, resolvedBaseSha, headSha);
     let ledger: ReviewLedger;
     let baseSha: string;
+    let auditKind: ReviewRoundAudit["kind"] = "full";
+    let baseDeltaRange: {baseSha: string; headSha: string} | undefined;
     try {
       ledger = readLedger(paths.jsonPath);
       if (ledger.branch !== branch) throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
       if (ledger.item !== options.item) throw new Error("review item does not match the existing ledger");
       if (ledger.baseSha !== resolvedBaseSha) {
         assertBaseRefreshCanSupersede(ledger, headSha);
-        archiveReviewEvidence(ledger, paths);
-        baseSha = resolvedBaseSha;
-        ledger = createReviewLedger({ item: options.item, branch, baseRef: options.baseRef, baseSha });
+        if (patchSeriesEqual(ledger.patchIds, currentPatchIds)) {
+          if (ledger.rounds.length >= (options.maxRounds ?? 3)) {
+            throw new Error(`review round limit of ${options.maxRounds ?? 3} reached`);
+          }
+          baseDeltaRange = {baseSha: ledger.baseSha, headSha: resolvedBaseSha};
+          baseSha = resolvedBaseSha;
+          ledger = {...ledger, baseRef: options.baseRef, baseSha, patchIds: currentPatchIds};
+          auditKind = "base-delta";
+        } else {
+          archiveReviewEvidence(ledger, paths);
+          baseSha = resolvedBaseSha;
+          ledger = createReviewLedger({
+            item: options.item,
+            branch,
+            baseRef: options.baseRef,
+            baseSha,
+            patchIds: currentPatchIds,
+          });
+        }
       } else {
         baseSha = ledger.baseSha;
         const continuation = reviewCanContinue(
@@ -206,31 +407,117 @@ async function startReview(options: StartOptions): Promise<void> {
           headSha,
         );
         if (!continuation.allowed) throw new Error(continuation.reason || "review cannot continue");
+        ledger = {...ledger, baseRef: options.baseRef, patchIds: currentPatchIds};
       }
     } catch (error: unknown) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         baseSha = resolvedBaseSha;
-        ledger = createReviewLedger({ item: options.item, branch, baseRef: options.baseRef, baseSha });
+        ledger = createReviewLedger({
+          item: options.item,
+          branch,
+          baseRef: options.baseRef,
+          baseSha,
+          patchIds: currentPatchIds,
+        });
       } else {
         throw error;
       }
     }
 
     try {
-      const raw = options.reviewer.invoke({
-        prompt: reviewPrompt(baseSha, headSha, priorDispositionNotes(ledger)),
-        model: options.model,
-        effort: options.effort,
-        cwd: repository,
+      const obligations = acceptedFindingObligations(ledger);
+      if (auditKind === "full" && obligations.length > 0) auditKind = "remediation";
+      const previousHeadSha = ledger.rounds.at(-1)?.headSha;
+      const remediationRange = obligations.length > 0 && previousHeadSha && previousHeadSha !== headSha
+        ? {baseSha: previousHeadSha, headSha}
+        : undefined;
+      const manifest = createManifest(
+        repository,
+        baseSha,
+        headSha,
+        options.metadataPaths,
+        context.references,
+        currentPatchIds,
+        baseDeltaRange,
+        remediationRange,
+      );
+      const passes = auditKind === "base-delta" && obligations.length === 0
+        ? options.auditPasses.filter((pass) => pass !== "diff")
+        : options.auditPasses;
+      if (passes.length === 0) throw new Error("base-delta audit requires integration or adversarial pass");
+      const obligationPass = passes.includes("diff") ? "diff" : passes[0];
+      const passResults: ReviewPassResult[] = [];
+      for (const pass of passes) {
+        const raw = options.reviewer.invoke({
+          prompt: reviewPrompt({
+            pass,
+            manifest,
+            contextDocuments: context.documents,
+            priorNotes: priorDispositionNotes(ledger),
+            obligations,
+            classifyObligations: pass === obligationPass,
+            ...(remediationRange
+              ? {remediationBaseSha: remediationRange.baseSha}
+              : {}),
+            ...(baseDeltaRange ? {baseDeltaRange} : {}),
+          }),
+          model: options.model,
+          effort: options.effort,
+          cwd: repository,
+        });
+        const headAfterPass = git(["-C", repository, "rev-parse", "--verify", "HEAD^{commit}"]);
+        if (headAfterPass !== headSha) throw new Error("HEAD changed during review; result is invalid");
+        passResults.push(parseReviewPass(
+          raw,
+          pass,
+          manifest,
+          pass === obligationPass ? obligations.map((obligation) => obligation.findingId) : [],
+        ));
+      }
+      const combined = combineReviewPasses(
+        passResults,
+        priorFindingIdentities(ledger),
+        ledger.rounds.length + 1,
+      );
+      for (const obligation of combined.obligations.filter((result) => result.status !== "fixed")) {
+        if (!combined.findings.some((finding) => finding.obligationId === obligation.findingId)) {
+          throw new Error(
+            `incomplete or regressed remediation obligation ${obligation.findingId} must remain an actionable finding`,
+          );
+        }
+      }
+      const previousRound = ledger.rounds.at(-1);
+      const metrics = computeReviewMetrics({
+        roundNumber: ledger.rounds.length + 1,
+        headSha,
+        ...(previousRound
+          ? {
+              previousRound: {
+                headSha: previousRound.headSha,
+                findingCount: previousRound.findings.length,
+                identities: previousRound.findings.map(auditFindingIdentity),
+              },
+            }
+          : {}),
+        passResults,
+        findings: combined.findings,
       });
-      const headAfterReview = git(["rev-parse", "--verify", "HEAD^{commit}"]);
-      if (headAfterReview !== headSha) throw new Error("HEAD changed during review; result is invalid");
-      const review = parseReview(raw);
       ledger = addReviewRound(ledger, {
         headSha,
         model: modelLabel,
         reviewedAt: new Date().toISOString(),
-        review,
+        review: {summary: combined.summary, findings: combined.findings},
+        audit: {
+          kind: auditKind,
+          manifest,
+          passes: passResults.map((result) => ({
+            pass: result.pass,
+            summary: result.summary,
+            coverage: result.coverage,
+          })),
+          obligations: combined.obligations,
+          metrics,
+        },
       });
       await writeLedger(ledger, paths);
       process.stdout.write(`Review round ${ledger.rounds.length} written to ${paths.markdownPath}\n`);
@@ -323,7 +610,34 @@ function currentReviewStatus(item?: string): ReviewStatus {
     if (ledger.branch !== branch) {
       throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
     }
-    return { ...evaluateReviewStatus(ledger, headSha, ledgerPath), ...(item ? { item } : {}) };
+    const status = evaluateReviewStatus(ledger, headSha, ledgerPath);
+    const latestRound = ledger.rounds.at(-1);
+    if (
+      status.kind === "blocked" &&
+      status.reason.startsWith("latest review covers ") &&
+      latestRound?.headSha !== headSha &&
+      latestRound?.audit?.manifest.metadataPaths?.length
+    ) {
+      const reviewedStatus = evaluateReviewStatus(ledger, latestRound.headSha, ledgerPath);
+      const ancestor = spawnSync(
+        "git",
+        ["-C", repository, "merge-base", "--is-ancestor", latestRound.headSha, headSha],
+        {encoding: "utf8"},
+      );
+      const changedFiles = ancestor.status === 0
+        ? git(["-C", repository, "diff", "--name-only", `${latestRound.headSha}..${headSha}`, "--"])
+            .split("\n")
+            .filter(Boolean)
+        : [];
+      if (
+        reviewedStatus.kind === "passed" &&
+        changedFiles.length > 0 &&
+        changedFiles.every((path) => matchesMetadataPath(path, latestRound.audit?.manifest.metadataPaths ?? []))
+      ) {
+        return {...reviewedStatus, headSha, ...(item ? {item} : {})};
+      }
+    }
+    return { ...status, ...(item ? { item } : {}) };
   } catch (error: unknown) {
     if (isMissingFileError(error)) {
       return {

@@ -31,8 +31,11 @@ this file before any unattended work.
   `review.reviewer` in `loops.json` (`bun run setup` offers this); agents then drive
   it automatically for the final handoff of attended and unattended tracked items per
   the loops-review skill after all internal tasks and final verification are complete.
-  The terminal signal is a clean review round covering the current HEAD. Optionally
-  set the positive integer `review.maxRounds`; the public default is 3.
+  A logical round defaults to validated diff, integration, and adversarial passes.
+  The terminal signal is a clean review covering the current HEAD, or a descendant
+  whose intervening commits touch only configured `review.metadataPaths`. Optionally
+  set the positive integer `review.maxRounds` (public default 3), a non-empty
+  `review.auditPasses` subset, or safe repo-relative landing metadata patterns.
 - TODO: keep the bundled reviewer, or define your own mechanism here.
 
 ## Merge policy

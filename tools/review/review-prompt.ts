@@ -1,26 +1,75 @@
-// The review instructions handed to whichever reviewer adapter runs. Kept as a pure
-// string builder (no I/O) so it is unit-testable and identical across adapters.
-//
-// The prompt is deliberately coverage-forcing: earlier revisions ("report only
-// actionable defects") let a capable model satisfice — surface two or three findings
-// and stop — leaving most of a multi-file diff unreviewed, so residual defects only
-// surfaced in later rounds. The reviewer runs with read-only shell access, so it can
-// enumerate the changed-file set itself; we require it to cover every file and hunk.
+import type {ReviewAuditPass} from "../config.ts";
+import type {AcceptedFindingObligation} from "./review-ledger.ts";
+import type {ReviewManifest} from "./review-manifest.ts";
 
-export function reviewPrompt(baseSha: string, headSha: string, priorNotes: string[]): string {
+export interface ReviewContextDocument {
+  label: string;
+  path: string;
+  content: string;
+}
+
+export interface ReviewPromptInput {
+  pass: ReviewAuditPass;
+  manifest: ReviewManifest;
+  contextDocuments: ReviewContextDocument[];
+  priorNotes: string[];
+  obligations: AcceptedFindingObligation[];
+  classifyObligations: boolean;
+  remediationBaseSha?: string;
+  baseDeltaRange?: {baseSha: string; headSha: string};
+}
+
+const passInstructions: Record<ReviewAuditPass, string> = {
+  diff: "Audit local correctness of every changed hunk, including boundary behavior, compatibility, and tests that should require the change.",
+  integration: "Audit callers, consumers, tests, contracts, and architecture. Trace the changed behavior through relevant call paths rather than judging files in isolation.",
+  adversarial: "Audit security, data loss, concurrency, failure handling, accessibility, compatibility, and documentation consistency. Look deliberately for interactions the other passes may miss.",
+};
+
+export function reviewPrompt(input: ReviewPromptInput): string {
+  const auditInput = {
+    pass: input.pass,
+    manifest: input.manifest,
+    obligations: input.obligations,
+    requiredObligationIds: input.classifyObligations
+      ? input.obligations.map((obligation) => obligation.findingId)
+      : [],
+    ...(input.remediationBaseSha
+      ? {remediationRange: `${input.remediationBaseSha}..${input.manifest.headSha}`}
+      : {}),
+    ...(input.baseDeltaRange
+      ? {baseDeltaRange: `${input.baseDeltaRange.baseSha}..${input.baseDeltaRange.headSha}`}
+      : {}),
+  };
+  const metadataPaths = input.manifest.metadataFiles.map((file) => file.path);
   return [
-    `Review exactly the committed change ${baseSha}..${headSha} in the current repository.`,
-    `First enumerate every changed file with \`git diff --name-only ${baseSha}..${headSha}\`, then review every hunk of every one of those files.`,
-    "Complete coverage of the whole diff is required before you return — do not stop after the first few findings, and do not skip files that look unrelated.",
-    "Inspect relevant call sites and tests, and judge each change against the surrounding existing code, established patterns, and architecture — not in isolation.",
-    "Report every actionable correctness, security, data-loss, concurrency, compatibility, or material maintainability defect; omit style preferences.",
-    "Do not edit files, commit, push, fetch, or use the network. Ignore files under .reviews because they are review evidence.",
-    ...(priorNotes.length > 0
+    `AUDIT_PASS=${input.pass}`,
+    `AUDIT_INPUT=${JSON.stringify(auditInput)}`,
+    `Review exactly the committed change ${input.manifest.baseSha}..${input.manifest.headSha}.`,
+    passInstructions[input.pass],
+    "Return coverage for every manifest file and exact hunk list. Missing coverage invalidates the entire logical round.",
+    "Report every actionable correctness, security, data-loss, concurrency, compatibility, accessibility, or material maintainability defect; omit style preferences.",
+    "Classify each finding origin as original, remediation, base-delta, or unknown.",
+    ...(input.classifyObligations && input.obligations.length > 0
       ? [
-          "Earlier rounds already dispositioned these findings; re-raise one only if you can show its recorded reason is factually wrong:",
-          priorNotes.join("; ") + ".",
+          "Accepted findings are remediation obligations. This pass must classify every obligation as fixed, incomplete, or regressed with concrete evidence; each incomplete or regressed obligation must remain an actionable finding whose obligationId names it.",
         ]
       : []),
-    "Return only the requested structured result. An empty findings array means no actionable findings.",
-  ].join(" ");
+    ...(metadataPaths.length > 0
+      ? [`These paths are landing metadata excluded from terminal code coverage: ${metadataPaths.join(", ")}. Inspect them only for contradictions that affect the reviewed behavior.`]
+      : []),
+    ...(input.baseDeltaRange
+      ? [`The patch series is unchanged after a rebase. Audit integration against the base delta ${input.baseDeltaRange.baseSha}..${input.baseDeltaRange.headSha}; classify defects caused by that interaction as base-delta.`]
+      : []),
+    ...input.contextDocuments.map(
+      (document) => `WORKSTREAM_CONTEXT ${document.label} (${document.path}):\n${document.content}`,
+    ),
+    ...(input.priorNotes.length > 0
+      ? [
+          "Earlier non-accepted findings are supplied to prevent blind re-raising; challenge one only with new factual evidence:",
+          input.priorNotes.join("; "),
+        ]
+      : []),
+    "Do not edit files, commit, push, fetch, or use the network. Ignore .reviews because it is review evidence.",
+    "Return only the requested structured result. An empty findings array means this pass found no actionable finding.",
+  ].join("\n\n");
 }

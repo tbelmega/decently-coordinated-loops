@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
+  acceptedFindingObligations,
   addReviewRound,
   createReviewLedger,
   parseReview,
+  parseReviewLedger,
   priorDispositionNotes,
   recordDisposition,
   renderReviewLedger,
   reviewCanContinue,
   type Review,
 } from "./review-ledger.ts";
+import type {ReviewRoundAudit} from "./review-ledger.ts";
 
 const finding = {
   priority: "P1" as const,
@@ -47,6 +50,64 @@ describe("addReviewRound", () => {
     ledger = addReviewRound(ledger, { headSha: "h2", model: "m", reviewedAt: "t2", review });
     expect(ledger.rounds[0].findings[0].id).toBe("R1-F1");
     expect(ledger.rounds[1].findings[0].id).toBe("R2-F1");
+  });
+
+  test("persists structured audit evidence while legacy rounds remain readable", () => {
+    const audit: ReviewRoundAudit = {
+      kind: "full",
+      manifest: {
+        baseSha: "b0",
+        headSha: "h1",
+        files: [{path: "src/x.ts", hunks: ["-1,1 +1,2"]}],
+        metadataFiles: [],
+        metadataPaths: [],
+        remediationFiles: [],
+        baseDeltaFiles: [],
+        instructionFiles: ["AGENTS.md"],
+        contextReferences: [],
+        patchIds: ["patch"],
+      },
+      passes: [{
+        pass: "diff",
+        summary: "covered",
+        coverage: {
+          files: [{path: "src/x.ts", hunks: ["-1,1 +1,2"]}],
+          instructionFiles: ["AGENTS.md"],
+          callsites: [],
+        },
+      }],
+      obligations: [],
+      metrics: {
+        findingsByPass: {diff: 1, integration: 0, adversarial: 0},
+        findingsByPriority: {P0: 0, P1: 1, P2: 0, P3: 0},
+        findingsByOrigin: {original: 1, remediation: 0, "base-delta": 0, unknown: 0},
+        repeatedFindings: 0,
+        lateHighPriorityFindings: 0,
+        unchangedHeadDrift: false,
+      },
+    };
+    const ledger = addReviewRound(
+      createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0", patchIds: ["patch"]}),
+      {headSha: "h1", model: "m", reviewedAt: "t1", review, audit},
+    );
+    const parsed = parseReviewLedger(JSON.parse(JSON.stringify(ledger)));
+    expect(parsed.patchIds).toEqual(["patch"]);
+    expect(parsed.rounds[0].audit).toEqual(audit);
+
+    const legacy = parseReviewLedger({
+      version: 1,
+      branch: "legacy",
+      baseRef: "master",
+      baseSha: "base",
+      rounds: [],
+    });
+    expect(legacy.patchIds).toBeUndefined();
+
+    const earlyAudit = JSON.parse(JSON.stringify(ledger));
+    delete earlyAudit.rounds[0].audit.manifest.metadataPaths;
+    delete earlyAudit.rounds[0].audit.manifest.remediationFiles;
+    delete earlyAudit.rounds[0].audit.manifest.baseDeltaFiles;
+    expect(parseReviewLedger(earlyAudit).rounds[0].audit).toBeDefined();
   });
 });
 
@@ -100,6 +161,58 @@ describe("priorDispositionNotes", () => {
       'R1-F1 "off-by-one" — rejected: not reproducible',
       'R1-F3 "flaky retry" — deferred-to-human: owner call',
     ]);
+  });
+});
+
+describe("acceptedFindingObligations", () => {
+  test("retains accepted finding intent until a later audit verifies it fixed", () => {
+    let ledger = addReviewRound(createReviewLedger({branch: "f", baseRef: "master", baseSha: "b"}), {
+      headSha: "h1",
+      model: "m",
+      reviewedAt: "t1",
+      review,
+    });
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "replace the boundary check");
+    expect(acceptedFindingObligations(ledger)).toEqual([{
+      findingId: "R1-F1",
+      title: "off-by-one",
+      evidence: "loop uses <=",
+      direction: "use <",
+      dispositionReason: "replace the boundary check",
+    }]);
+
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "fixed", findings: []},
+      audit: {
+        kind: "remediation",
+        manifest: {
+          baseSha: "b",
+          headSha: "h2",
+          files: [{path: "src/x.ts", hunks: []}],
+          metadataFiles: [],
+          metadataPaths: [],
+          remediationFiles: [],
+          baseDeltaFiles: [],
+          instructionFiles: [],
+          contextReferences: [],
+          patchIds: [],
+        },
+        passes: [],
+        obligations: [{findingId: "R1-F1", status: "fixed", evidence: "strict comparison"}],
+        metrics: {
+          findingsByPass: {diff: 0, integration: 0, adversarial: 0},
+          findingsByPriority: {P0: 0, P1: 0, P2: 0, P3: 0},
+          findingsByOrigin: {original: 0, remediation: 0, "base-delta": 0, unknown: 0},
+          repeatedFindings: 0,
+          lateHighPriorityFindings: 0,
+          unchangedHeadDrift: false,
+        },
+      },
+    });
+    expect(acceptedFindingObligations(ledger)).toEqual([]);
   });
 });
 
