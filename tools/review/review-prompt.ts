@@ -47,6 +47,7 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     `Review exactly the committed change ${input.manifest.baseSha}..${input.manifest.headSha}.`,
     passInstructions[input.pass],
     "Return coverage for every manifest file and exact hunk list. Missing coverage invalidates the entire logical round.",
+    "coverage.instructionFiles must repeat every path in the manifest's instructionFiles, including files you judged irrelevant to this change. It records that you considered the repository's instructions, so any deviation from that exact set invalidates the round.",
     "Report every actionable correctness, security, data-loss, concurrency, compatibility, accessibility, or material maintainability defect; omit style preferences.",
     "Classify each finding origin as original, remediation, base-delta, or unknown.",
     ...(input.classifyObligations && input.obligations.length > 0
