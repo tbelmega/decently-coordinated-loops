@@ -87,7 +87,10 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    only `deferred-to-human` may be superseded — then continue the round loop. When
    the owner authorizes rounds beyond the configured cap, pass `--max-rounds <n>` to
    `start` and log the authorization on the item; never extend the cap on your own
-   judgment.
+   judgment. Escalating is not a pause: leave the item in a state that stays accurate
+   if the owner never replies, and give them every exit — authorize more rounds, defer
+   the finding and hand over `BLOCKED`, land as an explicit `WAIVED` opt-out, or drop
+   the change — not just the request for more rounds.
 
 **Changed review base.** If the integration branch moves after review and the item is
 rebased onto its new head, rerun the full quality gate and start review again with the

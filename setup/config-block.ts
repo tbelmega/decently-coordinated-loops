@@ -53,18 +53,35 @@ initiate it without waiting for an explicit request. If \`loops.json → review.
 is set, load loops-review and drive the bundled reviewer; a clean review of the current
 HEAD is its passing terminal signal.
 
-Begin that final item handoff with this receipt, using only these states and including
-concise command, HEAD, URL, or ledger evidence after the dash:
+**End** that final item handoff with this receipt — the last lines you print, below the
+prose summary, so the status is visible without scrolling. Use only these states, and
+include concise command, HEAD, URL, or ledger evidence after the dash:
 
     IMPLEMENTATION: COMPLETE|INCOMPLETE
     VERIFICATION: PASSED|FAILED|NOT RUN
     REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN
+    NEXT STEP/OPTIONS: <the next action, or the alternatives when it is the owner's call>
 
 \`REQUESTED\` means an asynchronous tool or human has the review but has not completed
 it; \`WAIVED\` requires the owner's explicit opt-out. Do not claim the overall item
 complete when its required review has not passed. If the bundled reviewer is active,
 run its \`status\` command immediately before the receipt; only its
-\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`.`;
+\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`.
+
+\`NEXT STEP/OPTIONS\` is mandatory and names who acts next. When the item is cleanly
+handed over, one line is enough (e.g. the owner lands the recorded range). When the
+review is capped or blocked, enumerate the real alternatives with their consequences
+and the item state each leaves behind: authorize rounds past the cap
+(\`--max-rounds\`, logged on the item); disposition the outstanding finding
+\`deferred-to-human\` and hand over as \`REVIEW: BLOCKED\`; land as-is as an explicit
+\`WAIVED\` opt-out; or drop the change. Never make "approve more rounds" the only
+option the owner can see.
+
+**Before printing the receipt, leave the item in a state that is still accurate if the
+owner never replies** — state, next-actor, awaiting, next-step, and the recorded
+\`base-sha\`/\`head-sha\` all true as of that moment, committed and pushed. Never park an
+item in a state that presumes an approval you have not received. The owner must be able
+to close the conversation at that point without leaving the board stale.`;
 }
 
 /** The block DCL upserts between markers inside a shared config file
