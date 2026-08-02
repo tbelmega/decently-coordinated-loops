@@ -70,12 +70,19 @@ run its \`status\` command immediately before the receipt; only its
 
 \`NEXT STEP/OPTIONS\` is mandatory and names who acts next. When the item is cleanly
 handed over, one line is enough (e.g. the owner lands the recorded range). When the
-review is capped or blocked, enumerate the real alternatives with their consequences
-and the item state each leaves behind: authorize rounds past the cap
-(\`--max-rounds\`, logged on the item); disposition the outstanding finding
-\`deferred-to-human\` and hand over as \`REVIEW: BLOCKED\`; land as-is as an explicit
-\`WAIVED\` opt-out; or drop the change. Never make "approve more rounds" the only
-option the owner can see.
+review is capped or blocked, enumerate every real exit with the board transition it
+requires:
+
+- authorize rounds past the cap (\`--max-rounds\`, logged on the item) — until the
+  owner rules, the item sits \`blocked\` / \`next-actor: owner\` / \`awaiting: approve\`
+- disposition the outstanding finding \`deferred-to-human\` and hand over
+  \`REVIEW: BLOCKED\` — \`blocked\` / \`next-actor: owner\` / \`awaiting: decide\`
+- land as-is under the owner's explicit \`WAIVED\` opt-out — only the owner can give
+  it; once given the item is \`implemented\` / \`next-actor: owner\` /
+  \`awaiting: review-merge\`
+- drop the change — \`dropped\`
+
+Never make "approve more rounds" the only option the owner can see.
 
 **Before printing the receipt, leave the item in a state that is still accurate if the
 owner never replies** — state, next-actor, awaiting, next-step, and the recorded

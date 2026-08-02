@@ -88,9 +88,13 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    the owner authorizes rounds beyond the configured cap, pass `--max-rounds <n>` to
    `start` and log the authorization on the item; never extend the cap on your own
    judgment. Escalating is not a pause: leave the item in a state that stays accurate
-   if the owner never replies, and give them every exit — authorize more rounds, defer
-   the finding and hand over `BLOCKED`, land as an explicit `WAIVED` opt-out, or drop
-   the change — not just the request for more rounds.
+   if the owner never replies, and give them every exit with the board transition it
+   requires — authorize rounds past the cap (`--max-rounds`, logged on the item;
+   `blocked` / `next-actor: owner` / `awaiting: approve` until they rule); disposition
+   the finding `deferred-to-human` and hand over `BLOCKED` (`blocked` / `owner` /
+   `awaiting: decide`); land as-is under their explicit `WAIVED` opt-out (`implemented`
+   / `owner` / `awaiting: review-merge` once given); or drop the change (`dropped`).
+   Never make the request for more rounds the only option they can see.
 
 **Changed review base.** If the integration branch moves after review and the item is
 rebased onto its new head, rerun the full quality gate and start review again with the
