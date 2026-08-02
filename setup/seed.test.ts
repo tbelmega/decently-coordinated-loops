@@ -185,41 +185,64 @@ describe("generated receipt contract", () => {
   // config silently lost it.
   const params = { owner: "casey", dataRepo: "/tmp/board", dclHome: "/tmp/dcl" };
 
-  test.each([
+  // Assert against whitespace-collapsed text: the clauses are wrapped for prose width,
+  // and rewrapping a paragraph must not fail a test that is about its content.
+  const flatten = (rendered: string): string => rendered.replace(/\s+/g, " ");
+
+  const wrappers: ReadonlyArray<readonly [string, string]> = [
     ["markered block", renderConfigBlock(params)],
     ["cursor rule", renderCursorRule(params)],
-  ])("%s carries the four-line receipt, ending the handoff", (_name, rendered) => {
-    expect(rendered).toContain("IMPLEMENTATION: COMPLETE|INCOMPLETE");
-    expect(rendered).toContain("VERIFICATION: PASSED|FAILED|NOT RUN");
-    expect(rendered).toContain("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN");
-    expect(rendered).toContain("NEXT STEP/OPTIONS:");
+  ];
 
-    // Placement: the receipt closes the handoff rather than opening it.
-    expect(rendered).toContain("**End** that final item handoff with this receipt");
-
-    // The line is only useful if it offers a way out that is not "keep reviewing".
-    expect(rendered).toContain("`--max-rounds`");
-    expect(rendered).toContain("deferred-to-human");
-    expect(rendered).toContain("WAIVED");
-    expect(rendered).toContain("drop the change");
-
-    // The corollary that actually keeps the board honest.
-    expect(rendered).toContain(
-      "leave the item in a state that is still accurate if the\nowner never replies",
-    );
-  });
-
-  test("orders the four receipt lines as implementation, verification, review, next step", () => {
-    const rendered = renderConfigBlock(params);
+  test.each(wrappers)("%s states the four receipt lines in order", (_name, rendered) => {
     const positions = [
       rendered.indexOf("IMPLEMENTATION: COMPLETE|INCOMPLETE"),
       rendered.indexOf("VERIFICATION: PASSED|FAILED|NOT RUN"),
-      rendered.indexOf("REVIEW: PASSED|REQUESTED"),
+      rendered.indexOf("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN"),
       rendered.indexOf("NEXT STEP/OPTIONS:"),
     ];
 
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
+  test.each(wrappers)("%s puts the receipt at the end of the handoff", (_name, rendered) => {
+    expect(flatten(rendered)).toContain(
+      "**End** that final item handoff with this receipt — the last lines you print, " +
+        "below the prose summary, so the status is visible without scrolling.",
+    );
+  });
+
+  test.each(wrappers)(
+    "%s gives every capped-review exit its board transition",
+    (_name, rendered) => {
+      const flat = flatten(rendered);
+
+      expect(flat).toContain(
+        "authorize rounds past the cap (`--max-rounds`, logged on the item) — until the " +
+          "owner rules, the item sits `blocked` / `next-actor: owner` / `awaiting: approve`",
+      );
+      expect(flat).toContain(
+        "disposition the outstanding finding `deferred-to-human` and hand over " +
+          "`REVIEW: BLOCKED` — `blocked` / `next-actor: owner` / `awaiting: decide`",
+      );
+      expect(flat).toContain(
+        "land as-is under the owner's explicit `WAIVED` opt-out — only the owner can give " +
+          "it; once given the item is `implemented` / `next-actor: owner` / `awaiting: review-merge`",
+      );
+      expect(flat).toContain("drop the change — `dropped`");
+      expect(flat).toContain(
+        'Never make "approve more rounds" the only option the owner can see.',
+      );
+    },
+  );
+
+  test.each(wrappers)("%s keeps the owner-no-reply rule intact", (_name, rendered) => {
+    expect(flatten(rendered)).toContain(
+      "**Before printing the receipt, leave the item in a state that is still accurate if " +
+        "the owner never replies** — state, next-actor, awaiting, next-step, and the recorded " +
+        "`base-sha`/`head-sha` all true as of that moment, committed and pushed.",
+    );
   });
 });
 
