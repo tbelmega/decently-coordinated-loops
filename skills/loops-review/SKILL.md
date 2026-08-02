@@ -87,7 +87,11 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    only `deferred-to-human` may be superseded — then continue the round loop. When
    the owner authorizes rounds beyond the configured cap, pass `--max-rounds <n>` to
    `start` and log the authorization on the item; never extend the cap on your own
-   judgment. Escalating is not a pause: leave the item in a state that stays accurate
+   judgment. A reviewer failure or a stale review is recoverable without the owner —
+   fix the cause and run `start` again, leaving the item where it is; the failed
+   attempt is recorded separately and costs no round. Only a round cap or an
+   outstanding `deferred-to-human` finding is the owner's call. Escalating that is not
+   a pause: leave the item in a state that stays accurate
    if the owner never replies, and give them every exit with the board transition it
    requires — authorize rounds past the cap (`--max-rounds`, logged on the item;
    `blocked` / `next-actor: owner` / `awaiting: approve` until they rule); disposition

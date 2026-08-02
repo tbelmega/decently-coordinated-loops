@@ -69,9 +69,13 @@ run its \`status\` command immediately before the receipt; only its
 \`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`.
 
 \`NEXT STEP/OPTIONS\` is mandatory and names who acts next. When the item is cleanly
-handed over, one line is enough (e.g. the owner lands the recorded range). When the
-review is capped or blocked, enumerate every real exit with the board transition it
-requires:
+handed over, one line is enough (e.g. the owner lands the recorded range).
+
+A reviewer failure or a stale review is not an owner decision — fix the cause, run
+the review again, and leave the item where it is; the failed attempt is recorded
+separately and costs no round. Only a round cap or an outstanding
+\`deferred-to-human\` finding is the owner's call. In that case, enumerate every real
+exit with the board transition it requires:
 
 - authorize rounds past the cap (\`--max-rounds\`, logged on the item) — until the
   owner rules, the item sits \`blocked\` / \`next-actor: owner\` / \`awaiting: approve\`

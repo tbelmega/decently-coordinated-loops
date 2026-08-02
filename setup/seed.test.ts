@@ -237,6 +237,18 @@ describe("generated receipt contract", () => {
     },
   );
 
+  test.each(wrappers)(
+    "%s keeps reviewer failure and staleness out of the owner's hands",
+    (_name, rendered) => {
+      expect(flatten(rendered)).toContain(
+        "A reviewer failure or a stale review is not an owner decision — fix the cause, " +
+          "run the review again, and leave the item where it is; the failed attempt is " +
+          "recorded separately and costs no round. Only a round cap or an outstanding " +
+          "`deferred-to-human` finding is the owner's call.",
+      );
+    },
+  );
+
   test.each(wrappers)("%s keeps the owner-no-reply rule intact", (_name, rendered) => {
     expect(flatten(rendered)).toContain(
       "**Before printing the receipt, leave the item in a state that is still accurate if " +
