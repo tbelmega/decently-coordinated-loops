@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { END_MARK, START_MARK } from "./config-block.ts";
+import { END_MARK, START_MARK, renderConfigBlock, renderCursorRule } from "./config-block.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
 const SEED = join(DCL_HOME, "setup", "seed.ts");
@@ -175,6 +175,51 @@ describe("seed: join mode", () => {
     const result = run(["run", SEED, dir, "--join", "--skip-harness"]);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("no BOARD.md");
+  });
+});
+
+describe("generated receipt contract", () => {
+  // Both wrappers emit the same body, so assert the policy once per wrapper. Without
+  // this, deleting the fourth receipt line or the owner-no-reply rule from the
+  // template would leave the suite green while every seeded or refreshed harness
+  // config silently lost it.
+  const params = { owner: "casey", dataRepo: "/tmp/board", dclHome: "/tmp/dcl" };
+
+  test.each([
+    ["markered block", renderConfigBlock(params)],
+    ["cursor rule", renderCursorRule(params)],
+  ])("%s carries the four-line receipt, ending the handoff", (_name, rendered) => {
+    expect(rendered).toContain("IMPLEMENTATION: COMPLETE|INCOMPLETE");
+    expect(rendered).toContain("VERIFICATION: PASSED|FAILED|NOT RUN");
+    expect(rendered).toContain("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN");
+    expect(rendered).toContain("NEXT STEP/OPTIONS:");
+
+    // Placement: the receipt closes the handoff rather than opening it.
+    expect(rendered).toContain("**End** that final item handoff with this receipt");
+
+    // The line is only useful if it offers a way out that is not "keep reviewing".
+    expect(rendered).toContain("`--max-rounds`");
+    expect(rendered).toContain("deferred-to-human");
+    expect(rendered).toContain("WAIVED");
+    expect(rendered).toContain("drop the change");
+
+    // The corollary that actually keeps the board honest.
+    expect(rendered).toContain(
+      "leave the item in a state that is still accurate if the\nowner never replies",
+    );
+  });
+
+  test("orders the four receipt lines as implementation, verification, review, next step", () => {
+    const rendered = renderConfigBlock(params);
+    const positions = [
+      rendered.indexOf("IMPLEMENTATION: COMPLETE|INCOMPLETE"),
+      rendered.indexOf("VERIFICATION: PASSED|FAILED|NOT RUN"),
+      rendered.indexOf("REVIEW: PASSED|REQUESTED"),
+      rendered.indexOf("NEXT STEP/OPTIONS:"),
+    ];
+
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 });
 
