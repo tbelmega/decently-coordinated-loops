@@ -71,11 +71,12 @@ run its \`status\` command immediately before the receipt; only its
 \`NEXT STEP/OPTIONS\` is mandatory and names who acts next. When the item is cleanly
 handed over, one line is enough (e.g. the owner lands the recorded range).
 
-A reviewer failure or a stale review is not an owner decision — fix the cause, run
-the review again, and leave the item where it is; the failed attempt is recorded
-separately and costs no round. Only a round cap or an outstanding
-\`deferred-to-human\` finding is the owner's call. In that case, enumerate every real
-exit with the board transition it requires:
+A failed or incomplete review attempt is yours to recover from, not the owner's: fix
+the cause and run the review again, leaving the item where it is — the attempt is
+recorded separately and costs no round. A stale review is not free: a fresh round
+consumes one, and \`start\` refuses a same-base rerun when the last round was clean.
+Escalate only a round cap or an outstanding \`deferred-to-human\` finding, and then
+enumerate every real exit with the board transition it requires:
 
 - authorize rounds past the cap (\`--max-rounds\`, logged on the item) — until the
   owner rules, the item sits \`blocked\` / \`next-actor: owner\` / \`awaiting: approve\`

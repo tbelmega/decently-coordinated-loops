@@ -241,10 +241,11 @@ describe("generated receipt contract", () => {
     "%s keeps reviewer failure and staleness out of the owner's hands",
     (_name, rendered) => {
       expect(flatten(rendered)).toContain(
-        "A reviewer failure or a stale review is not an owner decision — fix the cause, " +
-          "run the review again, and leave the item where it is; the failed attempt is " +
-          "recorded separately and costs no round. Only a round cap or an outstanding " +
-          "`deferred-to-human` finding is the owner's call.",
+        "A failed or incomplete review attempt is yours to recover from, not the owner's: " +
+          "fix the cause and run the review again, leaving the item where it is — the attempt " +
+          "is recorded separately and costs no round. A stale review is not free: a fresh " +
+          "round consumes one, and `start` refuses a same-base rerun when the last round was " +
+          "clean. Escalate only a round cap or an outstanding `deferred-to-human` finding,",
       );
     },
   );
