@@ -81,8 +81,10 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    the reviewer does not blindly re-raise them.
 6. **Stop with `PASSED`** only on a clean round covering the current HEAD. Rejected
    findings get one clean confirmation round. A deferred-to-human finding, reviewer
-   failure, stale review, or configured round cap is `BLOCKED`; escalate it to the
-   owner rather than claiming completion. When the owner later decides a deferred
+   failure, stale review, or configured round cap is `BLOCKED` — never claim
+   completion over any of them. Only the deferred finding and the round cap are the
+   owner's call and get escalated; a reviewer failure or a stale review is yours to
+   recover from, as below. When the owner later decides a deferred
    finding, record that decision as a new disposition (reason citing the owner) —
    only `deferred-to-human` may be superseded — then continue the round loop. When
    the owner authorizes rounds beyond the configured cap, pass `--max-rounds <n>` to

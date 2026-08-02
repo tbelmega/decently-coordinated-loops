@@ -253,7 +253,9 @@ describe("generated receipt contract", () => {
     expect(flatten(rendered)).toContain(
       "**Before printing the receipt, leave the item in a state that is still accurate if " +
         "the owner never replies** — state, next-actor, awaiting, next-step, and the recorded " +
-        "`base-sha`/`head-sha` all true as of that moment, committed and pushed.",
+        "`base-sha`/`head-sha` all true as of that moment, committed and pushed. Never park an " +
+        "item in a state that presumes an approval you have not received. The owner must be " +
+        "able to close the conversation at that point without leaving the board stale.",
     );
   });
 });
