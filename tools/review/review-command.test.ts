@@ -87,7 +87,11 @@ function createFakeCodex(): string {
       'if (!inputLine) throw new Error("missing audit input");',
       'const audit = JSON.parse(inputLine.slice("AUDIT_INPUT=".length));',
       'if (process.env.FAKE_CODEX_LOG) appendFileSync(process.env.FAKE_CODEX_LOG, `${audit.pass}\\n`);',
-      'const files = process.env.FAKE_SKIP_FILE ? audit.manifest.files.slice(0, -1) : audit.manifest.files;',
+      'const covered = process.env.FAKE_SKIP_FILE ? audit.manifest.files.slice(0, -1) : audit.manifest.files;',
+      // Faithful to a compliant reviewer: the prompt names every metadata file and asks for
+      // it to be inspected, so coverage comes back including them. The validator must permit
+      // that — rejecting it invalidated rounds that had found nothing wrong.
+      'const files = [...covered, ...(audit.manifest.metadataFiles ?? [])];',
       'const obligationStatus = process.env.FAKE_OBLIGATION_STATUS ?? "fixed";',
       'const obligations = audit.requiredObligationIds.length > 0 ? audit.obligations.map((obligation) => ({ findingId: obligation.findingId, status: obligationStatus, evidence: "verified" })) : [];',
       'await Bun.write(args[outputIndex + 1], JSON.stringify({ pass: audit.pass, summary: "clean", coverage: { files, instructionFiles: audit.manifest.instructionFiles, callsites: [] }, obligations, findings: [] }));',
@@ -323,6 +327,57 @@ describe("cli-review start", () => {
     const status = runStatus(repository, item);
     expect(status.status).toBe(1);
     expect(status.stdout).toContain("latest review attempt failed");
+  });
+
+  test("completes a round when the reviewed range itself contains a metadata path", () => {
+    const {repository} = createReviewRepository();
+    const item = "metadata-in-range";
+    // The shape that blocks a data repo committing its own ledger: the evidence file is
+    // inside the reviewed range and matches metadataPaths, so it reaches the reviewer as a
+    // file to inspect and comes back in coverage.
+    mkdirSync(`${repository}/.reviews`, {recursive: true});
+    writeFileSync(`${repository}/.reviews/round.md`, "prior round evidence\n");
+    git(repository, ["add", "-f", ".reviews/round.md"]);
+    git(repository, ["commit", "-q", "-m", "Commit review evidence"]);
+
+    const result = runStart(repository, createReviewDataRepo(5, [".reviews/**"]), item);
+
+    expect(result.status).toBe(0);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(ledger.rounds).toHaveLength(1);
+    expect(ledger.failures ?? []).toHaveLength(0);
+    expect(ledger.rounds[0].audit.manifest.files.map((file: {path: string}) => file.path)).toEqual([
+      "change.txt",
+    ]);
+    expect(ledger.rounds[0].audit.manifest.metadataFiles.map((file: {path: string}) => file.path)).toEqual([
+      ".reviews/round.md",
+    ]);
+  });
+
+  test("writes each pass prompt only when LOOPS_REVIEW_DUMP_PROMPT names a directory", () => {
+    const {repository} = createReviewRepository();
+    const dumpDirectory = `${mkdtempSync(`${tmpdir()}/loops-review-dump-`)}/prompts`;
+
+    expect(runStart(repository, createReviewDataRepo(5), "dump-off").status).toBe(0);
+    expect(existsSync(dumpDirectory)).toBe(false);
+
+    expect(
+      runStart(repository, createReviewDataRepo(5), "dump-on", "master", {
+        LOOPS_REVIEW_DUMP_PROMPT: dumpDirectory,
+      }).status,
+    ).toBe(0);
+
+    expect(readdirSync(dumpDirectory).sort()).toEqual([
+      "dump-on-round1-adversarial.prompt.txt",
+      "dump-on-round1-diff.prompt.txt",
+      "dump-on-round1-integration.prompt.txt",
+    ]);
+    // The dump is the reviewer's actual input, so a rejected round can be reproduced by
+    // hand rather than reconstructed from this tool's source.
+    const dumped = readFileSync(`${dumpDirectory}/dump-on-round1-diff.prompt.txt`, "utf8");
+    expect(dumped).toContain("AUDIT_PASS=diff");
+    expect(dumped).toContain("change.txt");
   });
 
   test("runs three validated audit passes inside one logical round", () => {

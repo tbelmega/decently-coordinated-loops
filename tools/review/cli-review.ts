@@ -9,7 +9,7 @@
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { loadConfig, reviewAuditPasses, type ReviewAuditPass } from "../config.ts";
@@ -351,6 +351,35 @@ function priorFindingIdentities(ledger: ReviewLedger): PriorFindingIdentity[] {
   );
 }
 
+/** Optional capture of what the reviewer was actually asked, for diagnosing a rejected
+ * round. The ledger records a bare reason string, so an invalidated round leaves no trace
+ * of its input: "coverage includes a file outside the review manifest" cost two items a
+ * day of guessing in 2026-08, and the prompt had to be reconstructed by reading this
+ * tool's source instead of the run.
+ *
+ * Off unless LOOPS_REVIEW_DUMP_PROMPT names a directory — a prompt embeds the whole
+ * base..HEAD diff, so dumping every pass of every round unconditionally would leave
+ * hundreds of KB behind on runs nobody ever looks at.
+ *
+ * Writes OUTSIDE the repository by design. .reviews/ is committed evidence, and on an
+ * instance whose review.metadataPaths covers it (the default shape) a dump landing there
+ * would be swept into the next round's manifest and handed back to the reviewer as a file
+ * to inspect — feeding it its own previous prompt. */
+function dumpReviewPrompt(
+  item: string | undefined,
+  round: number,
+  pass: ReviewAuditPass,
+  prompt: string,
+): void {
+  const directory = process.env.LOOPS_REVIEW_DUMP_PROMPT;
+  if (!directory) return;
+  mkdirSync(directory, {recursive: true});
+  // `item` is optional — an owner-requested review need not have a board item — so the
+  // name falls back rather than dropping the dump for exactly the ad-hoc run most likely
+  // to be the one being debugged.
+  writeFileSync(join(directory, `${item ?? "review"}-round${round}-${pass}.prompt.txt`), prompt);
+}
+
 async function startReview(options: StartOptions): Promise<void> {
   const branch = git(["branch", "--show-current"]);
   if (!branch) throw new Error("review requires a named branch");
@@ -448,19 +477,21 @@ async function startReview(options: StartOptions): Promise<void> {
       const obligationPass = passes.includes("diff") ? "diff" : passes[0];
       const passResults: ReviewPassResult[] = [];
       for (const pass of passes) {
+        const prompt = reviewPrompt({
+          pass,
+          manifest,
+          contextDocuments: context.documents,
+          priorNotes: priorDispositionNotes(ledger),
+          obligations,
+          classifyObligations: pass === obligationPass,
+          ...(remediationRange
+            ? {remediationBaseSha: remediationRange.baseSha}
+            : {}),
+          ...(baseDeltaRange ? {baseDeltaRange} : {}),
+        });
+        dumpReviewPrompt(options.item, ledger.rounds.length + 1, pass, prompt);
         const raw = options.reviewer.invoke({
-          prompt: reviewPrompt({
-            pass,
-            manifest,
-            contextDocuments: context.documents,
-            priorNotes: priorDispositionNotes(ledger),
-            obligations,
-            classifyObligations: pass === obligationPass,
-            ...(remediationRange
-              ? {remediationBaseSha: remediationRange.baseSha}
-              : {}),
-            ...(baseDeltaRange ? {baseDeltaRange} : {}),
-          }),
+          prompt,
           model: options.model,
           effort: options.effort,
           cwd: repository,

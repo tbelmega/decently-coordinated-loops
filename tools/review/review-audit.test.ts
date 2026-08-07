@@ -57,6 +57,36 @@ describe("parseReviewPass", () => {
     expect(() => parseReviewPass(missingInstructions, "diff", manifest, [])).toThrow(/instruction files/);
   });
 
+  test("permits coverage of a configured metadata path but names any other stray file", () => {
+    // reviewPrompt lists every metadata file and instructs the reviewer to inspect it, so a
+    // compliant reviewer reports coverage for it. Rejecting that discarded whole rounds,
+    // findings included, on two items in 2026-08.
+    const withMetadata: ReviewManifest = {
+      ...manifest,
+      metadataFiles: [{path: ".reviews/round.md", hunks: ["-0,0 +1,4"]}],
+      metadataPaths: [".reviews/**"],
+    };
+    const coversMetadata = passResult("diff") as Record<string, unknown>;
+    coversMetadata.coverage = {
+      files: [...manifest.files, {path: ".reviews/round.md", hunks: ["-0,0 +1,4"]}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(parseReviewPass(coversMetadata, "diff", withMetadata, []).coverage.files).toHaveLength(3);
+
+    // A path that is neither in the manifest nor exempt still fails closed — that is what
+    // catches a reviewer auditing the wrong range — and the message says which path.
+    const stray = passResult("diff") as Record<string, unknown>;
+    stray.coverage = {
+      files: [...manifest.files, {path: "src/unrelated.ts", hunks: []}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(stray, "diff", withMetadata, [])).toThrow(
+      /outside the review manifest: src\/unrelated\.ts/,
+    );
+  });
+
   test("requires the diff pass to classify every accepted-finding obligation", () => {
     const input = passResult("diff") as Record<string, unknown>;
     expect(() => parseReviewPass(input, "diff", manifest, ["R1-F1"])).toThrow(/R1-F1/);

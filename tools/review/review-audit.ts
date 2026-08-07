@@ -1,6 +1,6 @@
 import type {ReviewAuditPass} from "../config.ts";
 import {parseReview, type Finding, type Priority} from "./review-ledger.ts";
-import type {ReviewFileCoverage, ReviewManifest} from "./review-manifest.ts";
+import {matchesMetadataPath, type ReviewFileCoverage, type ReviewManifest} from "./review-manifest.ts";
 
 export const findingOrigins = ["original", "remediation", "base-delta", "unknown"] as const;
 export type FindingOrigin = (typeof findingOrigins)[number];
@@ -125,8 +125,26 @@ export function parseReviewPass(
       throw new Error(`coverage is incomplete for ${manifestFile.path}`);
     }
   }
-  if (coverageFiles.some((file) => !manifest.files.some((manifestFile) => manifestFile.path === file.path))) {
-    throw new Error("coverage includes a file outside the review manifest");
+  // Landing-metadata coverage is PERMITTED but not required: the completeness loop above
+  // demands manifest.files only. Rejecting it was a self-contradiction — reviewPrompt names
+  // every metadata file in the prompt and instructs the reviewer to "inspect them ... for
+  // contradictions that affect the reviewed behavior", and a reviewer that did as it was
+  // told had its entire logical round discarded here, findings included. Measured
+  // 2026-08-06/07: with metadataPaths [".reviews/**"], rounds on two separate items died
+  // this way while reporting zero defects.
+  //
+  // Matched against the configured PATTERNS rather than manifest.metadataFiles, so a
+  // neighbouring ledger the reviewer happened to open is tolerated too. Those paths are
+  // exempt from code review by configuration, so coverage of them carries no signal in
+  // either direction. Everything else still fails closed — this check is what catches a
+  // reviewer that audited the wrong range or invented files.
+  const stray = coverageFiles.find(
+    (file) =>
+      !manifest.files.some((manifestFile) => manifestFile.path === file.path) &&
+      !matchesMetadataPath(file.path, manifest.metadataPaths ?? []),
+  );
+  if (stray) {
+    throw new Error(`coverage includes a file outside the review manifest: ${stray.path}`);
   }
   if (!Array.isArray(input.obligations)) throw new Error("obligations must be an array");
   const obligations = input.obligations.map(parseObligation);
