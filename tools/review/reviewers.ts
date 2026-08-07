@@ -108,13 +108,20 @@ function runCaptured(bin: string, args: string[], cwd: string, tool: string): st
 
 /** Assembles the `codex exec` argv. Extracted (pure) so the model/effort seams are
  * unit-tested: --model and -c model_reasoning_effort are added only when supplied, and
- * the effort override is TOML-quoted to match codex's `-c key=value` parsing. */
+ * the effort override is TOML-quoted to match codex's `-c key=value` parsing.
+ *
+ * The prompt is deliberately NOT here. It goes on stdin, and the trailing `-` is codex's
+ * documented way to ask for that ("if not provided as an argument, or if `-` is used,
+ * instructions are read from stdin"). The prompt carries the whole base..HEAD diff, and
+ * as a command-line argument it hit MAX_ARG_STRLEN — Linux caps one argument at 128 KiB
+ * no matter how much total argument space is free, so an 88 KB diff was enough to make
+ * posix_spawn fail with E2BIG and block two items at once (2026-08-06). Keeping argv
+ * independent of prompt size removes the ceiling rather than raising it. */
 export function buildCodexArgs(opts: {
   model?: string;
   effort?: string;
   schemaPath: string;
   outputPath: string;
-  prompt: string;
 }): string[] {
   return [
     "exec",
@@ -127,7 +134,7 @@ export function buildCodexArgs(opts: {
     opts.schemaPath,
     "--output-last-message",
     opts.outputPath,
-    opts.prompt,
+    "-",
   ];
 }
 
@@ -147,9 +154,14 @@ const codex: Reviewer = {
         effort: request.effort,
         schemaPath,
         outputPath,
-        prompt: request.prompt,
       });
-      const result = spawnSync(resolveBin(codex), args, { cwd: request.cwd, stdio: "inherit" });
+      // stdin is a pipe carrying the prompt; stdout/stderr stay inherited so the run
+      // streams to the terminal exactly as before.
+      const result = spawnSync(resolveBin(codex), args, {
+        cwd: request.cwd,
+        stdio: ["pipe", "inherit", "inherit"],
+        input: request.prompt,
+      });
       if (result.error) throw new Error(`could not run codex (${resolveBin(codex)}): ${result.error.message}`);
       if (result.status !== 0) throw new Error(`codex exited with code ${result.status ?? "unknown"}`);
       return JSON.parse(readFileSync(outputPath, "utf8"));

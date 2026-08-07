@@ -77,7 +77,12 @@ function createFakeCodex(): string {
       "const args = Bun.argv.slice(2);",
       'const outputIndex = args.indexOf("--output-last-message");',
       'if (outputIndex < 0 || !args[outputIndex + 1]) throw new Error("missing output path");',
-      'const prompt = args.at(-1) ?? "";',
+      // Faithful to the real contract: codex takes `-` and reads instructions from stdin,
+      // so the prompt never appears in argv. Asserting the `-` here keeps this fake from
+      // silently passing if the caller ever puts the prompt back on the command line —
+      // which is what hit MAX_ARG_STRLEN (E2BIG) on a large diff.
+      'if (args.at(-1) !== "-") throw new Error("expected the stdin sentinel as the last arg");',
+      "const prompt = await Bun.stdin.text();",
       'const inputLine = prompt.split("\\n").find((line) => line.startsWith("AUDIT_INPUT="));',
       'if (!inputLine) throw new Error("missing audit input");',
       'const audit = JSON.parse(inputLine.slice("AUDIT_INPUT=".length));',

@@ -59,16 +59,29 @@ describe("parseCursorOutput", () => {
 });
 
 describe("buildCodexArgs", () => {
-  const fixed = { schemaPath: "/tmp/s.json", outputPath: "/tmp/o.json", prompt: "review a..b" };
+  const fixed = { schemaPath: "/tmp/s.json", outputPath: "/tmp/o.json" };
 
-  test("always carries the read-only exec surface and the prompt last", () => {
+  test("always carries the read-only exec surface and takes the prompt on stdin", () => {
     const args = buildCodexArgs(fixed);
     expect(args[0]).toBe("exec");
     expect(args).toContain("--ephemeral");
     expect(args.join(" ")).toContain("--sandbox read-only");
     expect(args).toContain("--output-schema");
     expect(args).toContain("--output-last-message");
-    expect(args.at(-1)).toBe("review a..b");
+    // `-` is codex's documented "read the instructions from stdin" positional.
+    expect(args.at(-1)).toBe("-");
+  });
+
+  // Regression: the prompt used to be the final argv entry, and Linux caps a SINGLE
+  // argument at MAX_ARG_STRLEN (128 KiB) however much total argument space is free. On
+  // 2026-08-06 an 88 KB review diff crossed it and `posix_spawn` failed with E2BIG,
+  // blocking two task-tracking items at once. argv must not scale with the prompt at all.
+  test("argv stays tiny no matter how large the prompt is", () => {
+    const args = buildCodexArgs(fixed);
+    const bytes = args.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
+    expect(bytes).toBeLessThan(1024);
+    // And there is no seam through which a caller could put one back on the command line.
+    expect(JSON.stringify(args)).not.toContain("review");
   });
 
   test("adds --model only when a model is given", () => {
