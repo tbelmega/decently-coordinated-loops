@@ -68,8 +68,20 @@ interface StartOptions {
   dataRepo?: string;
 }
 
+/** spawnSync's default maxBuffer is 1 MiB, and a review range's diff outgrows that long before
+ * anything else strains. When it does, spawnSync sets `status` to null with an empty stderr —
+ * so the throw below fell back to "git <args> failed" with no cause attached, and a whole round
+ * died on a message that named the command and nothing else. Observed 2026-08-08 on a range
+ * whose diff had reached 1,093,049 bytes; `git diff` run by hand on the same SHAs succeeded,
+ * which is what makes this class of failure so slow to place.
+ *
+ * 16 MiB matches MAX_OUTPUT_BYTES in reviewers.ts, where the same ceiling was already fixed for
+ * the reviewer subprocess — the git side simply never got the same treatment. */
+const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024;
+
 function git(args: string[]): string {
-  const result = spawnSync("git", args, { encoding: "utf8" });
+  const result = spawnSync("git", args, { encoding: "utf8", maxBuffer: MAX_GIT_OUTPUT_BYTES });
+  if (result.error) throw new Error(`git ${args.join(" ")} failed: ${result.error.message}`);
   if (result.status !== 0) throw new Error(result.stderr?.toString().trim() || `git ${args.join(" ")} failed`);
   return result.stdout.toString().trim();
 }
@@ -213,11 +225,19 @@ function gitPatchIds(repository: string, baseSha: string, headSha: string): stri
     .filter(Boolean);
   const patchIds: string[] = [];
   for (const commit of commits) {
+    // Same ceiling as git() above: a single large commit's patch overflows the 1 MiB default.
     const patch = spawnSync("git", ["-C", repository, "show", "--pretty=format:", "--patch", commit], {
       encoding: "utf8",
+      maxBuffer: MAX_GIT_OUTPUT_BYTES,
     });
+    if (patch.error) throw new Error(`git show ${commit} failed: ${patch.error.message}`);
     if (patch.status !== 0) throw new Error(patch.stderr?.toString().trim() || `git show ${commit} failed`);
-    const identity = spawnSync("git", ["patch-id", "--stable"], {encoding: "utf8", input: patch.stdout});
+    const identity = spawnSync("git", ["patch-id", "--stable"], {
+      encoding: "utf8",
+      input: patch.stdout,
+      maxBuffer: MAX_GIT_OUTPUT_BYTES,
+    });
+    if (identity.error) throw new Error(`git patch-id failed: ${identity.error.message}`);
     if (identity.status !== 0) throw new Error(identity.stderr?.toString().trim() || "git patch-id failed");
     const patchId = identity.stdout.trim().split(/\s+/)[0];
     if (patchId) patchIds.push(patchId);
@@ -653,7 +673,7 @@ function currentReviewStatus(item?: string): ReviewStatus {
       const ancestor = spawnSync(
         "git",
         ["-C", repository, "merge-base", "--is-ancestor", latestRound.headSha, headSha],
-        {encoding: "utf8"},
+        {encoding: "utf8", maxBuffer: MAX_GIT_OUTPUT_BYTES},
       );
       const changedFiles = ancestor.status === 0
         ? git(["-C", repository, "diff", "--name-only", `${latestRound.headSha}..${headSha}`, "--"])

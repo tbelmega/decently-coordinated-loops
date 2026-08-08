@@ -51,6 +51,27 @@ function createReviewRepository(): { repository: string; baseSha: string; headSh
   return { repository, baseSha, headSha: git(repository, ["rev-parse", "HEAD"]) };
 }
 
+/** A range whose diff exceeds spawnSync's 1 MiB default maxBuffer. Written as one large file so
+ * the repo stays cheap to build; what matters is the size of `git diff base..head`. */
+function createLargeDiffRepository(): { repository: string; baseSha: string; headSha: string } {
+  const repository = mkdtempSync(`${tmpdir()}/loops-review-large-`);
+  git(repository, ["init", "-q", "-b", "master"]);
+  git(repository, ["config", "user.email", "test@example.com"]);
+  git(repository, ["config", "user.name", "Test"]);
+  writeFileSync(`${repository}/base.txt`, "base\n");
+  git(repository, ["add", "base.txt"]);
+  git(repository, ["commit", "-q", "-m", "Add base"]);
+  const baseSha = git(repository, ["rev-parse", "HEAD"]);
+  git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+  // ~1.6 MiB of added lines: comfortably past the 1 MiB default, well under the 16 MiB ceiling.
+  let big = "";
+  for (let line = 0; line < 40_000; line += 1) big += `line ${line} ${"x".repeat(32)}\n`;
+  writeFileSync(`${repository}/big.txt`, big);
+  git(repository, ["add", "big.txt"]);
+  git(repository, ["commit", "-q", "-m", "Add a large file"]);
+  return { repository, baseSha, headSha: git(repository, ["rev-parse", "HEAD"]) };
+}
+
 function createReviewDataRepo(maxRounds: number, metadataPaths: string[] = []): string {
   const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
   writeFileSync(
@@ -327,6 +348,27 @@ describe("cli-review start", () => {
     const status = runStatus(repository, item);
     expect(status.status).toBe(1);
     expect(status.stdout).toContain("latest review attempt failed");
+  });
+
+  test("completes a round when the range's diff exceeds spawnSync's default output buffer", () => {
+    // spawnSync's default maxBuffer is 1 MiB. A review range outgrows that long before anything
+    // else strains, and when it does spawnSync returns status=null with an EMPTY stderr — so the
+    // failure surfaced as "git <args> failed" with no cause, while running the same `git diff` by
+    // hand succeeded. A whole round died on it 2026-08-08 at a diff of 1,093,049 bytes.
+    const {repository} = createLargeDiffRepository();
+    const item = "large-diff-range";
+
+    const result = runStart(repository, createReviewDataRepo(5), item);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("failed");
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(ledger.rounds).toHaveLength(1);
+    expect(ledger.failures ?? []).toHaveLength(0);
+    expect(ledger.rounds[0].audit.manifest.files.map((file: {path: string}) => file.path)).toEqual([
+      "big.txt",
+    ]);
   });
 
   test("completes a round when the reviewed range itself contains a metadata path", () => {
