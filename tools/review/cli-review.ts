@@ -277,7 +277,11 @@ function loadReviewContext(
   const parsedItem = parseItemFileText(relative(dataRepo, itemPath), itemContent);
   const specLink = parsedItem.links.spec;
   if (specLink) {
-    const specPath = [resolve(dataRepo, specLink), resolve(repository, specLink)].find(existsSync);
+    // `~/...` is how item files record links by convention, and --data-repo is already
+    // expanded that way. Expand first, then resolve: an unexpanded "~" resolves against
+    // the data repo as a literal directory, so a correctly-recorded spec never matched.
+    const link = expandHome(specLink, process.env.HOME ?? homedir());
+    const specPath = [resolve(dataRepo, link), resolve(repository, link)].find(existsSync);
     if (!specPath) throw new Error(`linked review spec ${specLink} was not found`);
     documents.push({label: "spec", path: specPath, content: readFileSync(specPath, "utf8")});
   }

@@ -150,6 +150,20 @@ function runStart(
   );
 }
 
+/** Writes the tracked item with an explicit `links:` block, so a test can pin how a
+ * link is resolved rather than relying on runStart's link-less default. */
+function writeItemWithLinks(dataRepo: string, item: string, links: Record<string, string>): void {
+  mkdirSync(`${dataRepo}/items`, {recursive: true});
+  const linkLines = Object.entries(links)
+    .map(([key, value]) => `  ${key}: ${value}`)
+    .join("\n");
+  writeFileSync(
+    `${dataRepo}/items/${item}.md`,
+    `---\ntitle: Review test\nproject: test\nstate: in-progress\nowner: test\nautonomy: autonomous\n` +
+      `next-actor: agent\nnext-step: Review\nupdated: 2026-07-23\nlinks:\n${linkLines}\n---\n`,
+  );
+}
+
 function runStatus(repository: string, item?: string, cwd = repository) {
   return spawnSync("bun", ["run", CLI, "status", ...(item ? ["--item", item] : [])], {
     cwd,
@@ -311,6 +325,36 @@ describe("cli-review status", () => {
 });
 
 describe("cli-review start", () => {
+  // `~/...` is the convention every item file in a real data repo uses for links, and
+  // the CLI already expands it for --data-repo. It did not for links.spec, so an item
+  // that recorded its spec the documented way could never be reviewed at all: the path
+  // resolved against the data repo as a literal "~" directory and start refused.
+  test("resolves a links.spec recorded as a ~ path", () => {
+    const {repository} = createReviewRepository();
+    const item = "home-relative-spec";
+    const dataRepo = createReviewDataRepo(5);
+    const home = mkdtempSync(`${tmpdir()}/loops-review-home-`);
+    mkdirSync(`${home}/specs`, {recursive: true});
+    writeFileSync(`${home}/specs/thing.md`, "# Spec\n\nThe reviewed change is specified here.\n");
+    writeItemWithLinks(dataRepo, item, {spec: "~/specs/thing.md"});
+
+    const result = runStart(repository, dataRepo, item, "master", {HOME: home});
+    expect(result.stderr).not.toContain("was not found");
+    expect(result.status).toBe(0);
+  });
+
+  test("still refuses a links.spec that genuinely does not exist", () => {
+    const {repository} = createReviewRepository();
+    const item = "missing-spec";
+    const dataRepo = createReviewDataRepo(5);
+    const home = mkdtempSync(`${tmpdir()}/loops-review-home-`);
+    writeItemWithLinks(dataRepo, item, {spec: "~/specs/absent.md"});
+
+    const result = runStart(repository, dataRepo, item, "master", {HOME: home});
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("was not found");
+  });
+
   test("keeps a clean review terminal after a metadata-only finalization commit", () => {
     const {repository} = createReviewRepository();
     const item = "metadata-finalization";
