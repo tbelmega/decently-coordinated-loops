@@ -52,6 +52,10 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: string; get: (item: ItemFile) => str
   { key: "updated", get: (item) => item.updated },
 ];
 
+function isCrossPlatformAbsolutePath(path: string): boolean {
+  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\]+\\[^\\]+/.test(path);
+}
+
 /** Pure: every schema violation on one item, as human-readable messages — a blank
  * mandatory field, or a closed-set enum value outside its canonical set. Empty array =
  * the item is well-formed. Empty required fields are reported first; the enum checks
@@ -79,6 +83,8 @@ export function validateItem(item: ItemFile): string[] {
       }
       if (worktree !== undefined && worktree.trim() === "") {
         messages.push("execution.worktree must be a non-empty string");
+      } else if (worktree !== undefined && !isCrossPlatformAbsolutePath(worktree)) {
+        messages.push("execution.worktree must be an absolute path");
       }
     }
   }

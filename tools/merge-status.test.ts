@@ -396,6 +396,18 @@ Context paragraph.
     expect(result).toMatch(/^updated: 2026-07-10$/m);
   });
 
+  test("migrates a lone legacy owner field to assignee", () => {
+    expect(result).toMatch(/^assignee: agent-x$/m);
+    expect(result).not.toMatch(/^owner:/m);
+  });
+
+  test("preserves conflicting assignment keys for validation", () => {
+    const conflicting = RAW.replace("owner: agent-x", "assignee: codex/default\nowner: agent-x");
+    const transitioned = applyMergedFrontmatter(conflicting, "2026-07-10");
+    expect(transitioned).toMatch(/^assignee: codex\/default$/m);
+    expect(transitioned).toMatch(/^owner: agent-x$/m);
+  });
+
   test("preserves the body and the links block verbatim", () => {
     expect(result).toContain("## Log");
     expect(result).toContain("- 2026-07-02: PR filed.");

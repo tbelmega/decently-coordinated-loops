@@ -111,6 +111,37 @@ updated: 2026-08-09
     ]);
   });
 
+  test("rejects unknown execution keys", () => {
+    const parsed = parseItemFileText("items/x.md", `---
+title: X
+project: atlas
+state: in-progress
+assignee: codex/default
+autonomy: auto
+next-actor: agent
+execution:
+  host: worker-one
+  worktre: /srv/work/project
+next-step: Do the thing
+updated: 2026-08-09
+---
+`);
+    expect(validateItem(parsed)).toEqual([
+      "execution.worktre is not recognized (expected host or worktree)",
+    ]);
+  });
+
+  test("requires a cross-platform absolute worktree path", () => {
+    for (const worktree of ["/srv/work/project", "C:\\work\\project", "C:/work/project", "\\\\server\\share\\project"]) {
+      expect(validateItem(item({ execution: { worktree } }))).toEqual([]);
+    }
+    for (const worktree of ["relative/path", "project", "C:project"]) {
+      expect(validateItem(item({ execution: { worktree } }))).toEqual([
+        "execution.worktree must be an absolute path",
+      ]);
+    }
+  });
+
   test("accepts every new canonical state", () => {
     for (const state of ["merged", "tested", "delivered", "accepted"]) {
       expect(validateItem(item({ state, nextActor: "owner", awaiting: undefined }))).toEqual([]);

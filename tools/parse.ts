@@ -61,6 +61,11 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     } else {
       const location: NonNullable<ItemFile["execution"]> = {};
       let knownChildPresent = false;
+      for (const key of Object.keys(rawExecution)) {
+        if (key !== "host" && key !== "worktree") {
+          frontmatterErrors.push(`execution.${key} is not recognized (expected host or worktree)`);
+        }
+      }
       for (const key of ["host", "worktree"] as const) {
         if (!Object.hasOwn(rawExecution, key)) continue;
         knownChildPresent = true;

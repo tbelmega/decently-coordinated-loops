@@ -230,10 +230,16 @@ export function applyMergedFrontmatter(rawText: string, today: string): string {
   if (!match) throw new Error("no frontmatter block found");
   const [, open, block, close] = match;
 
+  const topLevelKeys = new Set(
+    block.split("\n").flatMap((line) => line.match(/^([a-z-]+):/)?.[1] ?? []),
+  );
   const seen = new Set<string>();
   const kept = block.split("\n").flatMap((line) => {
     const keyMatch = line.match(/^([a-z-]+):/);
     const key = keyMatch?.[1];
+    if (key === "owner" && !topLevelKeys.has("assignee")) {
+      return [line.replace(/^owner:/, "assignee:")];
+    }
     if (key === "awaiting") return [];
     if (key === "updated") {
       seen.add("updated");
