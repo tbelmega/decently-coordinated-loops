@@ -14,8 +14,12 @@ machine's harnesses to the DCL clone, then create or join a data repo.
 - **New**: no data repo exists yet → seed a fresh one.
 - **Join**: a data repo already exists (e.g. this is the user's second computer) →
   clone it from its git remote if not present, then wire this machine to it.
-  Join touches no data — it only fills in `package.json` / `.loops-version` if
-  missing and installs this machine's agent-config block.
+  Join fills in `package.json` / `.loops-version` if missing, adds any generated
+  script an older `package.json` lacks, and installs this machine's agent-config
+  block. It touches board data never, and `loops.json` only on an explicit reviewer
+  answer — `--reviewer <id>|none`, or the prompt when a human is present. An
+  unattended join, or one you decline, leaves it alone. That one write is
+  repo-global: it retargets the review gate for every clone, not just this machine.
 
 ## 2. Run the setup
 

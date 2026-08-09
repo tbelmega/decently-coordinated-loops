@@ -1,7 +1,7 @@
 // End-to-end tests for setup/seed.ts: new mode, idempotency, join mode, config
 // block, and the seeded repo passing check/sync (the spec's acceptance e2e).
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
@@ -300,6 +300,84 @@ describe("seed: bun run setup (reviewer activation after the first seed)", () =>
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("bogus");
     expect(readFileSync(join(dir, "loops.json"), "utf8")).toBe(before);
+  });
+
+  // R1-F1/R1-F6: the audience for `bun run setup` is repos that already exist. Join's
+  // writeNew never touches an existing package.json, so without this the command reaches
+  // only repos seeded after it was added — the exact inverse of who needs it.
+  test("join adds missing generated scripts to an existing package.json", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    const legacy = {
+      name: "data",
+      private: true,
+      scripts: {
+        check: 'bun "/somewhere/tools/cli-check.ts"',
+        board: "bun run tools/board/cli-board.ts",
+      },
+      customField: "kept",
+    };
+    writeFileSync(join(dir, "package.json"), `${JSON.stringify(legacy, null, 2)}\n`);
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness"]);
+    expect(result.status).toBe(0);
+
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    expect(pkg.scripts.setup).toContain("--join");
+    // user-defined script and field survive; an existing generated script is not rewritten
+    expect(pkg.scripts.board).toBe("bun run tools/board/cli-board.ts");
+    expect(pkg.customField).toBe("kept");
+    expect(pkg.scripts.check).toBe('bun "/somewhere/tools/cli-check.ts"');
+  });
+
+  test("join leaves an already-complete package.json byte-identical", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    const before = readFileSync(join(dir, "package.json"), "utf8");
+    const result = run(["run", SEED, dir, "--join", "--skip-harness"]);
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(dir, "package.json"), "utf8")).toBe(before);
+  });
+
+  // R1-F2: an argument rejected as invalid must not have already rewritten this
+  // machine's harness config on the way to rejecting it.
+  test("an invalid --reviewer is rejected before join performs any write", () => {
+    const original = seedNewRepo(["--skip-harness"]);
+    const clone = join(mkdtempSync(join(tmpdir(), "loops-e2e-")), "clone");
+    spawnSync("git", ["clone", "-q", original, clone], { encoding: "utf8" });
+    spawnSync("rm", [join(clone, "package.json"), join(clone, ".loops-version")], { encoding: "utf8" });
+
+    const result = run(["run", SEED, clone, "--join", "--skip-harness", "--reviewer", "bogus"]);
+    expect(result.status).toBe(2);
+    expect(existsSync(join(clone, "package.json"))).toBe(false);
+    expect(existsSync(join(clone, ".loops-version"))).toBe(false);
+  });
+
+  // R1-F5: assigning `.reviewer` onto an array lands a non-index property that
+  // JSON.stringify drops — the command would print success and persist nothing.
+  test.each([
+    ["an array review block", "[]"],
+    ["a string review block", '"codex"'],
+    ["a non-object config", "[]"],
+  ])("refuses to activate a reviewer against %s", (_label, value) => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    const text = value === "[]" && _label === "a non-object config"
+      ? "[]\n"
+      : `${JSON.stringify({ owner: "casey", review: JSON.parse(value) }, null, 2)}\n`;
+    writeFileSync(join(dir, "loops.json"), text);
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness", "--reviewer", "codex"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("review adapter: codex");
+    expect(readFileSync(join(dir, "loops.json"), "utf8")).toBe(text);
+  });
+
+  // R1-F3/R1-F7: loops.json holds the registry and review settings for every clone,
+  // so the replacement must never be observable half-written.
+  test("the reviewer write leaves no temp file behind", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    const result = run(["run", SEED, dir, "--join", "--skip-harness", "--reviewer", "codex"]);
+    expect(result.status).toBe(0);
+    expect(readdirSync(dir).filter((entry) => entry.includes("loops.json.tmp"))).toEqual([]);
+    expect(JSON.parse(readFileSync(join(dir, "loops.json"), "utf8")).review.reviewer).toBe("codex");
   });
 
   test("seed's closing note points at bun run setup, not a hand edit", () => {

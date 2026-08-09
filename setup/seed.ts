@@ -7,8 +7,10 @@
 //     the agent-config block into this machine's harness configs.
 //   - join (--join, or auto-detected when the target already has a BOARD.md):
 //     the target is an existing data repo (e.g. cloned onto a second machine).
-//     Touches no data — only fills in package.json / .loops-version if missing,
-//     refreshes this machine's config block, and offers to set the review adapter.
+//     Fills in package.json / .loops-version if missing, adds any generated script an
+//     older package.json lacks, and refreshes this machine's config block. Touches
+//     board data never, and loops.json only on an explicit reviewer answer — that one
+//     write is repo-global, so it retargets the review gate for every clone.
 //
 // Join is also what the seeded repo's `bun run setup` runs against itself, which is
 // the command five docs sites and cli-review's error message point at. Reviewer
@@ -16,7 +18,7 @@
 // per-machine override.
 //
 // Idempotent: existing files are never overwritten; re-running is safe.
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -88,6 +90,10 @@ function parseArgs(argv: string[]): Options {
     else usage();
   }
   if (!opts.targetDir) usage();
+  // Normalise here, not at the point of use: join installs the harness config block and
+  // fills package.json before it ever reaches the reviewer step, so validating later
+  // meant `--reviewer bogus` rewrote this machine's config on its way to exiting 2.
+  opts.reviewer = validateReviewer(opts.reviewer);
   return opts;
 }
 
@@ -133,7 +139,7 @@ async function promptIdentity(opts: Options): Promise<void> {
  * unattended run must get, since join is what automation invokes and a dispatcher
  * that inherited a TTY would otherwise block on the question forever. */
 async function promptReviewer(opts: Options, current?: string): Promise<string | undefined> {
-  if (opts.reviewer != null) return validateReviewer(opts.reviewer);
+  if (opts.reviewer != null) return opts.reviewer; // already normalised by parseArgs
   if (!process.stdin.isTTY) return undefined;
 
   const detected = detectReviewers();
@@ -163,20 +169,50 @@ async function promptReviewer(opts: Options, current?: string): Promise<string |
  * a file that already exists, which is precisely the case here, and round-tripping
  * through `LoopsConfig` would silently drop any key a hand edit or a newer version
  * added. Only the one field is touched. */
+/** True only for a plain object. An array passes `typeof x === "object"`, and assigning
+ * `.reviewer` to one lands a non-index property that JSON.stringify silently drops — the
+ * command would report success and persist nothing. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Replaces `path` via a temp file in the same directory plus a rename, so a reader
+ * never observes a truncated loops.json. Sync twin of tools/review/atomic-write.ts,
+ * inlined to keep setup/ from depending on tools/review/ and to match this file's
+ * all-sync style. */
+function writeFileAtomically(path: string, content: string): void {
+  const temporaryPath = `${path}.tmp-${process.pid}`;
+  try {
+    writeFileSync(temporaryPath, content);
+    renameSync(temporaryPath, path);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
 function applyReviewer(root: string, reviewer: string): void {
   const path = join(root, "loops.json");
-  let config: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    config = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     console.error(`cannot update ${path}: ${(error as Error).message}`);
     process.exit(1);
   }
-  const review = (config.review ?? {}) as Record<string, unknown>;
+  if (!isPlainObject(parsed)) {
+    console.error(`cannot update ${path}: top-level value is not a JSON object`);
+    process.exit(1);
+  }
+  const existing = parsed.review;
+  if (existing !== undefined && !isPlainObject(existing)) {
+    console.error(`cannot update ${path}: "review" is not a JSON object`);
+    process.exit(1);
+  }
+  const review = existing ?? {};
   if (reviewer) review.reviewer = reviewer;
   else delete review.reviewer;
-  config.review = review;
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+  parsed.review = review;
+  writeFileAtomically(path, `${JSON.stringify(parsed, null, 2)}\n`);
   console.log(
     reviewer
       ? `  review adapter: ${reviewer} (loops.json → review.reviewer; drive it per the loops-review skill)`
@@ -247,6 +283,39 @@ function packageJsonText(root: string): string {
   )}\n`;
 }
 
+/** Adds generated scripts that an existing package.json is missing, and nothing else.
+ *
+ * Every other join write is `writeNew`, which leaves an existing file alone — correct
+ * for data files, wrong for this one: a repo seeded before a script existed would never
+ * receive it, so a command the docs promise (`bun run setup` above all) fails on exactly
+ * the repos it was added for. Only absent keys are added: a customised script, a
+ * user-defined script, and every non-script field are left untouched. */
+function addMissingScripts(root: string): void {
+  const path = join(root, "package.json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    console.log(`  ! ${basename(path)} is not readable JSON (${(error as Error).message}) — left untouched`);
+    return;
+  }
+  if (!isPlainObject(parsed)) {
+    console.log(`  ! ${basename(path)} is not a JSON object — left untouched`);
+    return;
+  }
+  const generated = JSON.parse(packageJsonText(root)).scripts as Record<string, string>;
+  const scripts = isPlainObject(parsed.scripts) ? parsed.scripts : {};
+  const added = Object.keys(generated).filter((name) => scripts[name] === undefined);
+  if (!added.length) {
+    console.log(`  = ${basename(path)} exists — every generated script present`);
+    return;
+  }
+  for (const name of added) scripts[name] = generated[name]!;
+  parsed.scripts = scripts;
+  writeFileAtomically(path, `${JSON.stringify(parsed, null, 2)}\n`);
+  console.log(`  + ${basename(path)}: added ${added.join(", ")}`);
+}
+
 function installConfigBlock(opts: Options, root: string): void {
   if (opts.skipHarness) return;
   const owner = opts.owner ?? "the owner";
@@ -288,7 +357,8 @@ if (joinMode) {
       // no loops.json or unreadable — block falls back to "the owner"
     }
   }
-  writeNew(join(root, "package.json"), packageJsonText(root));
+  if (existsSync(join(root, "package.json"))) addMissingScripts(root);
+  else writeNew(join(root, "package.json"), packageJsonText(root));
   writeNew(join(root, ".loops-version"), `${dclCommit()}\n`);
   installConfigBlock(opts, root);
 
