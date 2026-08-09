@@ -101,7 +101,7 @@ current checkout and are exempt from this gate; everything else respects it.
 title: Short human title
 project: <name registered in PROJECTS.md>
 state: in-progress
-owner: <agent identity driving the item, e.g. harness-account>, or "-"
+assignee: <durable harness/account-or-slot lane driving the item>, or "-"
 autonomy: auto | supervised   # auto = the owner pre-approves unattended pickup
 next-actor: owner | agent     # whose move is it? if an agent can't proceed without
   the owner's input, the ball is in the owner's court, even pre-implementation
@@ -117,6 +117,9 @@ depends-on: [item-slug, ...]   # items whose LANDED output this one needs; omit 
   none. Mandatory for descriptive items (below)
 next-step: The single concrete next action. Mandatory — never leave stale.
 updated: YYYY-MM-DD
+execution:                    # optional last-recorded location; not liveness or a lock
+  host: <opaque host name>    # either child may be temporarily absent
+  worktree: <absolute Git worktree path on that host>
 links:
   spec: docs/specs/...        # omit keys that don't apply
   spec-branch: <pushed agent branch carrying an approved, not-yet-landed spec>
@@ -222,7 +225,7 @@ distributed lock**:
 
 - **A claim or state change is only real once pushed.** A rejected push means the
   world moved: `git pull --rebase`, re-read the affected item, re-decide. If your
-  claim survived, push again; if someone else's owner is on the item, take the next
+  claim survived, push again; if someone else's assignee is on the item, take the next
   candidate.
 - **Sync against fresh truth:** pull before running `bun run sync`; after any
   `pull --rebase`, re-run sync before pushing, so derived artifacts are regenerated
@@ -230,8 +233,15 @@ distributed lock**:
 - **`BOARD.md` conflicts are never hand-resolved.** Take either side, re-run sync,
   commit. Same for `ARCHIVE.md` rows.
 - **Item-file conflicts are real** (they are the source of truth) but rare by
-  design: one owner per item, other sessions only append log lines. Resolve them by
+  design: one assignee per item, other sessions only append log lines. Resolve them by
   reading, not regenerating.
+
+`assignee` is assignment, not execution identity: use an opaque harness plus account/slot
+lane, excluding model, host, worktree, and ephemeral session. Readers accept legacy
+item `owner:` as a fallback, but new and substantively updated items write only
+`assignee:`; carrying both keys is a schema error. `execution` is descriptive
+last-recorded location. It does not prove that the host or process is alive, and Git
+push atomicity remains the claim lock.
 
 ## Project registry
 

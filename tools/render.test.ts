@@ -25,7 +25,7 @@ describe("renderBoardMd", () => {
     expect(text).toContain("the loops-board skill");
     expect(text).toContain("the loops-pickup skill");
     expect(text).toContain(
-      "| Item | Project | State | Next-actor | Awaiting | Auto | Owner | Updated |"
+      "| Item | Project | State | Next-actor | Awaiting | Auto | Assignee | Updated |"
     );
   });
 
@@ -64,7 +64,7 @@ describe("renderBoardMd", () => {
     expect(lastAtlasIdx).toBeLessThan(firstOtherIdx);
   });
 
-  test("row format matches the schema: title link, project, state, next-actor, awaiting, auto, owner, updated", () => {
+  test("row format matches the schema: title link, project, state, next-actor, awaiting, auto, assignee, updated", () => {
     const row = text
       .split("\n")
       .find((l) => l.includes("atlas-ready-unblocked.md"));
@@ -86,7 +86,7 @@ describe("replaceActiveRow", () => {
     nextActor: "agent",
     awaiting: undefined,
     autonomy: "auto",
-    owner: "-",
+    assignee: "-",
     updated: "2026-07-10",
   };
 

@@ -13,6 +13,11 @@ export interface Links {
   headSha?: string;
 }
 
+export interface ExecutionLocation {
+  host?: string;
+  worktree?: string;
+}
+
 /** One item file under items/*.md, parsed. */
 export interface ItemFile {
   /** Filename without extension, e.g. "atlas-search-index". Also the depends-on target id. */
@@ -22,7 +27,14 @@ export interface ItemFile {
   title: string;
   project: string;
   state: string;
-  owner: string;
+  /** Durable harness/account-or-slot lane responsible for advancing the item. */
+  assignee: string;
+  /** Present only when frontmatter carries both `assignee` and legacy `owner`. */
+  legacyOwner?: string;
+  /** Last-recorded location of live work; descriptive, not a liveness signal. */
+  execution?: ExecutionLocation;
+  /** YAML-boundary violations retained for the schema validator. */
+  frontmatterErrors?: string[];
   /** "auto" | "supervised" | "-" (a few legacy items use "-") */
   autonomy: string;
   /** "owner" | "agent" */

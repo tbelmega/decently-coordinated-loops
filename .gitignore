@@ -5,3 +5,4 @@
 
 # Local review evidence (cli-review.ts ledgers)
 /.reviews/
+/.worktrees/

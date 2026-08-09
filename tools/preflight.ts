@@ -8,7 +8,7 @@ export interface BoardRow {
   nextActor: string;
   awaiting: string;
   auto: string;
-  owner: string;
+  assignee: string;
   updated: string;
 }
 
@@ -44,12 +44,12 @@ export function parseBoardRows(boardText: string): BoardRow[] {
     // `\[([^\]]+)\]` match. Instead take the outer pipes off and require exactly the
     // fixed column count; the first cell (title-link) is parsed separately below.
     const cells = trimmed.split("|").slice(1, -1).map((c) => c.trim());
-    // active rows: [link-cell, project, state, next-actor, awaiting, auto, owner, updated] = 8 cells
+    // active rows: [link-cell, project, state, next-actor, awaiting, auto, assignee, updated] = 8 cells
     if (cells.length !== 8) continue; // Done rows (3 cells), headers, separators, prose all skip here
     const linkCell = cells[0];
     const linkMatch = linkCell.match(/^\[(.*)\]\(([^)]+)\)$/);
     if (!linkMatch) continue;
-    const [, project, state, nextActor, awaiting, auto, owner, updated] = cells;
+    const [, project, state, nextActor, awaiting, auto, assignee, updated] = cells;
     rows.push({
       title: linkMatch[1].trim(),
       path: linkMatch[2].trim(),
@@ -58,7 +58,7 @@ export function parseBoardRows(boardText: string): BoardRow[] {
       nextActor,
       awaiting,
       auto,
-      owner,
+      assignee,
       updated,
     });
   }
@@ -90,7 +90,7 @@ export function runPreflight(boardText: string, items: ItemFile[]): PreflightRep
     cmp("next-actor", row.nextActor, item.nextActor);
     cmp("awaiting", row.awaiting, item.awaiting ?? "-");
     cmp("auto", row.auto, item.autonomy === "auto" ? "auto" : "-");
-    cmp("owner", row.owner, item.owner);
+    cmp("assignee", row.assignee, item.assignee);
     cmp("updated", row.updated, item.updated);
   }
 

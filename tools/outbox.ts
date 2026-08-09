@@ -27,7 +27,7 @@ export function appendOrphanRowEntry(outboxText: string, orphan: OrphanRow): str
   confirm it should be discarded. It has been dropped from the regenerated board so
   its data isn't lost silently; row was: project=${orphan.project}, state=${orphan.state},
   next-actor=${orphan.nextActor}, awaiting=${orphan.awaiting}, auto=${orphan.auto},
-  owner=${orphan.owner}, updated=${orphan.updated}.
+  assignee=${orphan.assignee}, updated=${orphan.updated}.
 > A:
 `;
 

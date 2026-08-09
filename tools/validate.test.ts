@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { parseItemFileText } from "./parse.ts";
 import type { ItemFile } from "./types.ts";
 import { findDuplicateSlugs, validateItem, validateItems } from "./validate.ts";
 
@@ -10,7 +11,7 @@ function item(overrides: Partial<ItemFile>): ItemFile {
     title: "X",
     project: "atlas",
     state: "in-progress",
-    owner: "-",
+    assignee: "-",
     autonomy: "auto",
     nextActor: "agent",
     dependsOn: [],
@@ -24,6 +25,69 @@ function item(overrides: Partial<ItemFile>): ItemFile {
 describe("validateItem", () => {
   test("accepts a fully canonical item", () => {
     expect(validateItem(item({}))).toEqual([]);
+  });
+
+  test("rejects simultaneous assignee and legacy owner fields", () => {
+    expect(validateItem(item({ assignee: "codex/default", legacyOwner: "claude-code/primary" }))).toEqual([
+      "assignee and legacy owner cannot both be present",
+    ]);
+  });
+
+  test("rejects a blank assignee", () => {
+    expect(validateItem(item({ assignee: "  " }))).toEqual([
+      "assignee must be '-' or a non-empty harness/account-or-slot lane",
+    ]);
+  });
+
+  test("rejects empty or blank execution locators", () => {
+    expect(validateItem(item({ execution: {} }))).toEqual([
+      "execution must include host or worktree",
+    ]);
+    expect(validateItem(item({ execution: { host: "  " } }))).toEqual([
+      "execution.host must be a non-empty string",
+    ]);
+    expect(validateItem(item({ execution: { worktree: "" } }))).toEqual([
+      "execution.worktree must be a non-empty string",
+    ]);
+  });
+
+  test("rejects a scalar or array execution value", () => {
+    for (const executionYaml of ["worker-one", "[worker-one, /srv/work/project]"]) {
+      const parsed = parseItemFileText("items/x.md", `---
+title: X
+project: atlas
+state: in-progress
+assignee: codex/default
+autonomy: auto
+next-actor: agent
+execution: ${executionYaml}
+next-step: Do the thing
+updated: 2026-08-09
+---
+`);
+      expect(validateItem(parsed)).toEqual(["execution must be a mapping"]);
+    }
+  });
+
+  test("rejects non-string execution children", () => {
+    const parsed = parseItemFileText("items/x.md", `---
+title: X
+project: atlas
+state: in-progress
+assignee: codex/default
+autonomy: auto
+next-actor: agent
+execution:
+  host: 42
+  worktree: false
+next-step: Do the thing
+updated: 2026-08-09
+---
+`);
+    expect(validateItem(parsed)).toEqual([
+      "execution.host must be a string",
+      "execution.worktree must be a string",
+    ]);
   });
 
   test("accepts every new canonical state", () => {

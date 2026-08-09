@@ -10,7 +10,7 @@ const orphan: OrphanRow = {
   nextActor: "owner",
   awaiting: "decide",
   auto: "-",
-  owner: "-",
+  assignee: "codex/default",
   updated: "2026-07-01",
 };
 
@@ -20,6 +20,7 @@ describe("appendOrphanRowEntry", () => {
     const result = appendOrphanRowEntry(outbox, orphan);
     expect(result).toContain("### 3 — question: orphan BOARD.md row with no item file");
     expect(result).toContain("items/does-not-exist.md");
+    expect(result).toContain("assignee=codex/default");
     expect(result.indexOf("### 3")).toBeGreaterThan(result.indexOf("### 2"));
   });
 

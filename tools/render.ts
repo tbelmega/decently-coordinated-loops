@@ -3,7 +3,7 @@ import type { LoopsConfig } from "./config.ts";
 import { makePriorityCompare } from "./priority.ts";
 import { targetFolder } from "./archive.ts";
 
-const ACTIVE_TABLE_HEADER = `| Item | Project | State | Next-actor | Awaiting | Auto | Owner | Updated |
+const ACTIVE_TABLE_HEADER = `| Item | Project | State | Next-actor | Awaiting | Auto | Assignee | Updated |
 | --- | --- | --- | --- | --- | --- | --- | --- |`;
 
 /** The "Priorities: ..." line, built from the configured ranking. Falls back to a
@@ -31,7 +31,7 @@ function auto(item: ItemFile): string {
 export function activeRow(item: ItemFile): string {
   return `| [${item.title}](${item.path}) | ${item.project} | ${item.state} | ${item.nextActor} | ${
     item.awaiting ?? "-"
-  } | ${auto(item)} | ${item.owner} | ${item.updated} |`;
+  } | ${auto(item)} | ${item.assignee} | ${item.updated} |`;
 }
 
 /** Replace the BOARD.md active-table row for `item` (matched by its item path) with

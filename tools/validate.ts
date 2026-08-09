@@ -39,9 +39,9 @@ export const CANONICAL_AWAITING = new Set([
 ]);
 
 /** The mandatory scalar frontmatter fields (loops-board schema), paired with the
- * frontmatter key name to report on. `owner` and `autonomy` are omitted deliberately:
- * parse.ts defaults both to "-", so they are never empty (and "-" is a valid owner /
- * autonomy sentinel). A blank required field is a broken item, not an enum typo, so it
+ * frontmatter key name to report on. `assignee` and `autonomy` are omitted deliberately:
+ * parse.ts defaults both to "-". Explicit blank assignee is checked separately below;
+ * "-" remains the valid unset sentinel. A blank required field is a broken item, not an enum typo, so it
  * is flagged with its own message instead of "'' is not canonical". */
 const REQUIRED_FIELDS: ReadonlyArray<{ key: string; get: (item: ItemFile) => string }> = [
   { key: "title", get: (item) => item.title },
@@ -58,6 +58,30 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: string; get: (item: ItemFile) => str
  * then skip empty values so a blank field isn't also flagged as "not canonical". */
 export function validateItem(item: ItemFile): string[] {
   const messages: string[] = [];
+
+  if (item.legacyOwner !== undefined) {
+    messages.push("assignee and legacy owner cannot both be present");
+  }
+
+  messages.push(...(item.frontmatterErrors ?? []));
+
+  if (item.assignee.trim() === "") {
+    messages.push("assignee must be '-' or a non-empty harness/account-or-slot lane");
+  }
+
+  if (item.execution !== undefined) {
+    const { host, worktree } = item.execution;
+    if (host === undefined && worktree === undefined) {
+      messages.push("execution must include host or worktree");
+    } else {
+      if (host !== undefined && host.trim() === "") {
+        messages.push("execution.host must be a non-empty string");
+      }
+      if (worktree !== undefined && worktree.trim() === "") {
+        messages.push("execution.worktree must be a non-empty string");
+      }
+    }
+  }
 
   for (const { key, get } of REQUIRED_FIELDS) {
     if (get(item).trim() === "") {

@@ -26,12 +26,101 @@ Body text.
     expect(item.title).toBe("Alpha needs approve");
     expect(item.project).toBe("alpha");
     expect(item.state).toBe("spec-filed");
+    expect(item).toMatchObject({ assignee: "-" });
     expect(item.nextActor).toBe("owner");
     expect(item.awaiting).toBe("approve");
     expect(item.updated).toBe("2026-07-01");
     expect(item.dependsOn).toEqual([]);
     // No `spec:` key in the frontmatter → absent, not "".
     expect(item.spec).toBeUndefined();
+  });
+
+  test("prefers the assignee field for new items", () => {
+    const text = `---
+title: "Assigned item"
+project: alpha
+state: in-progress
+assignee: codex/default
+autonomy: supervised
+next-actor: agent
+next-step: "Build it"
+updated: 2026-08-09
+---
+Body.
+`;
+    expect(parseItemFileText("items/assigned-item.md", text)).toMatchObject({
+      assignee: "codex/default",
+    });
+  });
+
+  test("retains the legacy owner value only when both assignment keys are present", () => {
+    const text = `---
+title: "Conflicting assignment"
+project: alpha
+state: in-progress
+assignee: codex/default
+owner: claude-code/primary
+autonomy: supervised
+next-actor: agent
+next-step: "Resolve the conflict"
+updated: 2026-08-09
+---
+Body.
+`;
+    expect(parseItemFileText("items/conflicting-assignment.md", text)).toMatchObject({
+      assignee: "codex/default",
+      legacyOwner: "claude-code/primary",
+    });
+  });
+
+  test("parses absent and partial execution locators", () => {
+    const absent = `---
+title: "No location"
+project: alpha
+state: idea
+assignee: "-"
+autonomy: supervised
+next-actor: agent
+next-step: "Wait"
+updated: 2026-08-09
+---
+`;
+    const hostOnly = absent.replace('title: "No location"', 'title: "Host selected"').replace(
+      "updated: 2026-08-09",
+      "execution:\n  host: worker-one\nupdated: 2026-08-09",
+    );
+    const worktreeOnly = absent.replace('title: "No location"', 'title: "Worktree selected"').replace(
+      "updated: 2026-08-09",
+      "execution:\n  worktree: /srv/work/project\nupdated: 2026-08-09",
+    );
+
+    expect(parseItemFileText("items/no-location.md", absent).execution).toBeUndefined();
+    expect(parseItemFileText("items/host-selected.md", hostOnly)).toMatchObject({
+      execution: { host: "worker-one" },
+    });
+    expect(parseItemFileText("items/worktree-selected.md", worktreeOnly)).toMatchObject({
+      execution: { worktree: "/srv/work/project" },
+    });
+  });
+
+  test("parses a complete execution locator", () => {
+    const text = `---
+title: "Located item"
+project: alpha
+state: in-progress
+assignee: codex/default
+autonomy: supervised
+next-actor: agent
+execution:
+  host: worker-one
+  worktree: /srv/work/project
+next-step: "Build it"
+updated: 2026-08-09
+---
+`;
+    expect(parseItemFileText("items/located-item.md", text)).toMatchObject({
+      execution: { host: "worker-one", worktree: "/srv/work/project" },
+    });
   });
 
   test("parses the owner's spec waiver", () => {

@@ -25,7 +25,7 @@ function item(overrides: Partial<ItemFile> & { slug: string; path: string }): It
     title: overrides.slug,
     project: "atlas",
     state: "tested",
-    owner: "-",
+    assignee: "-",
     autonomy: "auto",
     nextActor: "agent",
     dependsOn: [],

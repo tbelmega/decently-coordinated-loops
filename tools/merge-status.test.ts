@@ -20,7 +20,7 @@ function item(overrides: Partial<ItemFile> & { slug: string }): ItemFile {
     title: overrides.slug,
     project: "atlas",
     state: "implemented",
-    owner: "-",
+    assignee: "-",
     autonomy: "auto",
     nextActor: "owner",
     dependsOn: [],

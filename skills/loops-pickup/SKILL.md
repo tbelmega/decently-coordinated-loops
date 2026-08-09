@@ -144,18 +144,24 @@ Claiming applies to every tier: implementation, refinement, and cleanup (create 
 board item first if none exists).
 
 1. `git pull` in the data repo, re-read the item file (someone may have claimed it).
-2. Set `owner:` to your identity (harness + account/slot), state `in-progress`,
-   append a log line, sync/update the board row.
+2. Set `assignee:` to your durable harness + account/slot lane, set state
+   `in-progress`, and record the current host as `execution.host`. Exclude model,
+   worktree and session from `assignee`. Append a log line, sync/update the board row.
 3. Commit and push. A claim is only real once pushed (loops-board → Concurrency):
    - Push rejected because the remote advanced with unrelated updates:
      `git pull --rebase`, confirm your claim survived, push again.
-   - Your item's owner changed under you: another agent claimed it — take the next
+   - Your item's assignee changed under you: another agent claimed it — take the next
      candidate.
 
 ## 4. Execute
 
 - Follow the target repo's own agent rules (AGENTS.md/CLAUDE.md) and its
   `PROJECTS.md` entry for everything: worktree/branch policy, TDD, quality gate.
+- After resolving or creating the target checkout under those rules, record its
+  absolute path as `execution.worktree` and push that state update **before writing
+  implementation code**. Update the locator if work moves. It is last-recorded
+  location, not liveness; preserve it until the checkout can safely be reaped or the
+  item is deliberately abandoned.
 - **Documented permanent slots.** Resolve the worktree's persistent base branch and
   its active board items. With no unlanded item, work on the persistent branch and
   save its starting commit as `base-sha`. With one or two unlanded items, create

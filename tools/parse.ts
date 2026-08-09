@@ -3,6 +3,10 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { ItemFile, Links } from "./types.ts";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Pure: parse one item file's raw text into an ItemFile. `path` is the repo-relative
  * path to record on the result (e.g. "items/foo.md"); `slug` is derived from it. */
 export function parseItemFileText(path: string, text: string): ItemFile {
@@ -32,6 +36,31 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     }
   }
   const dependsOn = Array.isArray(fm["depends-on"]) ? (fm["depends-on"] as string[]) : [];
+  const hasAssignee = Object.hasOwn(fm, "assignee");
+  const hasLegacyOwner = Object.hasOwn(fm, "owner");
+  const assignee = String((hasAssignee ? fm.assignee : fm.owner) ?? "-");
+  const rawExecution = fm.execution;
+  const frontmatterErrors: string[] = [];
+  let execution: ItemFile["execution"];
+  if (rawExecution !== undefined) {
+    if (!isRecord(rawExecution)) {
+      frontmatterErrors.push("execution must be a mapping");
+    } else {
+      const location: NonNullable<ItemFile["execution"]> = {};
+      let knownChildPresent = false;
+      for (const key of ["host", "worktree"] as const) {
+        if (!Object.hasOwn(rawExecution, key)) continue;
+        knownChildPresent = true;
+        const value = rawExecution[key];
+        if (typeof value === "string") {
+          location[key] = value;
+        } else {
+          frontmatterErrors.push(`execution.${key} must be a string`);
+        }
+      }
+      if (!knownChildPresent || Object.keys(location).length > 0) execution = location;
+    }
+  }
 
   return {
     slug,
@@ -39,7 +68,10 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     title: String(fm.title ?? ""),
     project: String(fm.project ?? ""),
     state: String(fm.state ?? ""),
-    owner: String(fm.owner ?? "-"),
+    assignee,
+    legacyOwner: hasAssignee && hasLegacyOwner ? String(fm.owner ?? "") : undefined,
+    execution,
+    frontmatterErrors: frontmatterErrors.length > 0 ? frontmatterErrors : undefined,
     autonomy: String(fm.autonomy ?? "-"),
     nextActor: String(fm["next-actor"] ?? ""),
     awaiting: fm.awaiting != null ? String(fm.awaiting) : undefined,

@@ -5,7 +5,7 @@ import { runPreflight } from "./preflight.ts";
 
 const FIXTURES = join(import.meta.dir, "__fixtures__/items");
 
-const HEADER = `| Item | Project | State | Next-actor | Awaiting | Auto | Owner | Updated |
+const HEADER = `| Item | Project | State | Next-actor | Awaiting | Auto | Assignee | Updated |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 `;
 
@@ -37,6 +37,19 @@ describe("runPreflight", () => {
     expect(mismatch).toBeDefined();
     expect(mismatch!.boardValue).toBe("decide");
     expect(mismatch!.fileValue).toBe("approve");
+  });
+
+  test("reports an assignee mismatch by its canonical field name", () => {
+    const boardText =
+      HEADER +
+      "| [Alpha needs approve](items/alpha-needs-approve.md) | alpha | spec-filed | owner | approve | - | codex/default | 2026-07-01 |\n";
+    const report = runPreflight(boardText, items);
+    expect(report.mismatches).toContainEqual({
+      slug: "alpha-needs-approve",
+      field: "assignee",
+      boardValue: "codex/default",
+      fileValue: "-",
+    });
   });
 
   test("no mismatch when board row matches the item file exactly", () => {

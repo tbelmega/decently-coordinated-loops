@@ -5,5 +5,5 @@ Unattended pickup: the loops-pickup skill.
 
 Priorities: most recent activity first.
 
-| Item | Project | State | Next-actor | Awaiting | Auto | Owner | Updated |
+| Item | Project | State | Next-actor | Awaiting | Auto | Assignee | Updated |
 | --- | --- | --- | --- | --- | --- | --- | --- |

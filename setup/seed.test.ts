@@ -71,6 +71,10 @@ describe("seed: new mode", () => {
     const projects = readFileSync(join(dir, "PROJECTS.md"), "utf8");
     expect(projects).toContain("## atlas");
 
+    const board = readFileSync(join(dir, "BOARD.md"), "utf8");
+    expect(board).toContain("| Auto | Assignee | Updated |");
+    expect(board).not.toContain("| Auto | Owner | Updated |");
+
     // git repo with the initial commit
     const log = spawnSync("git", ["-C", dir, "log", "--oneline"], { encoding: "utf8" });
     expect(log.stdout).toContain("Seed loops data repo");
