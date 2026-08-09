@@ -408,6 +408,30 @@ Context paragraph.
     expect(transitioned).toMatch(/^owner: agent-x$/m);
   });
 
+  test("migrates quoted legacy owner keys and preserves quoted conflicts", () => {
+    for (const quotedOwner of ['"owner": agent-x', "'owner' : agent-x"]) {
+      const transitioned = applyMergedFrontmatter(RAW.replace("owner: agent-x", quotedOwner), "2026-07-10");
+      expect(transitioned).toMatch(/^assignee: agent-x$/m);
+      expect(transitioned).not.toMatch(/^["']owner["']\s*:/m);
+    }
+
+    const conflicting = RAW.replace("owner: agent-x", '"assignee": codex/default\nowner: agent-x');
+    const transitioned = applyMergedFrontmatter(conflicting, "2026-07-10");
+    expect(transitioned).toMatch(/^"assignee": codex\/default$/m);
+    expect(transitioned).toMatch(/^owner: agent-x$/m);
+  });
+
+  test("rewrites a consistently indented root mapping without touching nested keys", () => {
+    const indented = RAW.replace(/^([^\n-].*)$/gm, "  $1").replace(
+      "    pr: https://github.com/acme-org/atlas/pull/44",
+      "    state: preserved-nested-value",
+    );
+    const transitioned = applyMergedFrontmatter(indented, "2026-07-10");
+    expect(transitioned).toMatch(/^  state: merged$/m);
+    expect(transitioned).toMatch(/^  assignee: agent-x$/m);
+    expect(transitioned).toMatch(/^    state: preserved-nested-value$/m);
+  });
+
   test("preserves the body and the links block verbatim", () => {
     expect(result).toContain("## Log");
     expect(result).toContain("- 2026-07-02: PR filed.");

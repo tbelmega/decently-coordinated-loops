@@ -219,6 +219,22 @@ const MERGED_FIELD_VALUES: Record<string, string> = {
   "next-step": '"Verify per the project verify gate, then flip to tested"',
 };
 
+interface ScalarKeyLine {
+  indent: string;
+  key: string;
+  valueStart: number;
+}
+
+function parseScalarKeyLine(line: string): ScalarKeyLine | undefined {
+  const match = line.match(/^(\s*)(?:(["'])([a-z-]+)\2|([a-z-]+))\s*:/);
+  if (!match) return undefined;
+  return {
+    indent: match[1],
+    key: match[3] ?? match[4],
+    valueStart: match[0].length,
+  };
+}
+
 /** Pure: rewrite one item file's frontmatter to record an observed merge, writing
  *  the auto-set fields (state/next-actor/autonomy/next-step), dropping `awaiting`,
  *  and bumping `updated` to `today`. Every other line — the body, the `links:`
@@ -230,24 +246,31 @@ export function applyMergedFrontmatter(rawText: string, today: string): string {
   if (!match) throw new Error("no frontmatter block found");
   const [, open, block, close] = match;
 
+  const lines = block.split("\n");
+  const parsedLines = lines.map(parseScalarKeyLine);
+  const indentLengths = parsedLines.flatMap((entry) => entry?.indent.length ?? []);
+  const rootIndentLength = indentLengths.length > 0 ? Math.min(...indentLengths) : 0;
+  const rootIndent = " ".repeat(rootIndentLength);
   const topLevelKeys = new Set(
-    block.split("\n").flatMap((line) => line.match(/^([a-z-]+):/)?.[1] ?? []),
+    parsedLines.flatMap((entry) => entry && entry.indent.length === rootIndentLength ? [entry.key] : []),
   );
   const seen = new Set<string>();
-  const kept = block.split("\n").flatMap((line) => {
-    const keyMatch = line.match(/^([a-z-]+):/);
-    const key = keyMatch?.[1];
+  const kept = lines.flatMap((line, index) => {
+    const parsed = parsedLines[index];
+    const topLevel = parsed?.indent.length === rootIndentLength ? parsed : undefined;
+    if (!topLevel) return [line];
+    const { key } = topLevel;
     if (key === "owner" && !topLevelKeys.has("assignee")) {
-      return [line.replace(/^owner:/, "assignee:")];
+      return [`${topLevel.indent}assignee:${line.slice(topLevel.valueStart)}`];
     }
     if (key === "awaiting") return [];
     if (key === "updated") {
       seen.add("updated");
-      return [`updated: ${today}`];
+      return [`${topLevel.indent}updated: ${today}`];
     }
     if (key && key in MERGED_FIELD_VALUES) {
       seen.add(key);
-      return [`${key}: ${MERGED_FIELD_VALUES[key]}`];
+      return [`${topLevel.indent}${key}: ${MERGED_FIELD_VALUES[key]}`];
     }
     return [line];
   });
@@ -255,9 +278,9 @@ export function applyMergedFrontmatter(rawText: string, today: string): string {
   // Insert any target key the file happened to be missing, so the transition is
   // complete even for an unusually-shaped item file.
   for (const [key, value] of Object.entries(MERGED_FIELD_VALUES)) {
-    if (!seen.has(key)) kept.push(`${key}: ${value}`);
+    if (!seen.has(key)) kept.push(`${rootIndent}${key}: ${value}`);
   }
-  if (!seen.has("updated")) kept.push(`updated: ${today}`);
+  if (!seen.has("updated")) kept.push(`${rootIndent}updated: ${today}`);
 
   return `${open}${kept.join("\n")}${close}${rawText.slice(match[0].length)}`;
 }
