@@ -39,6 +39,27 @@ describe("validateItem", () => {
     ]);
   });
 
+  test("rejects null and non-string assignment values at the YAML boundary", () => {
+    for (const key of ["assignee", "owner"] as const) {
+      for (const value of ["null", "{ lane: codex/default }", "[codex/default]", "false", "42"]) {
+        const parsed = parseItemFileText("items/x.md", `---
+title: X
+project: atlas
+state: in-progress
+${key}: ${value}
+autonomy: auto
+next-actor: agent
+next-step: Do the thing
+updated: 2026-08-09
+---
+`);
+        expect(validateItem(parsed)).toEqual([
+          `${key === "owner" ? "legacy owner" : "assignee"} must be a string`,
+        ]);
+      }
+    }
+  });
+
   test("rejects empty or blank execution locators", () => {
     expect(validateItem(item({ execution: {} }))).toEqual([
       "execution must include host or worktree",

@@ -38,9 +38,22 @@ export function parseItemFileText(path: string, text: string): ItemFile {
   const dependsOn = Array.isArray(fm["depends-on"]) ? (fm["depends-on"] as string[]) : [];
   const hasAssignee = Object.hasOwn(fm, "assignee");
   const hasLegacyOwner = Object.hasOwn(fm, "owner");
-  const assignee = String((hasAssignee ? fm.assignee : fm.owner) ?? "-");
-  const rawExecution = fm.execution;
   const frontmatterErrors: string[] = [];
+  const assignmentKey = hasAssignee ? "assignee" : hasLegacyOwner ? "owner" : undefined;
+  const rawAssignment = assignmentKey === undefined ? undefined : fm[assignmentKey];
+  let assignee = "-";
+  if (assignmentKey !== undefined) {
+    if (typeof rawAssignment === "string") {
+      assignee = rawAssignment;
+    } else {
+      frontmatterErrors.push(`${assignmentKey === "owner" ? "legacy owner" : "assignee"} must be a string`);
+    }
+  }
+  if (hasAssignee && hasLegacyOwner && typeof fm.owner !== "string") {
+    frontmatterErrors.push("legacy owner must be a string");
+  }
+
+  const rawExecution = fm.execution;
   let execution: ItemFile["execution"];
   if (rawExecution !== undefined) {
     if (!isRecord(rawExecution)) {
@@ -69,7 +82,7 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     project: String(fm.project ?? ""),
     state: String(fm.state ?? ""),
     assignee,
-    legacyOwner: hasAssignee && hasLegacyOwner ? String(fm.owner ?? "") : undefined,
+    legacyOwner: hasAssignee && hasLegacyOwner ? (typeof fm.owner === "string" ? fm.owner : "") : undefined,
     execution,
     frontmatterErrors: frontmatterErrors.length > 0 ? frontmatterErrors : undefined,
     autonomy: String(fm.autonomy ?? "-"),

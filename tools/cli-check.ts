@@ -24,7 +24,7 @@ const archiveItems = loadArchiveDir(join(ROOT, "archive"));
 const report = runPreflight(boardText, items);
 printPreflightReport(report);
 
-const anomalies = validateItems([...items, ...forDeliveryItems]);
+const anomalies = validateItems([...items, ...forDeliveryItems, ...archiveItems]);
 printValidationReport(anomalies);
 
 // Duplicate slugs across items/, for-delivery/, and archive/: a slug is a file

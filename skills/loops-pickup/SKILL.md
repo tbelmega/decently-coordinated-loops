@@ -79,7 +79,8 @@ An item is eligible for unattended pickup when **either**:
 
 - its item file says `autonomy: auto` — the owner's explicit pre-approval — **or**
 - no `auto` item exists and the item self-qualifies on ALL of:
-  1. state is `spec-filed` with the spec committed, or `in-progress` with owner `-`
+  1. state is `spec-filed` with the spec committed, or `in-progress` with assignee `-`
+     (including a legacy `owner: "-"` normalized through the compatibility fallback)
      and an unambiguous next-step;
   2. the spec is concrete enough that you would not need to invent product
      decisions (states, copy, API shapes are specified or derivable from existing

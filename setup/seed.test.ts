@@ -156,6 +156,30 @@ Test item.
     const again = run(["run", join(DCL_HOME, "tools", "cli-sync.ts")], { cwd: dir });
     expect(again.status).toBe(0);
   });
+
+  test("check rejects an archived item with conflicting assignment keys", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    mkdirSync(join(dir, "archive"), { recursive: true });
+    writeFileSync(
+      join(dir, "archive", "atlas-conflicting-assignment.md"),
+      `---
+title: Conflicting archived assignment
+project: atlas
+state: accepted
+assignee: codex/default
+owner: claude-code/primary
+autonomy: auto
+next-actor: owner
+next-step: none
+updated: 2026-08-09
+---
+`,
+    );
+
+    const check = run(["run", join(DCL_HOME, "tools", "cli-check.ts")], { cwd: dir });
+    expect(check.status).toBe(1);
+    expect(check.stdout).toContain("assignee and legacy owner cannot both be present");
+  });
 });
 
 describe("seed: join mode", () => {
