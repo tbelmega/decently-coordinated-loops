@@ -3,6 +3,7 @@
 // everything below is unit-testable without network or filesystem access.
 import type { ItemFile } from "./types.ts";
 import type { LoopsConfig } from "./config.ts";
+import { isMap, isScalar, parseDocument } from "yaml";
 
 export type PrState = "MERGED" | "OPEN" | "CLOSED";
 
@@ -225,14 +226,40 @@ interface ScalarKeyLine {
   valueStart: number;
 }
 
-function parseScalarKeyLine(line: string): ScalarKeyLine | undefined {
-  const match = line.match(/^(\s*)(?:(["'])([a-z-]+)\2|([a-z-]+))\s*:/);
-  if (!match) return undefined;
-  return {
-    indent: match[1],
-    key: match[3] ?? match[4],
-    valueStart: match[0].length,
-  };
+interface ScalarKeySource {
+  key: string;
+  start: number;
+  end: number;
+}
+
+function parseTopLevelScalarKeys(block: string): ScalarKeySource[] {
+  const document = parseDocument(block, { uniqueKeys: false });
+  if (!isMap(document.contents)) return [];
+  return document.contents.items.flatMap((pair) => {
+    if (!isScalar(pair.key) || typeof pair.key.value !== "string" || !pair.key.range) return [];
+    return [{ key: pair.key.value, start: pair.key.range[0], end: pair.key.range[1] }];
+  });
+}
+
+function parseTopLevelScalarKeyLines(block: string, keys: ScalarKeySource[]): Array<ScalarKeyLine | undefined> {
+  const lines = block.split("\n");
+  const parsedLines: Array<ScalarKeyLine | undefined> = lines.map(() => undefined);
+
+  for (const { key, start: keyStart, end: keyEnd } of keys) {
+    const lineStart = block.lastIndexOf("\n", keyStart - 1) + 1;
+    const nextNewline = block.indexOf("\n", keyEnd);
+    const lineEnd = nextNewline === -1 ? block.length : nextNewline;
+    const colon = block.indexOf(":", keyEnd);
+    if (colon === -1 || colon > lineEnd) continue;
+    const lineIndex = block.slice(0, lineStart).split("\n").length - 1;
+    parsedLines[lineIndex] = {
+      indent: block.slice(lineStart, keyStart),
+      key,
+      valueStart: colon - lineStart + 1,
+    };
+  }
+
+  return parsedLines;
 }
 
 /** Pure: rewrite one item file's frontmatter to record an observed merge, writing
@@ -244,25 +271,33 @@ function parseScalarKeyLine(line: string): ScalarKeyLine | undefined {
 export function applyMergedFrontmatter(rawText: string, today: string): string {
   const match = rawText.match(/^(---\n)([\s\S]*?)(\n---)/);
   if (!match) throw new Error("no frontmatter block found");
-  const [, open, block, close] = match;
+  const [, open, originalBlock, close] = match;
+
+  const originalKeys = parseTopLevelScalarKeys(originalBlock);
+  const owner = originalKeys.find(({ key }) => key === "owner");
+  const hasAssignee = originalKeys.some(({ key }) => key === "assignee");
+  let block = originalBlock;
+  if (owner && !hasAssignee) {
+    const nextNewline = originalBlock.indexOf("\n", owner.end);
+    const lineEnd = nextNewline === -1 ? originalBlock.length : nextNewline;
+    const colon = originalBlock.indexOf(":", owner.end);
+    const sameLineColon = colon !== -1 && colon <= lineEnd ? colon : undefined;
+    const replacedThrough = sameLineColon === undefined ? owner.end : sameLineColon + 1;
+    const replacement = sameLineColon === undefined ? "assignee" : "assignee:";
+    block = `${originalBlock.slice(0, owner.start)}${replacement}${originalBlock.slice(replacedThrough)}`;
+  }
 
   const lines = block.split("\n");
-  const parsedLines = lines.map(parseScalarKeyLine);
+  const parsedLines = parseTopLevelScalarKeyLines(block, parseTopLevelScalarKeys(block));
   const indentLengths = parsedLines.flatMap((entry) => entry?.indent.length ?? []);
   const rootIndentLength = indentLengths.length > 0 ? Math.min(...indentLengths) : 0;
   const rootIndent = " ".repeat(rootIndentLength);
-  const topLevelKeys = new Set(
-    parsedLines.flatMap((entry) => entry && entry.indent.length === rootIndentLength ? [entry.key] : []),
-  );
   const seen = new Set<string>();
   const kept = lines.flatMap((line, index) => {
     const parsed = parsedLines[index];
     const topLevel = parsed?.indent.length === rootIndentLength ? parsed : undefined;
     if (!topLevel) return [line];
     const { key } = topLevel;
-    if (key === "owner" && !topLevelKeys.has("assignee")) {
-      return [`${topLevel.indent}assignee:${line.slice(topLevel.valueStart)}`];
-    }
     if (key === "awaiting") return [];
     if (key === "updated") {
       seen.add("updated");

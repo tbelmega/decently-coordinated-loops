@@ -421,6 +421,37 @@ Context paragraph.
     expect(transitioned).toMatch(/^owner: agent-x$/m);
   });
 
+  test("migrates YAML-escaped legacy owner keys", () => {
+    for (const escapedOwner of ['"own\\u0065r": agent-x', '"\\x6fwner": agent-x']) {
+      const transitioned = applyMergedFrontmatter(RAW.replace("owner: agent-x", escapedOwner), "2026-07-10");
+      expect(transitioned).toMatch(/^assignee: agent-x$/m);
+      expect(transitioned).not.toContain(escapedOwner);
+    }
+  });
+
+  test("preserves YAML-escaped assignee conflicts without writing duplicate keys", () => {
+    for (const escapedAssignee of ['"ass\\u0069gnee": codex/default', '"\\x61ssignee": codex/default']) {
+      const conflicting = RAW.replace("owner: agent-x", `${escapedAssignee}\nowner: agent-x`);
+      const transitioned = applyMergedFrontmatter(conflicting, "2026-07-10");
+      expect(transitioned).toContain(escapedAssignee);
+      expect(transitioned).toMatch(/^owner: agent-x$/m);
+      expect(transitioned).not.toMatch(/^assignee: agent-x$/m);
+    }
+  });
+
+  test("migrates assignment keys written with explicit YAML mapping syntax", () => {
+    const explicitOwner = RAW.replace("owner: agent-x", '? "own\\u0065r"\n: agent-x');
+    const migrated = applyMergedFrontmatter(explicitOwner, "2026-07-10");
+    expect(migrated).toContain("? assignee\n: agent-x");
+    expect(migrated).not.toContain("own\\u0065r");
+
+    const conflict = RAW.replace("owner: agent-x", '? "ass\\u0069gnee"\n: codex/default\nowner: agent-x');
+    const preserved = applyMergedFrontmatter(conflict, "2026-07-10");
+    expect(preserved).toContain('? "ass\\u0069gnee"\n: codex/default');
+    expect(preserved).toMatch(/^owner: agent-x$/m);
+    expect(preserved).not.toMatch(/^assignee: agent-x$/m);
+  });
+
   test("rewrites a consistently indented root mapping without touching nested keys", () => {
     const indented = RAW.replace(/^([^\n-].*)$/gm, "  $1").replace(
       "    pr: https://github.com/acme-org/atlas/pull/44",
