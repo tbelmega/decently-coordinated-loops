@@ -411,7 +411,7 @@ Context paragraph.
   test("migrates quoted legacy owner keys and preserves quoted conflicts", () => {
     for (const quotedOwner of ['"owner": agent-x', "'owner' : agent-x"]) {
       const transitioned = applyMergedFrontmatter(RAW.replace("owner: agent-x", quotedOwner), "2026-07-10");
-      expect(transitioned).toMatch(/^assignee: agent-x$/m);
+      expect(transitioned).toMatch(/^assignee\s*: agent-x$/m);
       expect(transitioned).not.toMatch(/^["']owner["']\s*:/m);
     }
 
@@ -450,6 +450,10 @@ Context paragraph.
     expect(preserved).toContain('? "ass\\u0069gnee"\n: codex/default');
     expect(preserved).toMatch(/^owner: agent-x$/m);
     expect(preserved).not.toMatch(/^assignee: agent-x$/m);
+
+    const commentedOwner = RAW.replace("owner: agent-x", '? "own\\u0065r" # lane: legacy\n: agent-x');
+    const commentPreserved = applyMergedFrontmatter(commentedOwner, "2026-07-10");
+    expect(commentPreserved).toContain("? assignee # lane: legacy\n: agent-x");
   });
 
   test("rewrites a consistently indented root mapping without touching nested keys", () => {

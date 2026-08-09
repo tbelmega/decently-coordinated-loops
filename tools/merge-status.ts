@@ -278,13 +278,7 @@ export function applyMergedFrontmatter(rawText: string, today: string): string {
   const hasAssignee = originalKeys.some(({ key }) => key === "assignee");
   let block = originalBlock;
   if (owner && !hasAssignee) {
-    const nextNewline = originalBlock.indexOf("\n", owner.end);
-    const lineEnd = nextNewline === -1 ? originalBlock.length : nextNewline;
-    const colon = originalBlock.indexOf(":", owner.end);
-    const sameLineColon = colon !== -1 && colon <= lineEnd ? colon : undefined;
-    const replacedThrough = sameLineColon === undefined ? owner.end : sameLineColon + 1;
-    const replacement = sameLineColon === undefined ? "assignee" : "assignee:";
-    block = `${originalBlock.slice(0, owner.start)}${replacement}${originalBlock.slice(replacedThrough)}`;
+    block = `${originalBlock.slice(0, owner.start)}assignee${originalBlock.slice(owner.end)}`;
   }
 
   const lines = block.split("\n");
