@@ -25,6 +25,8 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 - `bun run landed` — check which items' work has landed on the integration branch.
 - `bun run ready` — the dependency gate: which items' `depends-on` targets are satisfied.
 - `bun run restamp` — advance `.loops-version` after reviewing a DCL upgrade.
+- `bun run setup` — wire this machine to this repo: refresh the harness config block and
+  set the review adapter. Safe to re-run; run it on every machine that joins.
 
 ## Local code review
 

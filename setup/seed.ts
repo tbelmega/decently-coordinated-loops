@@ -7,8 +7,13 @@
 //     the agent-config block into this machine's harness configs.
 //   - join (--join, or auto-detected when the target already has a BOARD.md):
 //     the target is an existing data repo (e.g. cloned onto a second machine).
-//     Touches no data — only fills in package.json / .loops-version if missing
-//     and refreshes this machine's config block.
+//     Touches no data — only fills in package.json / .loops-version if missing,
+//     refreshes this machine's config block, and offers to set the review adapter.
+//
+// Join is also what the seeded repo's `bun run setup` runs against itself, which is
+// the command five docs sites and cli-review's error message point at. Reviewer
+// choice is repo-global (loops.json is committed); `cli-review --reviewer` is the
+// per-machine override.
 //
 // Idempotent: existing files are never overwritten; re-running is safe.
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -86,7 +91,21 @@ function parseArgs(argv: string[]): Options {
   return opts;
 }
 
-async function promptMissing(opts: Options): Promise<void> {
+/** Normalises `--reviewer`: a bundled adapter id, or "" for none. Exits on anything
+ * else so a typo is never written into loops.json as a silently dead reviewer. */
+function validateReviewer(reviewer: string | undefined): string | undefined {
+  if (reviewer == null) return undefined;
+  const value = reviewer.trim();
+  if (value === "" || value === "none") return "";
+  if (!REVIEWERS.some((entry) => entry.id === value)) {
+    console.error(`--reviewer must be one of ${REVIEWERS.map((entry) => entry.id).join(", ")} or none (got "${value}")`);
+    process.exit(2);
+  }
+  return value;
+}
+
+/** New mode only: the identity questions that shape a repo being created. */
+async function promptIdentity(opts: Options): Promise<void> {
   if (opts.owner) return;
   if (!process.stdin.isTTY) {
     console.error("missing --owner (required when not running interactively)");
@@ -102,27 +121,67 @@ async function promptMissing(opts: Options): Promise<void> {
     opts.projects =
       (await rl.question("Initial projects as name=path, comma-separated (or empty): ")).trim();
   }
-  if (opts.reviewer == null) {
-    const detected = detectReviewers();
-    if (detected.length) {
-      const answer = (
-        await rl.question(
-          `Activate a local code-review adapter? A reviewer runs read-only and drives\n` +
-            `the loops-review loop for finished changes. Detected: ${detected.join(", ")}.\n` +
-            `Enter one or 'none' [none]: `,
-        )
-      ).trim();
-      opts.reviewer = answer && answer !== "none" ? answer : "";
-    } else {
-      console.log("no supported review CLI (codex/claude/cursor-agent) detected — skipping review activation");
-      opts.reviewer = "";
-    }
-  }
   rl.close();
   if (!opts.owner) {
     console.error("owner name is required");
     process.exit(2);
   }
+}
+
+/** Both modes: resolve the review adapter, prompting only when there is a human to
+ * ask. Returns undefined for "leave whatever is configured alone" — the answer an
+ * unattended run must get, since join is what automation invokes and a dispatcher
+ * that inherited a TTY would otherwise block on the question forever. */
+async function promptReviewer(opts: Options, current?: string): Promise<string | undefined> {
+  if (opts.reviewer != null) return validateReviewer(opts.reviewer);
+  if (!process.stdin.isTTY) return undefined;
+
+  const detected = detectReviewers();
+  if (!detected.length) {
+    console.log("no supported review CLI (codex/claude/cursor-agent) detected — skipping review activation");
+    return current ? undefined : "";
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (
+    await rl.question(
+      `Activate a local code-review adapter? A reviewer runs read-only and drives\n` +
+        `the loops-review loop for finished changes. Detected: ${detected.join(", ")}.\n` +
+        (current
+          ? `Currently: ${current}. Enter one, 'none', or empty to keep [${current}]: `
+          : `Enter one or 'none' [none]: `),
+    )
+  ).trim();
+  rl.close();
+  if (!answer) return current ? undefined : "";
+  return validateReviewer(answer);
+}
+
+/** Sets (or clears) `review.reviewer` in an existing loops.json.
+ *
+ * Deliberately a raw read-merge-write rather than `writeNew` or the typed loader in
+ * tools/config.ts, unlike every neighbouring write in join mode: `writeNew` no-ops on
+ * a file that already exists, which is precisely the case here, and round-tripping
+ * through `LoopsConfig` would silently drop any key a hand edit or a newer version
+ * added. Only the one field is touched. */
+function applyReviewer(root: string, reviewer: string): void {
+  const path = join(root, "loops.json");
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    console.error(`cannot update ${path}: ${(error as Error).message}`);
+    process.exit(1);
+  }
+  const review = (config.review ?? {}) as Record<string, unknown>;
+  if (reviewer) review.reviewer = reviewer;
+  else delete review.reviewer;
+  config.review = review;
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+  console.log(
+    reviewer
+      ? `  review adapter: ${reviewer} (loops.json → review.reviewer; drive it per the loops-review skill)`
+      : "  review adapter: none",
+  );
 }
 
 function parseProjects(spec: string | undefined): Array<{ name: string; repo: string }> {
@@ -177,6 +236,10 @@ function packageJsonText(root: string): string {
         landed: scriptFor("cli-landed"),
         ready: scriptFor("cli-ready"),
         restamp: scriptFor("cli-restamp"),
+        // Join mode against this repo: refresh this machine's harness config and set
+        // the review adapter. `.` is safe — bun and npm both run scripts from the
+        // package.json directory, whatever the caller's cwd.
+        setup: `bun "\${DCL_HOME:-${DCL_HOME}}/setup/seed.ts" --join .`,
       },
     },
     null,
@@ -228,6 +291,20 @@ if (joinMode) {
   writeNew(join(root, "package.json"), packageJsonText(root));
   writeNew(join(root, ".loops-version"), `${dclCommit()}\n`);
   installConfigBlock(opts, root);
+
+  // The one data field join may change, and only on an explicit answer. Before this,
+  // the reviewer prompt was reachable only during the first seed, so a joining machine
+  // — and anyone who once answered "none" — had no route back but a hand edit.
+  let current: string | undefined;
+  try {
+    const config = JSON.parse(readFileSync(join(root, "loops.json"), "utf8"));
+    if (typeof config.review?.reviewer === "string") current = config.review.reviewer;
+  } catch {
+    // no loops.json or unreadable — treated as "nothing configured"
+  }
+  const chosen = await promptReviewer(opts, current);
+  if (chosen != null && chosen !== (current ?? "")) applyReviewer(root, chosen);
+
   console.log("join complete.");
   process.exit(0);
 }
@@ -243,15 +320,11 @@ if (existsSync(root) && readdirSync(root).length > 0) {
   process.exit(2);
 }
 
-await promptMissing(opts);
+await promptIdentity(opts);
 const owner = opts.owner!;
 const branch = opts.branch ?? "master";
 const projects = parseProjects(opts.projects);
-const reviewer = (opts.reviewer ?? "").trim();
-if (reviewer && !REVIEWERS.some((entry) => entry.id === reviewer)) {
-  console.error(`--reviewer must be one of ${REVIEWERS.map((entry) => entry.id).join(", ")} (got "${reviewer}")`);
-  process.exit(2);
-}
+const reviewer = (await promptReviewer(opts)) ?? "";
 
 console.log(`seeding new data repo at ${root}`);
 mkdirSync(root, { recursive: true });
@@ -339,7 +412,7 @@ if (inited) {
 console.log(
   reviewer
     ? `  review adapter: ${reviewer} (loops.json → review.reviewer; drive it per the loops-review skill)`
-    : `  review adapter: none — activate later by setting review.reviewer in loops.json (see loops-review)`,
+    : `  review adapter: none — activate later with \`bun run setup\` (see loops-review)`,
 );
 
 console.log(`

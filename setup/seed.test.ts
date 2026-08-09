@@ -206,6 +206,110 @@ describe("seed: join mode", () => {
   });
 });
 
+// `bun run setup` is join mode aimed at the repo it lives in. Five docs sites plus
+// cli-review's error message promise this command; before it existed, the reviewer
+// prompt was reachable only during the very first seed, so a second machine — and
+// anyone who answered "none" — had no way to it but hand-editing loops.json.
+describe("seed: bun run setup (reviewer activation after the first seed)", () => {
+  const readConfig = (dir: string) => JSON.parse(readFileSync(join(dir, "loops.json"), "utf8"));
+
+  test("the seeded package.json exposes setup as join against its own directory", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    expect(pkg.scripts.setup).toContain("seed.ts");
+    expect(pkg.scripts.setup).toContain("--join");
+    // `.` is safe: both bun and npm run scripts from the package.json directory.
+    expect(pkg.scripts.setup.trimEnd().endsWith(".")).toBe(true);
+  });
+
+  test("running the generated setup script activates a reviewer", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    const result = run(["run", "setup", "--", "--reviewer", "codex", "--skip-harness"], { cwd: dir });
+    expect(result.status).toBe(0);
+    expect(readConfig(dir).review.reviewer).toBe("codex");
+  });
+
+  test("join sets review.reviewer on an already-seeded repo", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    expect(readConfig(dir).review.reviewer).toBeUndefined();
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness", "--reviewer", "claude"]);
+    expect(result.status).toBe(0);
+    expect(readConfig(dir).review.reviewer).toBe("claude");
+  });
+
+  test("join changes an already-set reviewer", () => {
+    const dir = seedNewRepo(["--skip-harness", "--reviewer", "codex"]);
+    expect(readConfig(dir).review.reviewer).toBe("codex");
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness", "--reviewer", "cursor"]);
+    expect(result.status).toBe(0);
+    expect(readConfig(dir).review.reviewer).toBe("cursor");
+  });
+
+  test("--reviewer none deactivates review but keeps the rest of the review block", () => {
+    const dir = seedNewRepo(["--skip-harness", "--reviewer", "codex"]);
+    const config = readConfig(dir);
+    config.review.maxRounds = 5;
+    writeFileSync(join(dir, "loops.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness", "--reviewer", "none"]);
+    expect(result.status).toBe(0);
+    const after = readConfig(dir);
+    expect(after.review.reviewer).toBeUndefined();
+    expect(after.review.maxRounds).toBe(5);
+  });
+
+  // writeNew (join's primitive for every other file) no-ops on an existing file, and
+  // round-tripping through config.ts's typed loader would drop anything it doesn't know.
+  // The reviewer write is a raw read-merge-write for exactly these two reasons.
+  test("the write preserves unknown keys and every unrelated setting", () => {
+    const dir = seedNewRepo(["--skip-harness", "--projects", "atlas=~/src/atlas"]);
+    const config = readConfig(dir);
+    config.futureKnob = { kept: true };
+    config.review.auditPasses = ["diff"];
+    writeFileSync(join(dir, "loops.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness", "--reviewer", "codex"]);
+    expect(result.status).toBe(0);
+    const after = readConfig(dir);
+    expect(after.futureKnob).toEqual({ kept: true });
+    expect(after.review.auditPasses).toEqual(["diff"]);
+    expect(after.review.reviewer).toBe("codex");
+    expect(after.projects.atlas.repo).toBe("~/src/atlas");
+    expect(after.owner).toBe("casey");
+  });
+
+  // Join is what automation runs. Without an explicit --reviewer it must not prompt and
+  // must not write: a dispatcher inheriting a TTY would otherwise block forever, and an
+  // unattended run must never silently change the repo-global reviewer.
+  test("non-interactive join without --reviewer leaves loops.json byte-identical", () => {
+    const dir = seedNewRepo(["--skip-harness", "--reviewer", "codex"]);
+    const before = readFileSync(join(dir, "loops.json"), "utf8");
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness"]);
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(dir, "loops.json"), "utf8")).toBe(before);
+  });
+
+  test("join rejects an unknown reviewer id instead of writing it", () => {
+    const dir = seedNewRepo(["--skip-harness"]);
+    const before = readFileSync(join(dir, "loops.json"), "utf8");
+
+    const result = run(["run", SEED, dir, "--join", "--skip-harness", "--reviewer", "bogus"]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("bogus");
+    expect(readFileSync(join(dir, "loops.json"), "utf8")).toBe(before);
+  });
+
+  test("seed's closing note points at bun run setup, not a hand edit", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "loops-e2e-")), "data");
+    const result = run(["run", SEED, dir, "--owner", "casey", "--skip-harness"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("bun run setup");
+  });
+});
+
 describe("generated receipt contract", () => {
   // Both wrappers emit the same body, so assert the policy once per wrapper. Without
   // this, deleting the fourth receipt line or the owner-no-reply rule from the
