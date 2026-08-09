@@ -3,7 +3,7 @@
 // everything below is unit-testable without network or filesystem access.
 import type { ItemFile } from "./types.ts";
 import type { LoopsConfig } from "./config.ts";
-import { isMap, isScalar, parseDocument } from "yaml";
+import { isMap, isNode, isScalar, parseDocument } from "yaml";
 
 export type PrState = "MERGED" | "OPEN" | "CLOSED";
 
@@ -232,11 +232,26 @@ interface ScalarKeySource {
   end: number;
 }
 
+const LINE_REWRITTEN_KEYS = new Set([...Object.keys(MERGED_FIELD_VALUES), "awaiting", "updated"]);
+
 function parseTopLevelScalarKeys(block: string): ScalarKeySource[] {
-  const document = parseDocument(block, { uniqueKeys: false });
-  if (!isMap(document.contents)) return [];
+  const document = parseDocument(block, { keepSourceTokens: true, uniqueKeys: false });
+  if (!isMap(document.contents) || document.contents.flow) {
+    throw new Error("landed update requires a block-style root mapping");
+  }
   return document.contents.items.flatMap((pair) => {
     if (!isScalar(pair.key) || typeof pair.key.value !== "string" || !pair.key.range) return [];
+    if (LINE_REWRITTEN_KEYS.has(pair.key.value)) {
+      const keyLineEnd = block.indexOf("\n", pair.key.range[1]);
+      const lineEnd = keyLineEnd === -1 ? block.length : keyLineEnd;
+      const valueIndicator = pair.srcToken?.sep?.find(({ type }) => type === "map-value-ind");
+      const valueEndsOnKeyLine = pair.value === null || (
+        isNode(pair.value) && pair.value.range !== undefined && pair.value.range[1] <= lineEnd
+      );
+      if (!valueIndicator || valueIndicator.offset > lineEnd || !valueEndsOnKeyLine) {
+        throw new Error("landed update requires single-line lifecycle fields");
+      }
+    }
     return [{ key: pair.key.value, start: pair.key.range[0], end: pair.key.range[1] }];
   });
 }

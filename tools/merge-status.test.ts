@@ -467,6 +467,20 @@ Context paragraph.
     expect(transitioned).toMatch(/^    state: preserved-nested-value$/m);
   });
 
+  test("fails closed for YAML collection shapes the line-preserving writer cannot rewrite", () => {
+    const flowMapping = `---
+{ title: X, project: atlas, state: implemented, owner: agent-x, autonomy: supervised, next-actor: owner, awaiting: review-merge, next-step: Verify, updated: 2026-08-09 }
+---
+`;
+    expect(() => applyMergedFrontmatter(flowMapping, "2026-07-10")).toThrow("block-style root mapping");
+
+    const blockScalar = RAW.replace('next-step: "Owner: review + merge PR #44"', "next-step: >\n  Owner reviews");
+    expect(() => applyMergedFrontmatter(blockScalar, "2026-07-10")).toThrow("single-line lifecycle fields");
+
+    const explicitLifecycleKey = RAW.replace("state: implemented", "? state\n: implemented");
+    expect(() => applyMergedFrontmatter(explicitLifecycleKey, "2026-07-10")).toThrow("single-line lifecycle fields");
+  });
+
   test("preserves the body and the links block verbatim", () => {
     expect(result).toContain("## Log");
     expect(result).toContain("- 2026-07-02: PR filed.");
