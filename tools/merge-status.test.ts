@@ -7,6 +7,7 @@ import {
   itemsToFlipMerged,
   parsePrUrl,
   planLandedCheck,
+  prepareLandedWrites,
   statusKey,
   statusKeyFor,
   tokenPathForOrg,
@@ -479,6 +480,33 @@ Context paragraph.
 
     const explicitLifecycleKey = RAW.replace("state: implemented", "? state\n: implemented");
     expect(() => applyMergedFrontmatter(explicitLifecycleKey, "2026-07-10")).toThrow("single-line lifecycle fields");
+  });
+
+  test("fails closed when YAML aliases define assignment keys", () => {
+    const aliasAssigneeConflict = RAW.replace(
+      "owner: agent-x",
+      "assignment-key: &assignment-key assignee\n? *assignment-key\n: codex/default\nowner: agent-x",
+    );
+    expect(() => applyMergedFrontmatter(aliasAssigneeConflict, "2026-07-10")).toThrow("scalar top-level keys");
+
+    const aliasOwner = RAW.replace(
+      "owner: agent-x",
+      "assignment-key: &assignment-key owner\n? *assignment-key\n: agent-x",
+    );
+    expect(() => applyMergedFrontmatter(aliasOwner, "2026-07-10")).toThrow("scalar top-level keys");
+  });
+
+  test("prepares every landed item before exposing any write", () => {
+    const first = item({ slug: "first", assignee: "agent-x" });
+    const second = item({ slug: "second", assignee: "agent-x" });
+    const unsupported = `---
+{ title: X, project: atlas, state: implemented, assignee: agent-x, autonomy: supervised, next-actor: owner, awaiting: review-merge, next-step: Verify, updated: 2026-08-09 }
+---
+`;
+    expect(() => prepareLandedWrites([
+      { item: first, rawText: RAW },
+      { item: second, rawText: unsupported },
+    ], "unchanged board", "2026-07-10")).toThrow("block-style root mapping");
   });
 
   test("preserves the body and the links block verbatim", () => {

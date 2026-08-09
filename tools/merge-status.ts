@@ -1,9 +1,10 @@
 // Pure logic for the PR merge-status check (`bun run landed`).
 // No IO here — the gh shell-out and token file reads live in cli-landed.ts, so
 // everything below is unit-testable without network or filesystem access.
+import { isMap, isNode, isScalar, parseDocument } from "yaml";
 import type { ItemFile } from "./types.ts";
 import type { LoopsConfig } from "./config.ts";
-import { isMap, isNode, isScalar, parseDocument } from "yaml";
+import { replaceActiveRow } from "./render.ts";
 
 export type PrState = "MERGED" | "OPEN" | "CLOSED";
 
@@ -239,8 +240,11 @@ function parseTopLevelScalarKeys(block: string): ScalarKeySource[] {
   if (!isMap(document.contents) || document.contents.flow) {
     throw new Error("landed update requires a block-style root mapping");
   }
-  return document.contents.items.flatMap((pair) => {
-    if (!isScalar(pair.key) || typeof pair.key.value !== "string" || !pair.key.range) return [];
+  const keys: ScalarKeySource[] = [];
+  for (const pair of document.contents.items) {
+    if (!isScalar(pair.key) || typeof pair.key.value !== "string" || !pair.key.range) {
+      throw new Error("landed update requires scalar top-level keys");
+    }
     if (LINE_REWRITTEN_KEYS.has(pair.key.value)) {
       const keyLineEnd = block.indexOf("\n", pair.key.range[1]);
       const lineEnd = keyLineEnd === -1 ? block.length : keyLineEnd;
@@ -252,8 +256,9 @@ function parseTopLevelScalarKeys(block: string): ScalarKeySource[] {
         throw new Error("landed update requires single-line lifecycle fields");
       }
     }
-    return [{ key: pair.key.value, start: pair.key.range[0], end: pair.key.range[1] }];
-  });
+    keys.push({ key: pair.key.value, start: pair.key.range[0], end: pair.key.range[1] });
+  }
+  return keys;
 }
 
 function parseTopLevelScalarKeyLines(block: string, keys: ScalarKeySource[]): Array<ScalarKeyLine | undefined> {
@@ -327,4 +332,39 @@ export function applyMergedFrontmatter(rawText: string, today: string): string {
   if (!seen.has("updated")) kept.push(`${rootIndent}updated: ${today}`);
 
   return `${open}${kept.join("\n")}${close}${rawText.slice(match[0].length)}`;
+}
+
+export interface LandedWriteSource {
+  item: ItemFile;
+  rawText: string;
+}
+
+export interface PreparedLandedWrites {
+  itemWrites: Array<{ path: string; rawText: string }>;
+  boardText: string;
+}
+
+/** Pure: prepare the complete landed-state write set before the IO boundary starts.
+ * If any item cannot be transformed safely, no partial plan is returned and callers
+ * have not yet written either an item file or BOARD.md. */
+export function prepareLandedWrites(
+  sources: LandedWriteSource[],
+  boardText: string,
+  today: string,
+): PreparedLandedWrites {
+  let nextBoardText = boardText;
+  const itemWrites = sources.map(({ item, rawText }) => {
+    const nextRawText = applyMergedFrontmatter(rawText, today);
+    nextBoardText = replaceActiveRow(nextBoardText, {
+      ...item,
+      state: "merged",
+      nextActor: "agent",
+      awaiting: undefined,
+      autonomy: "auto",
+      nextStep: "Verify per the project verify gate, then flip to tested",
+      updated: today,
+    });
+    return { path: item.path, rawText: nextRawText };
+  });
+  return { itemWrites, boardText: nextBoardText };
 }

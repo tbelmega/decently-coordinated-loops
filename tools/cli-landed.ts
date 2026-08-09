@@ -28,13 +28,12 @@ import { loadConfig } from "./config.ts";
 import { gitLandedStatus } from "./git-landed.ts";
 import { withLock } from "./lock.ts";
 import { loadItemsDir } from "./parse.ts";
-import { replaceActiveRow } from "./render.ts";
 import {
-  applyMergedFrontmatter,
   buildMergeReport,
   itemsToFlipMerged,
   parsePrUrl,
   planLandedCheck,
+  prepareLandedWrites,
   statusKey,
   tokenPathForOrg,
   workRef,
@@ -219,22 +218,16 @@ if (apply) {
     () => {
       const today = formatSnapshotDate(new Date());
       const BOARD_PATH = join(ROOT, "BOARD.md");
-      let boardText = readFileSync(BOARD_PATH, "utf8");
+      const prepared = prepareLandedWrites(
+        flippable.map((item) => ({ item, rawText: readFileSync(join(ROOT, item.path), "utf8") })),
+        readFileSync(BOARD_PATH, "utf8"),
+        today,
+      );
 
-      for (const item of flippable) {
-        const itemPath = join(ROOT, item.path);
-        writeFileSync(itemPath, applyMergedFrontmatter(readFileSync(itemPath, "utf8"), today));
-        boardText = replaceActiveRow(boardText, {
-          ...item,
-          state: "merged",
-          nextActor: "agent",
-          awaiting: undefined,
-          autonomy: "auto",
-          nextStep: "Verify per the project verify gate, then flip to tested",
-          updated: today,
-        });
+      for (const write of prepared.itemWrites) {
+        writeFileSync(join(ROOT, write.path), write.rawText);
       }
-      writeFileSync(BOARD_PATH, boardText);
+      writeFileSync(BOARD_PATH, prepared.boardText);
     },
     "landed --apply run",
   );
