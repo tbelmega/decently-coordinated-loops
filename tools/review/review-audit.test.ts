@@ -131,6 +131,35 @@ describe("parseReviewPass", () => {
     );
   });
 
+  test("rejects a partial fix-delta union and duplicate hunks", () => {
+    // Only two covered sets are compliant reviewer behavior: exactly the manifest hunks
+    // (fix delta ignored) or their complete union (fix delta audited). A partial union
+    // would persist an audit of a range the reviewer did not finish. (R1-F1..F3)
+    const multiHunkRemediation: ReviewManifest = {
+      ...manifest,
+      remediationFiles: [{path: "src/a.ts", hunks: ["-9,2 +9,4", "-20,1 +20,2"]}],
+    };
+    const partial = passResult("diff") as Record<string, unknown>;
+    partial.coverage = {
+      files: [{path: "src/a.ts", hunks: ["-1,1 +1,2", "-9,2 +9,4"]}, {path: "src/b.ts", hunks: []}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(partial, "diff", multiHunkRemediation, [])).toThrow(
+      /src\/a\.ts.*complete union/,
+    );
+
+    const duplicated = passResult("diff") as Record<string, unknown>;
+    duplicated.coverage = {
+      files: [{path: "src/a.ts", hunks: ["-1,1 +1,2", "-1,1 +1,2"]}, {path: "src/b.ts", hunks: []}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(duplicated, "diff", multiHunkRemediation, [])).toThrow(
+      /src\/a\.ts.*repeat/,
+    );
+  });
+
   test("permits coverage of a remediation-only path but keeps unknown paths stray", () => {
     // A fix that exactly reverts a file leaves it in the remediation delta but not in
     // base..head, so a reviewer auditing the remediation range legitimately covers it.
@@ -153,6 +182,18 @@ describe("parseReviewPass", () => {
       callsites: [],
     };
     expect(() => parseReviewPass(strayHunk, "diff", revertRound, [])).toThrow(
+      /outside the review manifest: src\/reverted\.ts/,
+    );
+
+    // A reported fix-delta-only path needs its complete delta hunk set — an empty or
+    // partial list must not pass through a vacuous subset check. (R1-F1..F3)
+    const emptyHunks = passResult("diff") as Record<string, unknown>;
+    emptyHunks.coverage = {
+      files: [...manifest.files, {path: "src/reverted.ts", hunks: []}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(emptyHunks, "diff", revertRound, [])).toThrow(
       /outside the review manifest: src\/reverted\.ts/,
     );
   });

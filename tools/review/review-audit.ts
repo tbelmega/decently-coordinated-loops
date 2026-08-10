@@ -132,16 +132,30 @@ export function parseReviewPass(
     for (const hunk of file.hunks) hunks.add(hunk);
     fixDeltaHunks.set(file.path, hunks);
   }
+  for (const file of coverageFiles) {
+    if (new Set(file.hunks).size !== file.hunks.length) {
+      throw new Error(`coverage for ${file.path} must not repeat hunks`);
+    }
+  }
+  // Only two covered sets are compliant behavior per file: exactly the manifest hunks
+  // (reviewer left the fix delta out of its coverage list) or their complete union with
+  // the fix-delta hunks (reviewer counted the audited delta in). A partial union would
+  // persist an audit of a range the reviewer did not finish, so it fails closed too.
   for (const manifestFile of manifest.files) {
     const covered = byPath.get(manifestFile.path);
     if (!covered || manifestFile.hunks.some((hunk) => !covered.hunks.includes(hunk))) {
       throw new Error(`coverage is incomplete for ${manifestFile.path}`);
     }
-    const allowed = new Set([...manifestFile.hunks, ...(fixDeltaHunks.get(manifestFile.path) ?? [])]);
-    const unknown = covered.hunks.find((hunk) => !allowed.has(hunk));
+    const union = new Set([...manifestFile.hunks, ...(fixDeltaHunks.get(manifestFile.path) ?? [])]);
+    const unknown = covered.hunks.find((hunk) => !union.has(hunk));
     if (unknown !== undefined) {
       throw new Error(
         `coverage for ${manifestFile.path} includes a hunk outside the review manifest: ${unknown}`,
+      );
+    }
+    if (covered.hunks.length !== manifestFile.hunks.length && covered.hunks.length !== union.size) {
+      throw new Error(
+        `coverage for ${manifestFile.path} must be exactly the manifest hunks or their complete union with the fix delta`,
       );
     }
   }
@@ -160,14 +174,15 @@ export function parseReviewPass(
   // reviewer that audited the wrong range or invented files.
   // A path that exists only in a fix delta (e.g. a remediation commit that exactly reverts
   // a file drops it from base..head) is coverable for the same reason: the reviewer was
-  // told to audit that range. Its hunks must still all come from the delta.
-  const stray = coverageFiles.find(
-    (file) =>
-      !manifest.files.some((manifestFile) => manifestFile.path === file.path) &&
-      !matchesMetadataPath(file.path, manifest.metadataPaths ?? []) &&
-      !(fixDeltaHunks.has(file.path) &&
-        file.hunks.every((hunk) => fixDeltaHunks.get(file.path)?.has(hunk))),
-  );
+  // told to audit that range. When reported it needs the complete delta hunk set — an
+  // empty or partial list is not evidence of an audit.
+  const stray = coverageFiles.find((file) => {
+    if (manifest.files.some((manifestFile) => manifestFile.path === file.path)) return false;
+    if (matchesMetadataPath(file.path, manifest.metadataPaths ?? [])) return false;
+    const delta = fixDeltaHunks.get(file.path);
+    if (!delta) return true;
+    return file.hunks.length !== delta.size || file.hunks.some((hunk) => !delta.has(hunk));
+  });
   if (stray) {
     throw new Error(`coverage includes a file outside the review manifest: ${stray.path}`);
   }
