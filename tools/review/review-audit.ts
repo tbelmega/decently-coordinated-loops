@@ -119,10 +119,30 @@ export function parseReviewPass(
     throw new Error("coverage.files must not contain duplicate paths");
   }
   const byPath = new Map(coverageFiles.map((file) => [file.path, file]));
+  // Fix-delta hunks are PERMITTED in coverage, manifest.files hunks stay REQUIRED. On a
+  // remediation or rebased round the prompt embeds remediationFiles/baseDeltaFiles in
+  // AUDIT_INPUT and instructs the reviewer to audit those ranges, and a reviewer that did
+  // as it was told unioned their hunks into its coverage — the previous exact-equality
+  // check then discarded the whole logical round. Measured 2026-08-09: three consecutive
+  // remediation attempts died here while their passes classified every obligation fixed.
+  // Same self-contradiction class as the metadata-coverage note below.
+  const fixDeltaHunks = new Map<string, Set<string>>();
+  for (const file of [...(manifest.remediationFiles ?? []), ...(manifest.baseDeltaFiles ?? [])]) {
+    const hunks = fixDeltaHunks.get(file.path) ?? new Set<string>();
+    for (const hunk of file.hunks) hunks.add(hunk);
+    fixDeltaHunks.set(file.path, hunks);
+  }
   for (const manifestFile of manifest.files) {
     const covered = byPath.get(manifestFile.path);
-    if (!covered || JSON.stringify(covered.hunks) !== JSON.stringify(manifestFile.hunks)) {
+    if (!covered || manifestFile.hunks.some((hunk) => !covered.hunks.includes(hunk))) {
       throw new Error(`coverage is incomplete for ${manifestFile.path}`);
+    }
+    const allowed = new Set([...manifestFile.hunks, ...(fixDeltaHunks.get(manifestFile.path) ?? [])]);
+    const unknown = covered.hunks.find((hunk) => !allowed.has(hunk));
+    if (unknown !== undefined) {
+      throw new Error(
+        `coverage for ${manifestFile.path} includes a hunk outside the review manifest: ${unknown}`,
+      );
     }
   }
   // Landing-metadata coverage is PERMITTED but not required: the completeness loop above
@@ -138,10 +158,15 @@ export function parseReviewPass(
   // exempt from code review by configuration, so coverage of them carries no signal in
   // either direction. Everything else still fails closed — this check is what catches a
   // reviewer that audited the wrong range or invented files.
+  // A path that exists only in a fix delta (e.g. a remediation commit that exactly reverts
+  // a file drops it from base..head) is coverable for the same reason: the reviewer was
+  // told to audit that range. Its hunks must still all come from the delta.
   const stray = coverageFiles.find(
     (file) =>
       !manifest.files.some((manifestFile) => manifestFile.path === file.path) &&
-      !matchesMetadataPath(file.path, manifest.metadataPaths ?? []),
+      !matchesMetadataPath(file.path, manifest.metadataPaths ?? []) &&
+      !(fixDeltaHunks.has(file.path) &&
+        file.hunks.every((hunk) => fixDeltaHunks.get(file.path)?.has(hunk))),
   );
   if (stray) {
     throw new Error(`coverage includes a file outside the review manifest: ${stray.path}`);

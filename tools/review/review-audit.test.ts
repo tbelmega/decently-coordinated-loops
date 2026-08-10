@@ -87,6 +87,76 @@ describe("parseReviewPass", () => {
     );
   });
 
+  test("accepts fix-delta hunks unioned into coverage, in any order, on remediation rounds", () => {
+    // reviewPrompt embeds remediationFiles/baseDeltaFiles in AUDIT_INPUT and instructs the
+    // reviewer to audit those ranges, so a compliant reviewer unions their hunks into its
+    // coverage. Demanding exact equality with manifest.files discarded three whole logical
+    // rounds on 2026-08-09 while their passes classified every obligation fixed.
+    const remediationRound: ReviewManifest = {
+      ...manifest,
+      remediationFiles: [{path: "src/a.ts", hunks: ["-9,2 +9,4"]}],
+      baseDeltaFiles: [{path: "src/b.ts", hunks: ["-5,1 +5,2"]}],
+    };
+    const unioned = passResult("diff") as Record<string, unknown>;
+    unioned.coverage = {
+      files: [
+        {path: "src/a.ts", hunks: ["-9,2 +9,4", "-1,1 +1,2"]},
+        {path: "src/b.ts", hunks: ["-5,1 +5,2"]},
+      ],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(parseReviewPass(unioned, "diff", remediationRound, []).coverage.files).toHaveLength(2);
+
+    // Manifest hunks stay REQUIRED: covering only the fix delta is still incomplete.
+    const missingRequired = passResult("diff") as Record<string, unknown>;
+    missingRequired.coverage = {
+      files: [{path: "src/a.ts", hunks: ["-9,2 +9,4"]}, {path: "src/b.ts", hunks: []}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(missingRequired, "diff", remediationRound, [])).toThrow(
+      /coverage is incomplete for src\/a\.ts/,
+    );
+
+    // A hunk in neither the manifest nor any fix delta still fails closed, by name.
+    const invented = passResult("diff") as Record<string, unknown>;
+    invented.coverage = {
+      files: [{path: "src/a.ts", hunks: ["-1,1 +1,2", "-99,1 +99,1"]}, {path: "src/b.ts", hunks: []}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(invented, "diff", remediationRound, [])).toThrow(
+      /src\/a\.ts.*outside the review manifest.*-99,1 \+99,1/,
+    );
+  });
+
+  test("permits coverage of a remediation-only path but keeps unknown paths stray", () => {
+    // A fix that exactly reverts a file leaves it in the remediation delta but not in
+    // base..head, so a reviewer auditing the remediation range legitimately covers it.
+    const revertRound: ReviewManifest = {
+      ...manifest,
+      remediationFiles: [{path: "src/reverted.ts", hunks: ["-3,1 +3,1"]}],
+    };
+    const coversRevert = passResult("diff") as Record<string, unknown>;
+    coversRevert.coverage = {
+      files: [...manifest.files, {path: "src/reverted.ts", hunks: ["-3,1 +3,1"]}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(parseReviewPass(coversRevert, "diff", revertRound, []).coverage.files).toHaveLength(3);
+
+    const strayHunk = passResult("diff") as Record<string, unknown>;
+    strayHunk.coverage = {
+      files: [...manifest.files, {path: "src/reverted.ts", hunks: ["-3,1 +3,1", "-8,1 +8,1"]}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(strayHunk, "diff", revertRound, [])).toThrow(
+      /outside the review manifest: src\/reverted\.ts/,
+    );
+  });
+
   test("requires the diff pass to classify every accepted-finding obligation", () => {
     const input = passResult("diff") as Record<string, unknown>;
     expect(() => parseReviewPass(input, "diff", manifest, ["R1-F1"])).toThrow(/R1-F1/);

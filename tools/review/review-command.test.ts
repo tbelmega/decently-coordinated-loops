@@ -108,7 +108,11 @@ function createFakeCodex(): string {
       'if (!inputLine) throw new Error("missing audit input");',
       'const audit = JSON.parse(inputLine.slice("AUDIT_INPUT=".length));',
       'if (process.env.FAKE_CODEX_LOG) appendFileSync(process.env.FAKE_CODEX_LOG, `${audit.pass}\\n`);',
-      'const covered = process.env.FAKE_SKIP_FILE ? audit.manifest.files.slice(0, -1) : audit.manifest.files;',
+      'let covered = process.env.FAKE_SKIP_FILE ? audit.manifest.files.slice(0, -1) : audit.manifest.files;',
+      // Faithful to a compliant reviewer on a remediation round: the prompt embeds
+      // remediationFiles and instructs auditing that range, so coverage comes back with
+      // those hunks unioned in (measured with codex/gpt-5.6-terra, 2026-08-09).
+      'if (process.env.FAKE_UNION_REMEDIATION) covered = covered.map((file) => { const extra = (audit.manifest.remediationFiles ?? []).find((r) => r.path === file.path); return extra ? { path: file.path, hunks: [...new Set([...extra.hunks, ...file.hunks])] } : file; });',
       // Faithful to a compliant reviewer: the prompt names every metadata file and asks for
       // it to be inspected, so coverage comes back including them. The validator must permit
       // that — rejecting it invalidated rounds that had found nothing wrong.
@@ -583,6 +587,42 @@ describe("cli-review start", () => {
     const result = runStart(repository, dataRepo, item, baseSha, {FAKE_OBLIGATION_STATUS: "incomplete"});
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("R1-F1 must remain an actionable finding");
+  });
+
+  test("records a remediation round whose coverage unions the fix-delta hunks", () => {
+    const {repository, baseSha, headSha} = createReviewRepository();
+    const item = "remediation-union-coverage";
+    const dataRepo = createReviewDataRepo(5);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), {recursive: true});
+    let ledger = addReviewRound(
+      createReviewLedger({item, branch: "feature/review-receipt", baseRef: baseSha, baseSha}),
+      {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: "2026-08-09T12:00:00Z",
+        review: {summary: "fix", findings: [{
+          priority: "P1",
+          title: "Defect",
+          evidence: "broken",
+          impact: "incorrect",
+          direction: "fix it",
+          confidence: "high",
+        }]},
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    writeFileSync(`${repository}/change.txt`, "review me\nfix applied\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Apply fix"]);
+
+    const result = runStart(repository, dataRepo, item, baseSha, {FAKE_UNION_REMEDIATION: "1"});
+
+    expect(result.status).toBe(0);
+    const refreshed = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(refreshed.rounds).toHaveLength(2);
+    expect(refreshed.failures ?? []).toHaveLength(0);
   });
 
   test("preserves evidence and runs a base-delta audit after a patch-equivalent rebase", () => {
