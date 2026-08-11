@@ -1,7 +1,14 @@
 // The markered agent-config block DCL installs into each harness's global config
 // file (e.g. ~/.claude/CLAUDE.md, ~/.codex/AGENTS.md). Idempotent upsert: an
 // existing block between the markers is replaced; otherwise the block is appended.
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  type Dirent,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 export const START_MARK =
@@ -153,6 +160,19 @@ export function writeCursorRule(target: string, content: string): "created" | "r
   return existed ? "replaced" : "created";
 }
 
+/** Alternate-profile scan input. A home that cannot be listed — absent, or a
+ * directory this process may not read — contributes no profiles, matching the
+ * existsSync probes around it: detection reports what is there, and installing a
+ * harness (or repairing a home) is not our job. Without this, scanning for
+ * profiles would make an unusable home abort seeding outright. */
+function readHomeEntries(home: string): Dirent[] {
+  try {
+    return readdirSync(home, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
 /** The harness global configs this machine appears to use: a target is included when
  * its harness directory already exists (we never create harness directories —
  * installing a harness is not our job). CLAUDE.md/AGENTS.md take a markered block;
@@ -165,7 +185,7 @@ export function detectConfigTargets(home: string): ConfigTarget[] {
   if (existsSync(join(home, ".claude"))) {
     targets.push({ path: join(home, ".claude", "CLAUDE.md"), kind: "block" });
   }
-  for (const entry of readdirSync(home, { withFileTypes: true })) {
+  for (const entry of readHomeEntries(home)) {
     if (!entry.isDirectory() || !entry.name.startsWith(".claude-")) continue;
     const claudeMd = join(home, entry.name, "CLAUDE.md");
     try {

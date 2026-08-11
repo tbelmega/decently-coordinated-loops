@@ -1,11 +1,25 @@
 // End-to-end tests for setup/seed.ts: new mode, idempotency, join mode, config
 // block, and the seeded repo passing check/sync (the spec's acceptance e2e).
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { END_MARK, START_MARK, renderConfigBlock, renderCursorRule } from "./config-block.ts";
+import {
+  END_MARK,
+  START_MARK,
+  detectConfigTargets,
+  renderConfigBlock,
+  renderCursorRule,
+} from "./config-block.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
 const SEED = join(DCL_HOME, "setup", "seed.ts");
@@ -545,5 +559,39 @@ describe("config block", () => {
     mkdirSync(join(home, ".claude"), { recursive: true });
     seedNewRepo([], home);
     expect(existsSync(join(home, ".cursor"))).toBe(false);
+  });
+
+  // A home that cannot be listed is not an error: every other probe in
+  // detectConfigTargets is an existsSync, so an unusable home has always meant
+  // "no harness config here" and seed.ts prints that and carries on. Scanning
+  // for alternate .claude-* profiles must not turn it into an abort.
+  test("an absent home detects no targets instead of throwing", () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "loops-home-")), "never-created");
+    expect(detectConfigTargets(missing)).toEqual([]);
+  });
+
+  test("an unreadable home detects no targets instead of throwing", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    chmodSync(home, 0o000);
+    try {
+      // Running as root defeats the permission bits entirely; skip rather than
+      // record a pass this environment did not actually earn.
+      let readable = true;
+      try {
+        readdirSync(home);
+      } catch {
+        readable = false;
+      }
+      if (readable) return;
+      expect(detectConfigTargets(home)).toEqual([]);
+    } finally {
+      chmodSync(home, 0o700);
+    }
+  });
+
+  test("seeding under an absent home skips harness wiring instead of aborting", () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "loops-home-")), "never-created");
+    const dir = seedNewRepo([], missing);
+    expect(existsSync(join(dir, "BOARD.md"))).toBe(true);
   });
 });
