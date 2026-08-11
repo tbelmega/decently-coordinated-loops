@@ -32,6 +32,21 @@ function run(args: string[], opts: { cwd?: string; home?: string } = {}): SpawnS
   });
 }
 
+/** Whether mode bits actually stop this process from listing a directory. False
+ * under root, which ignores them — so a permission-based test proves nothing there. */
+const PERMISSIONS_ARE_ENFORCED = (() => {
+  const probe = mkdtempSync(join(tmpdir(), "loops-perm-probe-"));
+  chmodSync(probe, 0o000);
+  try {
+    readdirSync(probe);
+    return false;
+  } catch {
+    return true;
+  } finally {
+    chmodSync(probe, 0o700);
+  }
+})();
+
 function seedNewRepo(extra: string[] = [], home?: string): string {
   const dir = join(mkdtempSync(join(tmpdir(), "loops-e2e-")), "data");
   const result = run(
@@ -570,24 +585,30 @@ describe("config block", () => {
     expect(detectConfigTargets(missing)).toEqual([]);
   });
 
-  test("an unreadable home detects no targets instead of throwing", () => {
-    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
-    chmodSync(home, 0o000);
-    try {
-      // Running as root defeats the permission bits entirely; skip rather than
-      // record a pass this environment did not actually earn.
-      let readable = true;
-      try {
-        readdirSync(home);
-      } catch {
-        readable = false;
-      }
-      if (readable) return;
-      expect(detectConfigTargets(home)).toEqual([]);
-    } finally {
-      chmodSync(home, 0o700);
-    }
+  // A home whose path is not a directory at all fails the listing for every
+  // caller, root included, so this case pins the catch path with no dependence
+  // on privileges.
+  test("a home that is not a directory detects no targets instead of throwing", () => {
+    const notADir = join(mkdtempSync(join(tmpdir(), "loops-home-")), "home-is-a-file");
+    writeFileSync(notADir, "");
+    expect(detectConfigTargets(notADir)).toEqual([]);
   });
+
+  // Permission bits do not stop a privileged runner, and a test that quietly
+  // returns there would report a pass it never earned. Skip visibly instead —
+  // the non-directory case above still covers the failed listing.
+  test.skipIf(PERMISSIONS_ARE_ENFORCED === false)(
+    "an unreadable home detects no targets instead of throwing",
+    () => {
+      const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+      chmodSync(home, 0o000);
+      try {
+        expect(detectConfigTargets(home)).toEqual([]);
+      } finally {
+        chmodSync(home, 0o700);
+      }
+    },
+  );
 
   test("seeding under an absent home skips harness wiring instead of aborting", () => {
     const missing = join(mkdtempSync(join(tmpdir(), "loops-home-")), "never-created");
