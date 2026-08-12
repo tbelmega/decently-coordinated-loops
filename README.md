@@ -37,15 +37,22 @@ from the fleet is one board. Both trend toward empty.
 ## Quickstart
 
 Requirements: git, [bun](https://bun.sh) (tools also run under recent node — see
-below), and at least one skills-aware agent harness.
+below), and at least one skills-aware agent harness. DCL wires Claude Code, Codex and
+Cursor by name, plus the vendor-neutral `~/.agents/skills` tree that other skill-aware
+harnesses read; adding another is one entry in `setup/harnesses.ts`.
+
+Linux and macOS are the supported platforms: `install.sh` is bash and the tools assume
+POSIX paths and symlinks. Windows works under WSL.
+
+Clone this repository, then from its root:
 
 ```bash
-git clone <this repo> && cd decently-coordinated-loops
 ./install.sh --seed ~/workspace/my-loops --owner Ada --branch main \
   --projects myapp=~/workspace/myapp
 ```
 
-This links the skills into `~/.claude/skills/` and `~/.agents/skills/`, seeds the
+This links the skills into every destination in `setup/skill-dirs.txt` (today
+`~/.claude/skills/` and `~/.agents/skills/`), seeds the
 data repo (board, inbox, outbox, registries, house rules), and installs a small
 awareness block into your harness's global config so every session knows where the
 board lives. Then:
@@ -84,8 +91,11 @@ either side and re-run `bun run sync`.
   pushed; a rejected push means re-read and re-decide. Within one checkout, sync is
   serialized by a lock file.
 - **Git primitives, not forge assumptions**: the workflow is defined over agent
-  branches, a review mechanism you plug in, and rebase landings. GitHub PRs are one
-  configuration, not a dependency.
+  branches, a review mechanism you plug in, and rebase landings. Any git remote works —
+  GitHub, GitLab, Bitbucket, AWS CodeCommit, or a bare repository on a machine you own.
+  GitHub PRs are one configuration, not a dependency: the default `landedAdapter` is
+  `git`, which decides what has landed by patch-id comparison and never calls a forge
+  API. The bundled reviewer is forge-free by design.
 - **Contracts live in skills, not in your data files** — so `git pull` here
   upgrades every instance on the machine, and your data repo stays pure data plus
   local policy.
