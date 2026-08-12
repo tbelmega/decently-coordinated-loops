@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -223,6 +225,18 @@ describe("outbox file transactions", () => {
       chmodSync(path, 0o600);
       replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next");
       expect(statSync(path).mode & 0o777).toBe(0o600);
+    });
+
+    test("writes through a symlinked outbox instead of replacing the link", () => {
+      const canonical = join(dir, "canonical.md");
+      const linked = join(dir, "linked.md");
+      writeFileSync(canonical, "before");
+      symlinkSync(canonical, linked);
+
+      expect(replaceIfUnchanged(linked, "before", "after")).toBe(true);
+
+      expect(lstatSync(linked).isSymbolicLink()).toBe(true);
+      expect(readFileSync(canonical, "utf8")).toBe("after");
     });
 
     test("leaves no temporary file behind", () => {

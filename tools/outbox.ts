@@ -7,6 +7,7 @@ import {
   fstatSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -54,7 +55,23 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
   // nothing ever removes. The pid below is written through this descriptor rather than by
   // path, so it reaches only the file we made — writing by path could overwrite a
   // successor's lock if ours was removed in between, and we would then delete theirs.
-  const identity = fstatSync(handle).ino;
+  let identity: number;
+  try {
+    identity = fstatSync(handle).ino;
+  } catch (error) {
+    // The lock exists and we cannot name its inode, so this is the one release we cannot
+    // prove is ours. Removing it anyway is deliberate: leaving it strands every later
+    // writer behind a lock no process holds, while the only state it can destroy is a
+    // successor lock created inside the microseconds between an operator deleting ours
+    // and this fstat failing. Availability beats that.
+    closeSync(handle);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // already gone
+    }
+    throw error;
+  }
   try {
     try {
       writeSync(handle, String(process.pid));
@@ -89,10 +106,25 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
  * restricted to 0600 would be published to every local user by a routine sync — a write
  * that widens permissions is a worse failure than the torn read this avoids. */
 function writeFileAtomically(path: string, content: string): void {
-  const temporaryPath = join(dirname(path), `${basename(path)}.tmp-${process.pid}-${randomUUID()}`);
+  // Replace the file the path resolves to, not the path. A rename over a symlinked
+  // OUTBOX.md would swap the link itself for a standalone file, silently forking a data
+  // repo that points several checkouts at one canonical outbox — and the recovery entry
+  // written here would then be invisible to every writer still using the target.
+  //
+  // What replace-by-rename still cannot preserve is the inode's own metadata: ownership,
+  // ACLs and extended attributes belong to the file it replaces. That is inherent to the
+  // technique (tools/review/atomic-write.ts makes the same trade) and is the price of
+  // never letting a reader see a half-written outbox.
+  let target = path;
+  try {
+    target = realpathSync(path);
+  } catch {
+    // Does not exist yet, or is unresolvable: write the path as given.
+  }
+  const temporaryPath = join(dirname(target), `${basename(target)}.tmp-${process.pid}-${randomUUID()}`);
   let mode: number | undefined;
   try {
-    mode = statSync(path).mode;
+    mode = statSync(target).mode;
   } catch {
     // No existing file (or its mode is unreadable): the default applies.
   }
@@ -103,7 +135,7 @@ function writeFileAtomically(path: string, content: string): void {
     // explicit chmod stays because the creation mode is still masked by the umask.
     writeFileSync(temporaryPath, content, mode === undefined ? undefined : { mode });
     if (mode !== undefined) chmodSync(temporaryPath, mode);
-    renameSync(temporaryPath, path);
+    renameSync(temporaryPath, target);
   } finally {
     rmSync(temporaryPath, { force: true });
   }
