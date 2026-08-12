@@ -13,7 +13,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { loadConfig, reviewAuditPasses, type ReviewAuditPass } from "../config.ts";
+import { resolveDataRepo } from "./data-repo.ts";
 import { parseItemFileText } from "../parse.ts";
+import { expandHome } from "../registration.ts";
 import {
   acceptedFindingObligations,
   addReviewRound,
@@ -86,11 +88,6 @@ function git(args: string[]): string {
   return result.stdout.toString().trim();
 }
 
-function expandHome(path: string, home: string): string {
-  if (path === "~") return home;
-  return path.startsWith("~/") ? `${home}${path.slice(1)}` : path;
-}
-
 /** Resolves which reviewer + model to use: explicit flags win, else the data repo's
  * loops.json `review` block (from --data-repo or $LOOPS_DATA_REPO). */
 function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string }): {
@@ -103,7 +100,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   dataRepo?: string;
 } {
   const home = process.env.HOME ?? homedir();
-  const dataRepo = flags.dataRepo ? resolve(expandHome(flags.dataRepo, home)) : undefined;
+  const dataRepo = resolveDataRepo(flags.dataRepo, process.env, home);
   const config = dataRepo ? loadConfig(dataRepo) : undefined;
   const id = flags.reviewer ?? config?.review.reviewer;
   if (!id) {
