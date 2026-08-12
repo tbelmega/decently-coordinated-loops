@@ -1,0 +1,5 @@
+# Generated from setup/harnesses.ts (skillsDirs). Home-relative skill destinations,
+# linked unconditionally by install.sh, which is bash and cannot read the registry.
+# setup/harnesses.test.ts fails if this drifts from the registry.
+.claude/skills
+.agents/skills

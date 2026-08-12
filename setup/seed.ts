@@ -23,6 +23,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
+import { allReviewers, isReviewerId, reviewerBin, reviewerIds } from "../tools/review/reviewers.ts";
 import {
   detectConfigTargets,
   renderConfigBlock,
@@ -48,17 +49,14 @@ interface Options {
   home: string;
 }
 
-const REVIEWERS: Array<{ id: string; bin: string }> = [
-  { id: "codex", bin: "codex" },
-  { id: "claude", bin: "claude" },
-  { id: "cursor", bin: "cursor-agent" },
-];
-
-/** The review adapters whose CLI is actually installed on this machine. */
+/** The review adapters whose CLI is actually installed on this machine. The roster and
+ * each adapter's binary come from tools/review/reviewers.ts — the seeder used to carry
+ * its own copy, which is one list too many for a fact that changes whenever an adapter
+ * is added. */
 function detectReviewers(): string[] {
-  return REVIEWERS.filter(({ bin }) => spawnSync(bin, ["--version"], { stdio: "ignore" }).error === undefined).map(
-    ({ id }) => id,
-  );
+  return allReviewers()
+    .filter((reviewer) => spawnSync(reviewerBin(reviewer), ["--version"], { stdio: "ignore" }).error === undefined)
+    .map((reviewer) => reviewer.id);
 }
 
 function usage(): never {
@@ -103,8 +101,8 @@ function validateReviewer(reviewer: string | undefined): string | undefined {
   if (reviewer == null) return undefined;
   const value = reviewer.trim();
   if (value === "" || value === "none") return "";
-  if (!REVIEWERS.some((entry) => entry.id === value)) {
-    console.error(`--reviewer must be one of ${REVIEWERS.map((entry) => entry.id).join(", ")} or none (got "${value}")`);
+  if (!isReviewerId(value)) {
+    console.error(`--reviewer must be one of ${reviewerIds.join(", ")} or none (got "${value}")`);
     process.exit(2);
   }
   return value;

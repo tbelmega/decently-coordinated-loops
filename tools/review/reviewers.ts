@@ -221,3 +221,16 @@ const REVIEWERS: Record<ReviewerId, Reviewer> = { codex, claude, cursor };
 export function getReviewer(id: ReviewerId): Reviewer {
   return REVIEWERS[id];
 }
+
+/** The roster, in declaration order. The single source for "which reviewers exist and
+ * what binary does each one look for" — `setup/seed.ts` derives its detection from this
+ * rather than keeping a second list that drifts. */
+export function allReviewers(): Reviewer[] {
+  return reviewerIds.map((id) => REVIEWERS[id]);
+}
+
+/** The binary this reviewer would run, honouring its env override. Exposed so the
+ * seeder can probe for installed CLIs without knowing any binary's name. */
+export function reviewerBin(reviewer: Reviewer): string {
+  return resolveBin(reviewer);
+}

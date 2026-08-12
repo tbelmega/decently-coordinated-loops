@@ -3,9 +3,11 @@
 # harnesses.
 #
 # Default (no args):
-#   - Symlinks each skills/<name>/ into ~/.claude/skills/ (read by Claude Code)
-#     and ~/.agents/skills/ (read by other skill-aware harnesses). A path that
-#     already exists and is not a link to this repo is left untouched and
+#   - Symlinks each skills/<name>/ into every destination listed in
+#     setup/skill-dirs.txt, the generated mirror of setup/harnesses.ts. This script
+#     stays bash-only (no bun on the plain path), so it reads the list rather than
+#     the registry; setup/harnesses.test.ts fails if the two drift apart. A path
+#     that already exists and is not a link to this repo is left untouched and
 #     reported.
 #
 # --config-dir <dir> (repeatable): also symlink the skills into <dir>/skills.
@@ -71,8 +73,16 @@ done
 set -- ${passthrough_args[@]+"${passthrough_args[@]}"}
 
 echo "Linking DCL skills:"
-link_skills "$HOME/.claude/skills"
-link_skills "$HOME/.agents/skills"
+skill_dirs_file="$REPO_DIR/setup/skill-dirs.txt"
+if [ ! -f "$skill_dirs_file" ]; then
+  echo "missing $skill_dirs_file — cannot tell where skills belong" >&2
+  exit 1
+fi
+# Comments and blank lines skipped; every other line is a home-relative destination.
+while IFS= read -r skill_dir || [ -n "$skill_dir" ]; do
+  case "$skill_dir" in ""|\#*) continue ;; esac
+  link_skills "$HOME/$skill_dir"
+done < "$skill_dirs_file"
 for extra_dir in ${extra_config_dirs[@]+"${extra_config_dirs[@]}"}; do
   link_skills "$extra_dir/skills"
 done
