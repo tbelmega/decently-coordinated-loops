@@ -1,5 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { appendOrphanRowEntry } from "./outbox.ts";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  appendOrphanRowEntry,
+  replaceIfUnchanged,
+  routeOrphanRows,
+  withOutboxLock,
+} from "./outbox.ts";
 import type { OrphanRow } from "./preflight.ts";
 
 const orphan: OrphanRow = {
@@ -14,20 +22,65 @@ const orphan: OrphanRow = {
   updated: "2026-07-01",
 };
 
+/** The heading shape the loops-queues entry contract defines, and the only one the
+ * readers of this file parse: id, type, project, title, em dash then middle dots. */
+const CANONICAL_HEADING = /^### (\d+) — (\S+) · (\S+) · (.+)$/m;
+
 describe("appendOrphanRowEntry", () => {
-  test("appends a new sequential entry after the highest existing ID", () => {
-    const outbox = `# Outbox\n\n## Open\n\n### 1 — question: foo\n- type: question\n> A:\n\n### 2 — question: bar\n- type: question\n> A:\n`;
-    const result = appendOrphanRowEntry(outbox, orphan);
-    expect(result).toContain("### 3 — question: orphan BOARD.md row with no item file");
+  test("emits the canonical heading the entry contract defines", () => {
+    const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
+    const heading = CANONICAL_HEADING.exec(result);
+    expect(heading).not.toBeNull();
+    const [, id, type, project] = heading!;
+    expect(id).toBe("1");
+    expect(type).toBe("question");
+    expect(project).toBe("atlas");
+  });
+
+  test("emits an answerable entry", () => {
+    const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
+    expect(result).toMatch(/^> A:$/m);
+  });
+
+  test("carries no `- item:` line — an orphan row is precisely a row with no item", () => {
+    const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
+    expect(result).not.toMatch(/^- item:/m);
+  });
+
+  test("records the dropped row's fields so its data is not lost with it", () => {
+    const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
     expect(result).toContain("items/does-not-exist.md");
     expect(result).toContain("assignee=codex/default");
+    expect(result).toContain("state=idea");
+  });
+
+  test("appends a new sequential entry after the highest existing ID", () => {
+    const outbox = `# Outbox\n\n## Open\n\n### 1 — question · atlas · foo\n\n> A:\n\n### 2 — question · atlas · bar\n\n> A:\n`;
+    const result = appendOrphanRowEntry(outbox, orphan);
+    expect(CANONICAL_HEADING.exec(result.slice(result.indexOf("### 3")))![1]).toBe("3");
     expect(result.indexOf("### 3")).toBeGreaterThan(result.indexOf("### 2"));
   });
 
-  test("starts at 1 when there are no existing entries", () => {
-    const outbox = `# Outbox\n\n## Open\n`;
+  test("numbers against the whole file, so an id never collides with an archived entry", () => {
+    const outbox = `# Outbox\n\n## Open\n\n### 2 — question · atlas · bar\n\n> A:\n\n## Answered\n\n### 7 — question · atlas · settled\n\n> A: yes\n`;
     const result = appendOrphanRowEntry(outbox, orphan);
-    expect(result).toContain("### 1 — question: orphan BOARD.md row with no item file");
+    expect(result).toContain("### 8 — question · atlas · ");
+  });
+
+  test("appends inside `## Open`, not after a later section", () => {
+    const outbox = `# Outbox\n\n## Open\n\n### 1 — question · atlas · foo\n\n> A:\n\n## Answered\n\n### 7 — question · atlas · settled\n\n> A: yes\n`;
+    const result = appendOrphanRowEntry(outbox, orphan);
+    expect(result.indexOf("orphan BOARD.md row")).toBeLessThan(result.indexOf("## Answered"));
+    expect(result).toContain("### 7 — question · atlas · settled");
+  });
+
+  test("refuses a file with no `## Open` section rather than guessing", () => {
+    expect(() => appendOrphanRowEntry(`# Outbox\n`, orphan)).toThrow(/## Open/);
+  });
+
+  test("starts at 1 when there are no existing entries", () => {
+    const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
+    expect(result).toContain("### 1 — question · atlas · ");
   });
 
   test("is idempotent: re-appending the same orphan is a no-op", () => {
@@ -35,7 +88,7 @@ describe("appendOrphanRowEntry", () => {
     const once = appendOrphanRowEntry(outbox, orphan);
     const twice = appendOrphanRowEntry(once, orphan);
     expect(twice).toBe(once);
-    expect([...twice.matchAll(/### \d+ — question: orphan/g)]).toHaveLength(1);
+    expect([...twice.matchAll(/orphan BOARD.md row with no item file/g)]).toHaveLength(1);
   });
 
   test("still appends a different orphan alongside an existing one", () => {
@@ -44,6 +97,86 @@ describe("appendOrphanRowEntry", () => {
     const both = appendOrphanRowEntry(once, other);
     expect(both).toContain("items/does-not-exist.md");
     expect(both).toContain("items/other-ghost.md");
-    expect([...both.matchAll(/### \d+ — question: orphan/g)]).toHaveLength(2);
+    expect([...both.matchAll(/orphan BOARD.md row with no item file/g)]).toHaveLength(2);
+  });
+});
+
+describe("outbox file transactions", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dcl-outbox-"));
+    path = join(dir, "OUTBOX.md");
+    writeFileSync(path, `# Outbox\n\n## Open\n`);
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  describe("withOutboxLock", () => {
+    test("runs the body and returns its value", () => {
+      expect(withOutboxLock(path, () => "done")).toBe("done");
+    });
+
+    test("returns null instead of running when the lock is held", () => {
+      writeFileSync(`${path}.lock`, "999");
+      let ran = false;
+      expect(
+        withOutboxLock(path, () => {
+          ran = true;
+          return "done";
+        }),
+      ).toBeNull();
+      expect(ran).toBe(false);
+    });
+
+    test("releases the lock afterwards, including when the body throws", () => {
+      withOutboxLock(path, () => "done");
+      expect(existsSync(`${path}.lock`)).toBe(false);
+      expect(() =>
+        withOutboxLock(path, () => {
+          throw new Error("boom");
+        }),
+      ).toThrow("boom");
+      expect(existsSync(`${path}.lock`)).toBe(false);
+    });
+  });
+
+  describe("replaceIfUnchanged", () => {
+    test("writes when the file still holds the snapshot", () => {
+      expect(replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next")).toBe(true);
+      expect(readFileSync(path, "utf8")).toBe("next");
+    });
+
+    test("refuses, and preserves the newer content, when the file moved under us", () => {
+      writeFileSync(path, "somebody else's edit");
+      expect(replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next")).toBe(false);
+      expect(readFileSync(path, "utf8")).toBe("somebody else's edit");
+    });
+
+    test("leaves no temporary file behind", () => {
+      replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next");
+      expect(readdirSync(dir).sort()).toEqual(["OUTBOX.md"]);
+    });
+  });
+
+  describe("routeOrphanRows", () => {
+    test("routes the rows and reports how many", () => {
+      expect(routeOrphanRows(path, [orphan])).toEqual({ status: "routed", count: 1 });
+      expect(CANONICAL_HEADING.test(readFileSync(path, "utf8"))).toBe(true);
+    });
+
+    test("reports `unchanged` when every row is already recorded", () => {
+      routeOrphanRows(path, [orphan]);
+      const after = readFileSync(path, "utf8");
+      expect(routeOrphanRows(path, [orphan])).toEqual({ status: "unchanged" });
+      expect(readFileSync(path, "utf8")).toBe(after);
+    });
+
+    test("reports `locked` rather than writing behind another writer's lock", () => {
+      writeFileSync(`${path}.lock`, "999");
+      expect(routeOrphanRows(path, [orphan])).toEqual({ status: "locked" });
+      expect(readFileSync(path, "utf8")).toBe(`# Outbox\n\n## Open\n`);
+    });
   });
 });
