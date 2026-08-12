@@ -300,6 +300,31 @@ awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, u
 `;
 }
 
+/** Reports `routed` only after reading the live file back and finding every entry inside
+ * `## Open`, where a reader will actually look.
+ *
+ * Writing is not routing. Both write paths can succeed and still leave the entry
+ * unreachable: a concurrent writer can add a trailing section between the snapshot and
+ * the append, putting the entry below `## Open`; an editor saving by atomic rename can
+ * replace the inode a successful append just wrote to. The caller drops the orphan's
+ * board row on the strength of this answer, and that row is the row's only remaining
+ * copy, so the answer has to be an observation rather than an assumption.
+ *
+ * What this still cannot cover is a whole-file save that lands *after* the read below.
+ * At that point the owner has replaced the file with their own content, which is
+ * indistinguishable from deleting the entry on purpose, and no protocol over a plain
+ * file can tell those apart. */
+function verified(
+  outboxPath: string,
+  markers: string[],
+  appended: number,
+  read: ReadFile,
+): OrphanRoutingResult {
+  const section = openSection(read(outboxPath));
+  const missing = markers.filter((marker) => !section?.open.includes(marker));
+  return missing.length ? { status: "conflict" } : { status: "routed", count: appended };
+}
+
 export type OrphanRoutingResult =
   | { status: "routed"; count: number }
   | { status: "unchanged" }
@@ -340,15 +365,15 @@ export function routeOrphanRows(
     // have": O_APPEND places the write after whatever else has landed, and it keeps the
     // inode, so the mode, the symlink and any hard links survive untouched too.
     const section = openSection(snapshot);
+    const markers = orphans.map((orphan) => orphanMarker(orphan.path));
     if (section && section.tail === "") {
       appendFileSync(outboxPath, outboxText.slice(snapshot.replace(/\n+$/, "").length));
-      return { status: "routed", count: appended };
+      return verified(outboxPath, markers, appended, read);
     }
 
     try {
-      return replaceIfUnchanged(outboxPath, snapshot, outboxText, read)
-        ? { status: "routed", count: appended }
-        : { status: "conflict" };
+      if (!replaceIfUnchanged(outboxPath, snapshot, outboxText, read)) return { status: "conflict" };
+      return verified(outboxPath, markers, appended, read);
     } catch (error) {
       if (error instanceof UnsupportedOutboxError) return { status: "unsupported", detail: error.message };
       throw error;
@@ -388,7 +413,9 @@ export function orphanRoutingOutcome(
     case "conflict":
       return {
         abort: true,
-        message: `${rows} NOT routed: OUTBOX.md changed while sync held the lock. Nothing was changed — re-run sync.`,
+        message:
+          `${rows} NOT routed: OUTBOX.md changed under sync, so the entries could not be placed ` +
+          `where a reader would find them. The board is untouched — re-run sync.`,
       };
     case "unsupported":
       return { abort: true, message: `${rows} NOT routed: ${routing.detail} Nothing was changed.` };

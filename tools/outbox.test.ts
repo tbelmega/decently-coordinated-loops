@@ -284,15 +284,33 @@ describe("outbox file transactions", () => {
     });
 
     test("appends rather than rewriting when `## Open` is the last section", () => {
-      // The safe shape, and the seeded one. Nothing is read back and rewritten, so a
-      // concurrent writer cannot be clobbered and the racing reader below never fires.
+      // The safe shape, and the seeded one: the file is never read back and rewritten, so
+      // a concurrent writer's content cannot be clobbered. The one read after the
+      // snapshot is the placement check, not a rewrite.
+      const before = readFileSync(path, "utf8");
+      expect(routeOrphanRows(path, [orphan]).status).toBe("routed");
+      const after = readFileSync(path, "utf8");
+      expect(after.startsWith(before.replace(/\n+$/, ""))).toBe(true); // prior bytes intact
+      expect(after).toContain("orphan BOARD.md row");
+    });
+
+    test("refuses to report routed when the entry did not land under `## Open`", () => {
+      // A concurrent writer can add a trailing section between the snapshot and the
+      // append, or replace the inode entirely with an editor's atomic save. Either way
+      // the write succeeded and the entry is unreachable, and the caller is about to drop
+      // the board row on the strength of this answer.
       let reads = 0;
-      routeOrphanRows(path, [orphan], (target) => {
+      const hijacked = (target: string) => {
         reads += 1;
-        return readFileSync(target, "utf8");
-      });
-      expect(reads).toBe(1); // the snapshot only: no verification read, because no rewrite
-      expect(readFileSync(path, "utf8")).toContain("orphan BOARD.md row");
+        const live = readFileSync(target, "utf8");
+        if (reads === 1) return live;
+        // As if a writer had opened `## Answered` above our entry while we appended: the
+        // bytes are all there, and the entry is no longer in the section readers scan.
+        const at = live.indexOf("### ");
+        return `${live.slice(0, at)}## Answered\n\n${live.slice(at)}`;
+      };
+      expect(routeOrphanRows(path, [orphan], hijacked)).toEqual({ status: "conflict" });
+      expect(orphanRoutingOutcome({ status: "conflict" }, 1).abort).toBe(true);
     });
 
     test("reports `conflict` and preserves the other writer's content when it must rewrite", () => {

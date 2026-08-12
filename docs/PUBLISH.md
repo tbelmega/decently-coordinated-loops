@@ -21,58 +21,91 @@ single move everything that history rewriting would otherwise have to chase:
 strictly more work and strictly easier to get wrong: every reachable commit from every
 ref has to be rewritten, and anything missed stays published.
 
-## Before the push
+## The fresh-repository route
 
-1. **Audit objects, not commit messages.** A message-only scan misses most of what a
-   repository publishes. Committer identities differ from author identities, historical
-   file *content* and *path names* travel with the trees, notes and annotated tags carry
-   their own text, and `refs/replace/*` can substitute a sanitised commit for the raw one
-   an audit would otherwise read. So: disable replacement, walk every object reachable
-   from every ref, and check each by type.
+Export the tracked tree of one reviewed commit, and prove that is what you got.
+`git archive` writes exactly the tracked files at that commit: no `.git`, no ignored
+research or review artifacts, no editor state, no untracked leftovers from the private
+checkout. Copying a directory gives none of those guarantees.
 
-   ```bash
-   # Identities, from every commit, with replacement disabled.
-   git --no-replace-objects log --all --format='%an <%ae>%n%cn <%ce>' | sort -u
+```bash
+REVIEWED=$(git -C <private> rev-parse HEAD)
+mkdir ../public && git -C <private> archive "$REVIEWED" | tar -x -C ../public
 
-   # Every reachable object, by type — blobs (file content) and trees (path names) included.
-   git --no-replace-objects rev-list --all --objects |
-     while read -r sha path; do
-       printf '%s %s %s\n' "$(git cat-file -t "$sha")" "$sha" "$path"
-     done
+cd ../public && git init -q && git add -A
 
-   # Content and path search across all of it.
-   git --no-replace-objects grep -niE '<pattern>' $(git rev-list --all)
-   git --no-replace-objects rev-list --all --objects | grep -niE '<pattern>'
+# The equality gate. The staged tree must be the reviewed tree, exactly — same paths,
+# same contents, same modes. Any difference means something entered or left the export.
+test "$(git write-tree)" = "$(git -C <private> rev-parse "$REVIEWED^{tree}")" || echo MISMATCH
+```
 
-   # The ref set itself, raw, plus the things that are not branches or tags.
-   git for-each-ref --format='%(refname) %(objecttype) %(*objectname)'
-   git notes list 2>/dev/null; git stash list; git reflog --all | head
-   ```
+Then commit, and assert the ref set before pushing:
 
-   Validate the ref set explicitly rather than eyeballing `git branch -a`: anything
-   outside `refs/heads/<the branches you mean>` and `refs/tags/<the tags you mean>` is
-   something a reader was never meant to receive - `refs/replace/*` above all, since its
-   presence means the history you just audited is not the history you would push.
+```bash
+git commit -qm "Initial public release"
+git for-each-ref --format='%(refname)'   # expect exactly one refs/heads/<branch>
 
-   Whatever the scan turns up decides whether a fresh repository is required or merely
-   preferable. **A fresh repository makes this entire step moot**, which is the strongest
-   argument for it: one commit, one tree, nothing behind it.
+# Explicit refspec. Never --all or --mirror: they publish whatever refs exist.
+git push origin refs/heads/main:refs/heads/main
+```
 
-2. **Check the working tree the same way.** `grep -rniE '<pattern>' . --exclude-dir=.git`
+## Auditing history, if you keep it
+
+Only needed on the `git filter-repo` route. Set the environment variable rather than
+passing a flag, so nested invocations inherit it — a replacement ref substitutes a
+sanitised commit for the raw one, which means an audit that honours replacement is
+auditing the wrong history.
+
+```bash
+export GIT_NO_REPLACE_OBJECTS=1
+PATTERN='<your names, hosts, employer, private repo names, home paths>'
+
+# 1. The ref set. refs/replace/* must be empty; anything outside the branches and tags
+#    you mean to publish is a ref a reader was never meant to receive.
+git for-each-ref --format='%(refname) %(objecttype)'
+
+# 2. Every reachable object, dispatched by type. Blob bytes and tag/commit metadata are
+#    where private data actually lives; a listing of object ids proves nothing.
+git rev-list --all --objects --no-object-names | sort -u |
+  while read -r sha; do
+    case "$(git cat-file -t "$sha")" in
+      blob)   git cat-file blob "$sha"   | grep -niE "$PATTERN" | sed "s|^|blob $sha: |" ;;
+      commit) git cat-file commit "$sha" | grep -niE "$PATTERN" | sed "s|^|commit $sha: |" ;;
+      tag)    git cat-file tag "$sha"    | grep -niE "$PATTERN" | sed "s|^|tag $sha: |" ;;
+    esac
+  done
+
+# 3. Path names, which travel in the trees whether or not any blob matches.
+git rev-list --all --objects | grep -iE "$PATTERN"
+
+# 4. Identities, author and committer both.
+git log --all --format='%an <%ae>%n%cn <%ce>' | sort -u
+
+# 5. The things that are not commits: notes, stashes, reflogs.
+git notes list 2>/dev/null; git stash list; git reflog --all | head
+```
+
+A clean run means the patterns found nothing. It does not mean nothing is there: the
+audit is only as good as `PATTERN`, which is the honest reason to prefer the fresh
+repository above.
+
+## Before either push
+
+1. **Check the working tree.** `grep -rniE '<pattern>' . --exclude-dir=.git`
    over personal names, employer names, private repository names, home directory paths
    and hostnames. `docs/specs/` is gitignored by design: design documents with personal
    context live in the owner's private tracker, not here.
 
-3. **Confirm the LICENSE attribution.** `LICENSE` carries MIT plus a copyright line. It
+2. **Confirm the LICENSE attribution.** `LICENSE` carries MIT plus a copyright line. It
    is deliberate, and it is the one place a personal name legitimately appears - confirm
    it says what you want it to say to a work or public audience before it becomes
    permanent.
 
-4. **Read the README end to end as a stranger.** It is the only document most readers
+3. **Read the README end to end as a stranger.** It is the only document most readers
    will see. Check specifically that the requirements, the supported platforms and the
    list of wired harnesses still match `setup/harnesses.ts`.
 
-5. **Run the gate.** `bun run check` green, and `./install.sh` exercised against a
+4. **Run the gate.** `bun run check` green, and `./install.sh` exercised against a
    throwaway `HOME` if the installer changed.
 
 ## After the push
