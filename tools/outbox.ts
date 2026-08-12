@@ -54,13 +54,18 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
   } finally {
     closeSync(handle);
     try {
-      // Release only our own lock. If someone deleted this lock while we still held it —
-      // the documented manual recovery, aimed at a crashed holder — a second writer may
-      // already have created its own, and unlinking that one would let a third in while
-      // the second is still working. Reading before unlinking cannot close that window
-      // either (the file can change between the two calls), but it turns the common case
-      // from "silently breaks the lock" into "leaves it alone".
-      if (readFileSync(lockPath, "utf8") === token) unlinkSync(lockPath);
+      // Keep our hands off a lock that is now somebody else's. If this lock was deleted
+      // while we still held it — the documented manual recovery, aimed at a crashed
+      // holder — a second writer may already have created its own, and unlinking that
+      // would let a third in while the second is still working. Reading before unlinking
+      // cannot close that window either (the file can change between the two calls), but
+      // it turns the common case from "silently breaks the lock" into "leaves it alone".
+      //
+      // Anything empty is released, not preserved: every writer stamps its pid, so an
+      // empty lock is ours with a failed token write, or a truncated file no live writer
+      // is behind. Treating it as foreign would strand the file permanently.
+      const held = readFileSync(lockPath, "utf8");
+      if (held === "" || held === token) unlinkSync(lockPath);
     } catch {
       // already gone, or unreadable — nothing safe left to do
     }
@@ -177,18 +182,27 @@ discarded.
  * the item schema asks only that `project` be non-blank — and an orphan row has no item
  * file, so nothing validated its label in the first place.
  *
- * A label that cannot be a token becomes `UNPARSEABLE`, never an invented identity.
+ * A label that cannot be that token gets this marker, never an invented identity.
  * Substituting the whitespace (`family app` → `family-app`) would silently merge two
  * distinct projects, and escaping it (`family%20app`) invents a project name that matches
- * nothing on the board and no consumer decodes. `UNPARSEABLE` is the honest third answer:
- * it cannot collide with a real project, it does not misattribute the entry to one, and
- * the exact label is recorded in the body immediately below, which is where a reader who
- * sees the marker will look. */
-export const UNPARSEABLE_PROJECT = "UNPARSEABLE";
+ * nothing on the board and that no consumer decodes. The marker is the honest third
+ * answer: it does not misattribute the entry to any project, and the exact label is
+ * recorded in the body immediately below it, which is where a reader who sees the marker
+ * will look.
+ *
+ * The pipes make it **unforgeable rather than merely unlikely**: a board row is a
+ * pipe-delimited table row, split on `|` before its project cell is ever read, so no
+ * project label arriving here can contain one. A plain word like `UNPARSEABLE` would be a
+ * legal project name that a real board could carry, and orphans would then be grouped
+ * with it. */
+export const UNPARSEABLE_PROJECT = "|UNPARSEABLE|";
 
 function headingToken(project: string): string {
-  const label = project.trim();
-  return label === "" || /\s/.test(label) ? UNPARSEABLE_PROJECT : label;
+  // The raw value, not the trimmed one: ` atlas ` is not the project `atlas`, and
+  // quietly trimming a malformed label into a real project is the misattribution this
+  // whole function exists to prevent. (The board parser trims its cells, so this is
+  // unreachable from sync today — it is the contract for every future caller.)
+  return project.trim() === "" || /\s/.test(project) ? UNPARSEABLE_PROJECT : project;
 }
 
 export type OrphanRoutingResult =

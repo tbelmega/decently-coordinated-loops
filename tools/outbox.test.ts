@@ -76,11 +76,25 @@ describe("appendOrphanRowEntry", () => {
     expect(result).toContain("project=family app");
   });
 
+  const headingOf = (project: string) =>
+    CANONICAL_HEADING.exec(appendOrphanRowEntry(`# Outbox\n\n## Open\n`, { ...orphan, project }))![3];
+
   test("never renames a project that already is a valid token", () => {
-    const heading = (project: string) =>
-      CANONICAL_HEADING.exec(appendOrphanRowEntry(`# Outbox\n\n## Open\n`, { ...orphan, project }))![3];
-    expect(heading("family-app")).toBe("family-app");
-    expect(heading("100%-done")).toBe("100%-done");
+    expect(headingOf("family-app")).toBe("family-app");
+    expect(headingOf("100%-done")).toBe("100%-done");
+  });
+
+  test("marks a padded label instead of trimming it into a real project", () => {
+    expect(headingOf(" atlas ")).toBe(UNPARSEABLE_PROJECT);
+    expect(headingOf("   ")).toBe(UNPARSEABLE_PROJECT);
+  });
+
+  test("uses a marker no board row could ever carry", () => {
+    // A board row is split on `|` before its project cell is read, so a label containing
+    // one cannot reach this writer — which is what makes the marker unforgeable rather
+    // than just unlikely. A plain word would be a legal project name.
+    expect(UNPARSEABLE_PROJECT).toContain("|");
+    expect(headingOf("UNPARSEABLE")).toBe("UNPARSEABLE");
   });
 
   test("appends a new sequential entry after the highest existing ID", () => {
@@ -157,6 +171,18 @@ describe("outbox file transactions", () => {
         }),
       ).toBeNull();
       expect(ran).toBe(false);
+    });
+
+    test("does not strand the lock when its own initialization failed", () => {
+      // Between the exclusive create and the token write the file is ours but anonymous.
+      // A conditional release that only recognises the token would leave it forever.
+      expect(() =>
+        withOutboxLock(path, () => {
+          writeFileSync(`${path}.lock`, ""); // as if the token write never landed
+          throw new Error("boom");
+        }),
+      ).toThrow("boom");
+      expect(existsSync(`${path}.lock`)).toBe(false);
     });
 
     test("leaves a replacement lock alone when its own was removed under it", () => {
