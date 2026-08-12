@@ -283,10 +283,23 @@ describe("outbox file transactions", () => {
       expect(readFileSync(path, "utf8")).toBe(after);
     });
 
-    test("reports `conflict` and preserves the other writer's content", () => {
-      // The conflict branch is a race between the snapshot read and the verification
-      // read, so the injected reader stands exactly where a competing writer would: the
-      // snapshot is the real file, and by verification time the file has moved on.
+    test("appends rather than rewriting when `## Open` is the last section", () => {
+      // The safe shape, and the seeded one. Nothing is read back and rewritten, so a
+      // concurrent writer cannot be clobbered and the racing reader below never fires.
+      let reads = 0;
+      routeOrphanRows(path, [orphan], (target) => {
+        reads += 1;
+        return readFileSync(target, "utf8");
+      });
+      expect(reads).toBe(1); // the snapshot only: no verification read, because no rewrite
+      expect(readFileSync(path, "utf8")).toContain("orphan BOARD.md row");
+    });
+
+    test("reports `conflict` and preserves the other writer's content when it must rewrite", () => {
+      // A later section forces the rewrite path, whose conflict branch is a race between
+      // the snapshot read and the verification read; the injected reader stands exactly
+      // where a competing writer would.
+      writeFileSync(path, `# Outbox\n\n## Open\n\n## Answered\n\n### 9 — question · atlas · done\n\n> A: yes\n`);
       const other = "somebody else's edit\n";
       let reads = 0;
       const racingRead = (target: string) => {
@@ -300,7 +313,16 @@ describe("outbox file transactions", () => {
       expect(readFileSync(path, "utf8")).toBe(other);
     });
 
-    test("reports `unsupported`, not `conflict`, when the outbox cannot be replaced", () => {
+    test("routes a hard-linked outbox safely by appending to it", () => {
+      // Appending keeps the inode, so every other name for this file sees the entry too.
+      const twin = join(dir, "twin.md");
+      linkSync(path, twin);
+      expect(routeOrphanRows(path, [orphan]).status).toBe("routed");
+      expect(readFileSync(twin, "utf8")).toContain("orphan BOARD.md row");
+    });
+
+    test("reports `unsupported` when a hard-linked outbox would have to be rewritten", () => {
+      writeFileSync(path, `# Outbox\n\n## Open\n\n## Answered\n\n### 9 — question · atlas · done\n\n> A: yes\n`);
       linkSync(path, join(dir, "twin.md"));
       const result = routeOrphanRows(path, [orphan]);
       expect(result.status).toBe("unsupported");
@@ -331,5 +353,32 @@ describe("orphanRoutingOutcome", () => {
       expect(outcome.abort).toBe(true);
       expect(outcome.message).toContain("NOT routed");
     }
+  });
+});
+
+describe("orphan entry contract", () => {
+  test("keeps the body within the six-line entry contract", () => {
+    const entry = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan).split("### ")[1];
+    const body = entry
+      .split("\n")
+      .slice(1) // drop the heading
+      .filter((line) => line.trim() !== "" && !line.startsWith("> A:"));
+    expect(body.length).toBeLessThanOrEqual(6);
+  });
+
+  test("dedups on a marker no prose can produce by accident", () => {
+    // The old key was the entry's own prose, so an unrelated note repeating it read as
+    // "already recorded" — and sync then dropped the board row that was its only copy.
+    const quoting = `# Outbox\n\n## Open\n\n### 1 — question · atlas · a note\n\nSomeone wrote about the BOARD.md row \`items/does-not-exist.md\` here.\n\n> A:\n`;
+    const result = appendOrphanRowEntry(quoting, orphan);
+    expect(result).not.toBe(quoting);
+    expect(result).toContain("<!-- loops:orphan items/does-not-exist.md -->");
+  });
+
+  test("marks a project label carrying the heading's own separator", () => {
+    const dotted: OrphanRow = { ...orphan, project: "alpha·beta" };
+    const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, dotted);
+    expect(CANONICAL_HEADING.exec(result)![3]).toBe(UNPARSEABLE_PROJECT);
+    expect(result).toContain("project=alpha·beta");
   });
 });

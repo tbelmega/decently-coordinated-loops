@@ -29,6 +29,14 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Canonical absolute path of a directory, portably. `readlink -f` is GNU-only: stock
+# macOS ships BSD readlink, which has no -f, so both sides of a comparison would fail to
+# the empty string and any existing symlink would read as already current. `cd -P` plus
+# `pwd -P` resolves symlinks with the shell alone, and both operands here are directories.
+canonical_dir() {
+  (cd -P "$1" 2>/dev/null && pwd -P)
+}
+
 link_skills() {
   local target_root="$1"
   mkdir -p "$target_root"
@@ -38,7 +46,8 @@ link_skills() {
     local name link
     name="$(basename "$skill_dir")"
     link="$target_root/$name"
-    if [ -L "$link" ] && [ "$(readlink -f "$link")" = "$(readlink -f "$skill_dir")" ]; then
+    if [ -L "$link" ] && [ -n "$(canonical_dir "$link")" ] &&
+       [ "$(canonical_dir "$link")" = "$(canonical_dir "$skill_dir")" ]; then
       current=$((current + 1))
     elif [ -e "$link" ] || [ -L "$link" ]; then
       echo "  ! $link exists and is not a link to this repo — left untouched"

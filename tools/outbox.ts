@@ -2,6 +2,7 @@
 // contract; this module is the only place DCL writes it, and every write takes the
 // shared lock and checks the file against the snapshot it transformed.
 import {
+  appendFileSync,
   chmodSync,
   closeSync,
   fstatSync,
@@ -225,38 +226,6 @@ function openSection(text: string): { head: string; open: string; tail: string }
  * marker is built once and embedded in the body, so the guard cannot drift away from
  * what the entry actually says. Answered entries are deleted on routing, so a present
  * marker always means a live open ask. */
-export function appendOrphanRowEntry(outboxText: string, orphan: OrphanRow): string {
-  const marker = `BOARD.md row \`${orphan.path}\``;
-  if (outboxText.includes(marker)) return outboxText;
-
-  // Numbered against the WHOLE file, not just `## Open`: an id must not collide with an
-  // entry that has since moved to a later section, or the two become indistinguishable
-  // in every citation. Placement below is section-bounded; numbering is not.
-  const existingIds = [...outboxText.matchAll(/^### (\d+) —/gm)].map((match) => parseInt(match[1], 10));
-  const nextId = (existingIds.length ? Math.max(...existingIds) : 0) + 1;
-
-  const entry = `
-### ${nextId} — question · ${headingToken(orphan.project)} · orphan BOARD.md row with no item file
-
-Source: ${marker} - [${orphan.title}](${orphan.path}). The preflight run before regenerating
-the board found no matching item file under \`items/\`.
-
-The row was dropped from the regenerated board, so its data is recorded here rather than lost
-silently: project=${orphan.project}, state=${orphan.state}, next-actor=${orphan.nextActor},
-awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee},
-updated=${orphan.updated}.
-
-**The ask:** create an item file for it (per the loops-board skill), or confirm it should be
-discarded.
-
-> A:
-`;
-
-  const section = openSection(outboxText);
-  if (!section) throw new Error("OUTBOX.md has no `## Open` section to append to");
-  return `${section.head}${section.open.replace(/\n+$/, "")}\n${entry}${section.tail}`;
-}
-
 /** The project a routed entry claims, which readers compare directly against their own
  * project labels. The heading's project field is one whitespace-free token to them, while
  * the item schema asks only that `project` be non-blank — and an orphan row has no item
@@ -267,22 +236,68 @@ discarded.
  * distinct projects, and escaping it (`family%20app`) invents a project name that matches
  * nothing on the board and that no consumer decodes. The marker is the honest third
  * answer: it does not misattribute the entry to any project, and the exact label is
- * recorded in the body immediately below it, which is where a reader who sees the marker
- * will look.
+ * recorded in the body immediately below it.
  *
  * The pipes make it **unforgeable rather than merely unlikely**: a board row is a
  * pipe-delimited table row, split on `|` before its project cell is ever read, so no
  * project label arriving here can contain one. A plain word like `UNPARSEABLE` would be a
- * legal project name that a real board could carry, and orphans would then be grouped
- * with it. */
+ * legal project name that a real board could carry. */
 export const UNPARSEABLE_PROJECT = "|UNPARSEABLE|";
 
 function headingToken(project: string): string {
-  // The raw value, not the trimmed one: ` atlas ` is not the project `atlas`, and
-  // quietly trimming a malformed label into a real project is the misattribution this
-  // whole function exists to prevent. (The board parser trims its cells, so this is
-  // unreachable from sync today — it is the contract for every future caller.)
-  return project.trim() === "" || /\s/.test(project) ? UNPARSEABLE_PROJECT : project;
+  // The raw value, not the trimmed one: ` atlas ` is not the project `atlas`, and quietly
+  // trimming a malformed label into a real project is the misattribution this function
+  // exists to prevent. (The board parser trims its cells, so that case is unreachable
+  // from sync today — it is the contract for every future caller.)
+  //
+  // The middle dot is rejected for the same reason as whitespace: it is the heading's own
+  // field separator, so a label carrying one hands the reader an extra field and an entry
+  // that reads as some other project.
+  const unrepresentable = project.trim() === "" || /\s/.test(project) || project.includes("·");
+  return unrepresentable ? UNPARSEABLE_PROJECT : project;
+}
+
+/** The dedup key for an orphan's entry: machine-readable, and impossible to write by
+ * accident. The predecessor keyed on the entry's own prose (``BOARD.md row `path` ``), so
+ * any text repeating that phrase — a retained note, a quoted earlier entry, the owner
+ * describing the problem — read as "already recorded". Sync then dropped the row from
+ * BOARD.md, which is its only remaining copy, and reported success. */
+function orphanMarker(path: string): string {
+  return `<!-- loops:orphan ${path} -->`;
+}
+
+export function appendOrphanRowEntry(outboxText: string, orphan: OrphanRow): string {
+  const section = openSection(outboxText);
+  if (!section) throw new Error("OUTBOX.md has no `## Open` section to append to");
+  // Scoped to the open section: an entry that has been answered and moved on is not a
+  // live ask, and re-filing the row is the right thing once it is out of `## Open`.
+  if (section.open.includes(orphanMarker(orphan.path))) return outboxText;
+
+  const entry = orphanEntryText(outboxText, orphan);
+  return `${section.head}${section.open.replace(/\n+$/, "")}\n${entry}${section.tail}`;
+}
+
+/** One entry, ready to append. Kept to the entry contract's six body lines: the marker,
+ * three lines of source and dropped-row data, and the ask. */
+function orphanEntryText(outboxText: string, orphan: OrphanRow): string {
+  // Numbered against the WHOLE file, not just `## Open`: an id must not collide with an
+  // entry that has since moved to a later section, or the two become indistinguishable
+  // in every citation.
+  const existingIds = [...outboxText.matchAll(/^### (\d+) —/gm)].map((match) => parseInt(match[1], 10));
+  const nextId = (existingIds.length ? Math.max(...existingIds) : 0) + 1;
+
+  return `
+### ${nextId} — question · ${headingToken(orphan.project)} · orphan BOARD.md row with no item file
+${orphanMarker(orphan.path)}
+
+Source: [${orphan.title}](${orphan.path}), dropped from BOARD.md because no item file matched it.
+Its row said: project=${orphan.project}, state=${orphan.state}, next-actor=${orphan.nextActor},
+awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, updated=${orphan.updated}.
+
+**The ask:** create an item file for it (per the loops-board skill), or confirm it can be discarded.
+
+> A:
+`;
 }
 
 export type OrphanRoutingResult =
@@ -317,6 +332,19 @@ export function routeOrphanRows(
       outboxText = next;
     }
     if (outboxText === snapshot) return { status: "unchanged" };
+
+    // When `## Open` is the last section — the seeded shape, and the shape of every
+    // outbox that has not grown an archive section — the new entries belong at the end of
+    // the file, so they can be appended instead of rewriting it. That is the whole
+    // difference between "we probably did not clobber the owner's edit" and "we cannot
+    // have": O_APPEND places the write after whatever else has landed, and it keeps the
+    // inode, so the mode, the symlink and any hard links survive untouched too.
+    const section = openSection(snapshot);
+    if (section && section.tail === "") {
+      appendFileSync(outboxPath, outboxText.slice(snapshot.replace(/\n+$/, "").length));
+      return { status: "routed", count: appended };
+    }
+
     try {
       return replaceIfUnchanged(outboxPath, snapshot, outboxText, read)
         ? { status: "routed", count: appended }

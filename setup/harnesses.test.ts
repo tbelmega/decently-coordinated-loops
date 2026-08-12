@@ -141,7 +141,9 @@ describe("install.sh", () => {
     const home = tempHome();
     const shims = mkdtempSync(join(tmpdir(), "dcl-path-"));
     try {
-      for (const tool of ["bash", "ln", "mkdir", "readlink", "basename", "dirname", "sed", "cat"]) {
+      // No readlink here on purpose: install.sh must canonicalize with the shell alone,
+      // since stock macOS has no `readlink -f`.
+      for (const tool of ["bash", "ln", "mkdir", "basename", "dirname", "sed", "cat"]) {
         const found = spawnSync("which", [tool], { encoding: "utf8" });
         if (found.status === 0) {
           spawnSync("ln", ["-s", found.stdout.trim(), join(shims, tool)]);
@@ -178,6 +180,26 @@ describe("install.sh", () => {
       expect(result.status).toBe(0);
       for (const root of [...skillsDirs().map((relative) => join(home, relative)), extraOne, extraTwo]) {
         expect(linksIn(root.endsWith("skills") ? root : join(root, "skills"))).toEqual(expectedSkills());
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("recognises its own links as current on a rerun, without GNU readlink", () => {
+    // The rerun path is where a non-portable canonicalization bites: both sides failing
+    // to the empty string would make any existing symlink read as already ours.
+    const home = tempHome();
+    try {
+      const env = { HOME: home, PATH: process.env.PATH ?? "" };
+      expect(spawnSync("bash", [join(DCL_HOME, "install.sh")], { env, encoding: "utf8" }).status).toBe(0);
+      const second = spawnSync("bash", [join(DCL_HOME, "install.sh")], { env, encoding: "utf8" });
+
+      expect(second.status).toBe(0);
+      expect(second.stdout).toContain("0 newly linked");
+      expect(second.stdout).not.toContain("left untouched");
+      for (const relative of skillsDirs()) {
+        expect(linksIn(join(home, relative))).toEqual(expectedSkills());
       }
     } finally {
       rmSync(home, { recursive: true, force: true });

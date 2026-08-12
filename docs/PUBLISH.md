@@ -23,17 +23,40 @@ ref has to be rewritten, and anything missed stays published.
 
 ## Before the push
 
-1. **Scan every commit reachable from all refs, not a fixed number of recent ones.**
-   The count of commits needing attention is not knowable in advance, so scan the set:
+1. **Audit objects, not commit messages.** A message-only scan misses most of what a
+   repository publishes. Committer identities differ from author identities, historical
+   file *content* and *path names* travel with the trees, notes and annotated tags carry
+   their own text, and `refs/replace/*` can substitute a sanitised commit for the raw one
+   an audit would otherwise read. So: disable replacement, walk every object reachable
+   from every ref, and check each by type.
 
    ```bash
-   git log --all --format='%an <%ae>' | sort -u          # identities
-   git log --all --format='%H %s%n%b' | grep -niE '<pattern>'   # private names, paths, hosts
-   git tag -l; git branch -a                             # working refs that should not ship
+   # Identities, from every commit, with replacement disabled.
+   git --no-replace-objects log --all --format='%an <%ae>%n%cn <%ce>' | sort -u
+
+   # Every reachable object, by type — blobs (file content) and trees (path names) included.
+   git --no-replace-objects rev-list --all --objects |
+     while read -r sha path; do
+       printf '%s %s %s\n' "$(git cat-file -t "$sha")" "$sha" "$path"
+     done
+
+   # Content and path search across all of it.
+   git --no-replace-objects grep -niE '<pattern>' $(git rev-list --all)
+   git --no-replace-objects rev-list --all --objects | grep -niE '<pattern>'
+
+   # The ref set itself, raw, plus the things that are not branches or tags.
+   git for-each-ref --format='%(refname) %(objecttype) %(*objectname)'
+   git notes list 2>/dev/null; git stash list; git reflog --all | head
    ```
 
+   Validate the ref set explicitly rather than eyeballing `git branch -a`: anything
+   outside `refs/heads/<the branches you mean>` and `refs/tags/<the tags you mean>` is
+   something a reader was never meant to receive - `refs/replace/*` above all, since its
+   presence means the history you just audited is not the history you would push.
+
    Whatever the scan turns up decides whether a fresh repository is required or merely
-   preferable.
+   preferable. **A fresh repository makes this entire step moot**, which is the strongest
+   argument for it: one commit, one tree, nothing behind it.
 
 2. **Check the working tree the same way.** `grep -rniE '<pattern>' . --exclude-dir=.git`
    over personal names, employer names, private repository names, home directory paths

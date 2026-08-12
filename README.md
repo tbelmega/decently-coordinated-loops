@@ -41,8 +41,8 @@ below), and at least one skills-aware agent harness. DCL wires Claude Code, Code
 Cursor by name, plus the vendor-neutral `~/.agents/skills` tree that other skill-aware
 harnesses read; adding another is one entry in `setup/harnesses.ts`.
 
-Linux and macOS are the supported platforms: `install.sh` is bash and the tools assume
-POSIX paths and symlinks. Windows works under WSL.
+Linux and macOS are the supported platforms: `install.sh` is bash and resolves paths with
+the shell alone, so it needs no GNU coreutils. Windows works under WSL.
 
 Clone this repository, then from its root:
 
@@ -92,7 +92,7 @@ either side and re-run `bun run sync`.
   serialized by a lock file.
 - **Git primitives, not forge assumptions**: the workflow is defined over agent
   branches, a review mechanism you plug in, and rebase landings. Any git remote works —
-  GitHub, GitLab, Bitbucket, AWS CodeCommit, or a bare repository on a machine you own.
+  GitHub, Bitbucket, GitLab, AWS CodeCommit, or a bare repository on a machine you own.
   GitHub PRs are one configuration, not a dependency: the default `landedAdapter` is
   `git`, which decides what has landed by patch-id comparison and never calls a forge
   API. The bundled reviewer is forge-free by design.
