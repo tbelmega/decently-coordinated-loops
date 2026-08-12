@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  UNPARSEABLE_PROJECT,
   appendOrphanRowEntry,
   orphanRoutingOutcome,
   replaceIfUnchanged,
@@ -55,23 +65,22 @@ describe("appendOrphanRowEntry", () => {
     expect(result).toContain("state=idea");
   });
 
-  test("keeps the heading parseable when the project label contains whitespace", () => {
-    // The consumer reads the project field as one whitespace-free token, while the item
-    // schema only requires `project` to be non-blank. A label like "family app" would
-    // otherwise reproduce the exact unparseable-entry defect this writer exists to fix.
+  test("marks a label it cannot represent instead of inventing a project", () => {
+    // The consumer reads the project field as one whitespace-free token and compares it
+    // to its own project labels. A label like "family app" cannot be that token, and
+    // neither substituting nor escaping it is honest: one merges two real projects, the
+    // other names a project that exists nowhere. The exact label goes in the body.
     const spaced: OrphanRow = { ...orphan, project: "family app" };
     const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, spaced);
-    expect(CANONICAL_HEADING.exec(result)![3]).toBe("family%20app");
+    expect(CANONICAL_HEADING.exec(result)![3]).toBe(UNPARSEABLE_PROJECT);
     expect(result).toContain("project=family app");
   });
 
-  test("never aliases two distinct project labels onto one token", () => {
-    // The structured field is the only project value consumers read, so a lossy token
-    // would merge two real projects in every grouping and attribution the ledger does.
+  test("never renames a project that already is a valid token", () => {
     const heading = (project: string) =>
       CANONICAL_HEADING.exec(appendOrphanRowEntry(`# Outbox\n\n## Open\n`, { ...orphan, project }))![3];
-    expect(heading("family app")).not.toBe(heading("family-app"));
-    expect(heading("100% done")).toBe("100%25%20done");
+    expect(heading("family-app")).toBe("family-app");
+    expect(heading("100%-done")).toBe("100%-done");
   });
 
   test("appends a new sequential entry after the highest existing ID", () => {
@@ -150,6 +159,18 @@ describe("outbox file transactions", () => {
       expect(ran).toBe(false);
     });
 
+    test("leaves a replacement lock alone when its own was removed under it", () => {
+      // The documented manual recovery targets a crashed holder. Applied to a live one it
+      // would otherwise cascade: this holder's release would delete the next holder's
+      // lock, admitting a third writer into an occupied critical section.
+      withOutboxLock(path, () => {
+        rmSync(`${path}.lock`);
+        writeFileSync(`${path}.lock`, "4242"); // a second writer acquired it
+      });
+      expect(readFileSync(`${path}.lock`, "utf8")).toBe("4242");
+      rmSync(`${path}.lock`);
+    });
+
     test("releases the lock afterwards, including when the body throws", () => {
       withOutboxLock(path, () => "done");
       expect(existsSync(`${path}.lock`)).toBe(false);
@@ -174,6 +195,12 @@ describe("outbox file transactions", () => {
       expect(readFileSync(path, "utf8")).toBe("somebody else's edit");
     });
 
+    test("keeps the existing file mode, so a restricted outbox is not published", () => {
+      chmodSync(path, 0o600);
+      replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next");
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    });
+
     test("leaves no temporary file behind", () => {
       replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next");
       expect(readdirSync(dir).sort()).toEqual(["OUTBOX.md"]);
@@ -186,11 +213,35 @@ describe("outbox file transactions", () => {
       expect(CANONICAL_HEADING.test(readFileSync(path, "utf8"))).toBe(true);
     });
 
+    test("counts what it appended, not what it was asked to append", () => {
+      const other: OrphanRow = { ...orphan, path: "items/other-ghost.md", title: "Other ghost" };
+      routeOrphanRows(path, [orphan]);
+      expect(routeOrphanRows(path, [orphan, other])).toEqual({ status: "routed", count: 1 });
+      expect(orphanRoutingOutcome({ status: "routed", count: 1 }, 2).message).toContain("already recorded");
+    });
+
     test("reports `unchanged` when every row is already recorded", () => {
       routeOrphanRows(path, [orphan]);
       const after = readFileSync(path, "utf8");
       expect(routeOrphanRows(path, [orphan])).toEqual({ status: "unchanged" });
       expect(readFileSync(path, "utf8")).toBe(after);
+    });
+
+    test("reports `conflict` and preserves the other writer's content", () => {
+      // The conflict branch is a race between the snapshot read and the verification
+      // read, so the injected reader stands exactly where a competing writer would: the
+      // snapshot is the real file, and by verification time the file has moved on.
+      const other = "somebody else's edit\n";
+      let reads = 0;
+      const racingRead = (target: string) => {
+        reads += 1;
+        if (reads === 1) return readFileSync(target, "utf8");
+        writeFileSync(target, other);
+        return other;
+      };
+
+      expect(routeOrphanRows(path, [orphan], racingRead)).toEqual({ status: "conflict" });
+      expect(readFileSync(path, "utf8")).toBe(other);
     });
 
     test("reports `locked` rather than writing behind another writer's lock", () => {

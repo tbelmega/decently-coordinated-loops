@@ -1,10 +1,27 @@
 // OUTBOX.md's programmatic writer. The file's format is the loops-queues entry
 // contract; this module is the only place DCL writes it, and every write takes the
 // shared lock and checks the file against the snapshot it transformed.
-import { closeSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { OrphanRow } from "./preflight.ts";
+
+/** How this module reads OUTBOX.md. Production has exactly one implementation; the seam
+ * exists because the conflict branch below is a race between two reads, and a test that
+ * cannot stand between them cannot reach it at all. */
+export type ReadFile = (path: string) => string;
+
+const defaultRead: ReadFile = (path) => readFileSync(path, "utf8");
 
 /** Run `body` while holding an exclusive lock on `path`, or return null if it is held.
  *
@@ -30,15 +47,22 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
     throw error;
   }
+  const token = String(process.pid);
   try {
-    writeFileSync(lockPath, String(process.pid));
+    writeFileSync(lockPath, token);
     return body();
   } finally {
     closeSync(handle);
     try {
-      unlinkSync(lockPath);
+      // Release only our own lock. If someone deleted this lock while we still held it —
+      // the documented manual recovery, aimed at a crashed holder — a second writer may
+      // already have created its own, and unlinking that one would let a third in while
+      // the second is still working. Reading before unlinking cannot close that window
+      // either (the file can change between the two calls), but it turns the common case
+      // from "silently breaks the lock" into "leaves it alone".
+      if (readFileSync(lockPath, "utf8") === token) unlinkSync(lockPath);
     } catch {
-      // already gone
+      // already gone, or unreadable — nothing safe left to do
     }
   }
 }
@@ -46,11 +70,21 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
 /** Replaces `path` via a temp file in the same directory plus a rename, so a reader
  * never observes a half-written OUTBOX.md. Sync twin of tools/review/atomic-write.ts,
  * which is async and belongs to the review mechanism; inlined here for the same reason
- * setup/seed.ts inlines its own, to keep the module boundaries one-directional. */
+ * setup/seed.ts inlines its own, to keep the module boundaries one-directional.
+ *
+ * The existing mode is carried onto the replacement. Replace-by-rename otherwise silently
+ * re-creates the file at the process default (commonly 0644), so an OUTBOX.md an owner
+ * restricted to 0600 would be published to every local user by a routine sync — a write
+ * that widens permissions is a worse failure than the torn read this avoids. */
 function writeFileAtomically(path: string, content: string): void {
   const temporaryPath = join(dirname(path), `${basename(path)}.tmp-${process.pid}-${randomUUID()}`);
   try {
     writeFileSync(temporaryPath, content);
+    try {
+      chmodSync(temporaryPath, statSync(path).mode);
+    } catch {
+      // No existing file (or no permission to read its mode): keep the default.
+    }
     renameSync(temporaryPath, path);
   } finally {
     rmSync(temporaryPath, { force: true });
@@ -69,8 +103,13 @@ function writeFileAtomically(path: string, content: string): void {
  * long-running sync computes) — and it costs nothing. Full serialization is available
  * only between writers that take `withOutboxLock`; against the ones that cannot, this
  * narrows the race to microseconds rather than eliminating it. */
-export function replaceIfUnchanged(path: string, snapshot: string, next: string): boolean {
-  if (readFileSync(path, "utf8") !== snapshot) return false;
+export function replaceIfUnchanged(
+  path: string,
+  snapshot: string,
+  next: string,
+  read: ReadFile = defaultRead,
+): boolean {
+  if (read(path) !== snapshot) return false;
   writeFileAtomically(path, next);
   return true;
 }
@@ -133,17 +172,23 @@ discarded.
   return `${section.head}${section.open.replace(/\n+$/, "")}\n${entry}${section.tail}`;
 }
 
-/** The heading's project field is one whitespace-free token to its readers, while the
- * item schema asks only that `project` be non-blank. A label with a space in it would
- * therefore emit exactly the unparseable entry this writer exists to stop producing.
+/** The project a routed entry claims, which readers compare directly against their own
+ * project labels. The heading's project field is one whitespace-free token to them, while
+ * the item schema asks only that `project` be non-blank — and an orphan row has no item
+ * file, so nothing validated its label in the first place.
  *
- * Percent-encoding, not substitution: mapping whitespace to `-` would alias two distinct
- * valid labels ("family app" and "family-app") onto one structured field, and the
- * structured field is the only project value consumers read — grouping and attribution
- * would silently merge two projects. Encoding `%` first keeps the transform reversible,
- * so the token identifies exactly one label. The body still records the label verbatim. */
+ * A label that cannot be a token becomes `UNPARSEABLE`, never an invented identity.
+ * Substituting the whitespace (`family app` → `family-app`) would silently merge two
+ * distinct projects, and escaping it (`family%20app`) invents a project name that matches
+ * nothing on the board and no consumer decodes. `UNPARSEABLE` is the honest third answer:
+ * it cannot collide with a real project, it does not misattribute the entry to one, and
+ * the exact label is recorded in the body immediately below, which is where a reader who
+ * sees the marker will look. */
+export const UNPARSEABLE_PROJECT = "UNPARSEABLE";
+
 function headingToken(project: string): string {
-  return project.trim().replace(/%/g, "%25").replace(/\s/g, "%20");
+  const label = project.trim();
+  return label === "" || /\s/.test(label) ? UNPARSEABLE_PROJECT : label;
 }
 
 export type OrphanRoutingResult =
@@ -157,16 +202,28 @@ export type OrphanRoutingResult =
  * happen: a held lock and a concurrent edit each return their own status for the caller
  * to surface. Both are safe to leave — the rows stay orphaned, so the next sync files
  * them again. */
-export function routeOrphanRows(outboxPath: string, orphans: OrphanRow[]): OrphanRoutingResult {
+export function routeOrphanRows(
+  outboxPath: string,
+  orphans: OrphanRow[],
+  read: ReadFile = defaultRead,
+): OrphanRoutingResult {
   const result = withOutboxLock(outboxPath, (): OrphanRoutingResult => {
     // ONE read. Everything below transforms this exact snapshot, and the rename replaces
     // the file it came from.
-    const snapshot = readFileSync(outboxPath, "utf8");
+    const snapshot = read(outboxPath);
     let outboxText = snapshot;
-    for (const orphan of orphans) outboxText = appendOrphanRowEntry(outboxText, orphan);
+    // Counted, not assumed: a batch mixing already-recorded rows with new ones would
+    // otherwise report every row as newly routed, and that log line is the audit trail
+    // for whether an owner-facing recovery entry was actually created in this run.
+    let appended = 0;
+    for (const orphan of orphans) {
+      const next = appendOrphanRowEntry(outboxText, orphan);
+      if (next !== outboxText) appended += 1;
+      outboxText = next;
+    }
     if (outboxText === snapshot) return { status: "unchanged" };
-    return replaceIfUnchanged(outboxPath, snapshot, outboxText)
-      ? { status: "routed", count: orphans.length }
+    return replaceIfUnchanged(outboxPath, snapshot, outboxText, read)
+      ? { status: "routed", count: appended }
       : { status: "conflict" };
   });
   return result ?? { status: "locked" };
@@ -184,8 +241,15 @@ export function orphanRoutingOutcome(
 ): { abort: boolean; message: string } {
   const rows = `${rowCount} orphan row(s)`;
   switch (routing.status) {
-    case "routed":
-      return { abort: false, message: `Routed ${routing.count} orphan row(s) to OUTBOX.md.` };
+    case "routed": {
+      const already = rowCount - routing.count;
+      return {
+        abort: false,
+        message:
+          `Routed ${routing.count} orphan row(s) to OUTBOX.md.` +
+          (already > 0 ? ` (${already} already recorded.)` : ""),
+      };
+    }
     case "unchanged":
       return { abort: false, message: `${rows} already recorded in OUTBOX.md.` };
     case "locked":
