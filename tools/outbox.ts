@@ -26,6 +26,16 @@ export type ReadFile = (path: string) => string;
 
 const defaultRead: ReadFile = (path) => readFileSync(path, "utf8");
 
+/** The file a path actually names, so the lock and the write agree on their subject.
+ * An unresolvable path (it does not exist yet) is its own answer. */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 /** Run `body` while holding an exclusive lock on `path`, or return null if it is held.
  *
  * **The lock is an optimisation, not the correctness mechanism.** It stops cooperating
@@ -42,7 +52,10 @@ const defaultRead: ReadFile = (path) => readFileSync(path, "utf8");
  * file a person deletes in one command; the pid is recorded so they can tell what left
  * it. */
 export function withOutboxLock<T>(path: string, body: () => T): T | null {
-  const lockPath = `${path}.lock`;
+  // Derived from the resolved target, not the path as given: two checkouts pointing
+  // symlinks at one canonical OUTBOX.md would otherwise take two different locks and
+  // race their writes against the same file, which is the failure the lock exists for.
+  const lockPath = `${canonicalPath(path)}.lock`;
   let handle: number;
   try {
     handle = openSync(lockPath, "wx"); // atomic create-if-absent: no acquisition race
@@ -64,7 +77,13 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
     // writer behind a lock no process holds, while the only state it can destroy is a
     // successor lock created inside the microseconds between an operator deleting ours
     // and this fstat failing. Availability beats that.
-    closeSync(handle);
+    // Each step guarded separately: a close that throws must not skip the release, or
+    // the recovery path leaves exactly the stranded lock it exists to prevent.
+    try {
+      closeSync(handle);
+    } catch {
+      // nothing to do — the descriptor dies with the process
+    }
     try {
       unlinkSync(lockPath);
     } catch {
@@ -80,7 +99,11 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
     }
     return body();
   } finally {
-    closeSync(handle);
+    try {
+      closeSync(handle);
+    } catch {
+      // A failed close must not cost the release below.
+    }
     try {
       // Keep our hands off a lock that is now somebody else's. If this lock was deleted
       // while we still held it — the documented manual recovery, aimed at a crashed
@@ -95,6 +118,10 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
     }
   }
 }
+
+/** The outbox is in a shape this writer will not touch. Separate from a routing conflict:
+ * re-running cannot help, a person has to change the file's shape. */
+export class UnsupportedOutboxError extends Error {}
 
 /** Replaces `path` via a temp file in the same directory plus a rename, so a reader
  * never observes a half-written OUTBOX.md. Sync twin of tools/review/atomic-write.ts,
@@ -115,17 +142,25 @@ function writeFileAtomically(path: string, content: string): void {
   // ACLs and extended attributes belong to the file it replaces. That is inherent to the
   // technique (tools/review/atomic-write.ts makes the same trade) and is the price of
   // never letting a reader see a half-written outbox.
-  let target = path;
-  try {
-    target = realpathSync(path);
-  } catch {
-    // Does not exist yet, or is unresolvable: write the path as given.
-  }
+  const target = canonicalPath(path);
   const temporaryPath = join(dirname(target), `${basename(target)}.tmp-${process.pid}-${randomUUID()}`);
   let mode: number | undefined;
   try {
-    mode = statSync(target).mode;
-  } catch {
+    const stats = statSync(target);
+    mode = stats.mode;
+    if (stats.nlink > 1) {
+      // Replace-by-rename swaps in a new inode, so every other name for the old content
+      // keeps it: a hard-linked outbox forks silently, and entries written here become
+      // invisible through the other link. Unlike a symlink there is no canonical path to
+      // resolve to — a hard link IS the file — so the only honest answers are to fork it
+      // quietly or to refuse. Refusing, loudly.
+      throw new UnsupportedOutboxError(
+        `${target} has ${stats.nlink} hard links; replacing it would fork the file. ` +
+          `Use a symlink to one canonical outbox instead.`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof UnsupportedOutboxError) throw error;
     // No existing file (or its mode is unreadable): the default applies.
   }
   try {
@@ -254,7 +289,8 @@ export type OrphanRoutingResult =
   | { status: "routed"; count: number }
   | { status: "unchanged" }
   | { status: "conflict" }
-  | { status: "locked" };
+  | { status: "locked" }
+  | { status: "unsupported"; detail: string };
 
 /** Route every orphan row into OUTBOX.md under the shared lock, against a single
  * snapshot, and report what happened. Nothing is reported as done that did not
@@ -281,9 +317,14 @@ export function routeOrphanRows(
       outboxText = next;
     }
     if (outboxText === snapshot) return { status: "unchanged" };
-    return replaceIfUnchanged(outboxPath, snapshot, outboxText, read)
-      ? { status: "routed", count: appended }
-      : { status: "conflict" };
+    try {
+      return replaceIfUnchanged(outboxPath, snapshot, outboxText, read)
+        ? { status: "routed", count: appended }
+        : { status: "conflict" };
+    } catch (error) {
+      if (error instanceof UnsupportedOutboxError) return { status: "unsupported", detail: error.message };
+      throw error;
+    }
   });
   return result ?? { status: "locked" };
 }
@@ -321,5 +362,7 @@ export function orphanRoutingOutcome(
         abort: true,
         message: `${rows} NOT routed: OUTBOX.md changed while sync held the lock. Nothing was changed — re-run sync.`,
       };
+    case "unsupported":
+      return { abort: true, message: `${rows} NOT routed: ${routing.detail} Nothing was changed.` };
   }
 }

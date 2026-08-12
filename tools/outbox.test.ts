@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  linkSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -163,6 +164,15 @@ describe("outbox file transactions", () => {
       expect(withOutboxLock(path, () => "done")).toBe("done");
     });
 
+    test("shares one lock between symlink aliases of the same outbox", () => {
+      // Two checkouts pointing at one canonical outbox must contend, or the lock they
+      // both take serializes nothing.
+      const alias = join(dir, "alias.md");
+      symlinkSync(path, alias);
+      const inner = withOutboxLock(path, () => withOutboxLock(alias, () => "reached"));
+      expect(inner).toBeNull();
+    });
+
     test("returns null instead of running when the lock is held", () => {
       writeFileSync(`${path}.lock`, "999");
       let ran = false;
@@ -227,6 +237,14 @@ describe("outbox file transactions", () => {
       expect(statSync(path).mode & 0o777).toBe(0o600);
     });
 
+    test("refuses to fork a hard-linked outbox rather than diverging it silently", () => {
+      const twin = join(dir, "twin.md");
+      linkSync(path, twin);
+      expect(() => replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next")).toThrow(/hard links/);
+      expect(readFileSync(path, "utf8")).toBe(`# Outbox\n\n## Open\n`);
+      expect(readFileSync(twin, "utf8")).toBe(`# Outbox\n\n## Open\n`);
+    });
+
     test("writes through a symlinked outbox instead of replacing the link", () => {
       const canonical = join(dir, "canonical.md");
       const linked = join(dir, "linked.md");
@@ -280,6 +298,14 @@ describe("outbox file transactions", () => {
 
       expect(routeOrphanRows(path, [orphan], racingRead)).toEqual({ status: "conflict" });
       expect(readFileSync(path, "utf8")).toBe(other);
+    });
+
+    test("reports `unsupported`, not `conflict`, when the outbox cannot be replaced", () => {
+      linkSync(path, join(dir, "twin.md"));
+      const result = routeOrphanRows(path, [orphan]);
+      expect(result.status).toBe("unsupported");
+      expect(orphanRoutingOutcome(result, 1).abort).toBe(true);
+      expect(existsSync(`${path}.lock`)).toBe(false); // released even on the refusal path
     });
 
     test("reports `locked` rather than writing behind another writer's lock", () => {
