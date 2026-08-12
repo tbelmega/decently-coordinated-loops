@@ -4,6 +4,7 @@
 import {
   chmodSync,
   closeSync,
+  fstatSync,
   openSync,
   readFileSync,
   renameSync,
@@ -11,6 +12,7 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
@@ -47,9 +49,18 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
     throw error;
   }
-  const token = String(process.pid);
+  // Identity is the inode we created, not what the file says. Content cannot carry it: a
+  // token write that fails, or half-lands, would leave a lock nothing recognises and
+  // nothing ever removes. The pid below is written through this descriptor rather than by
+  // path, so it reaches only the file we made — writing by path could overwrite a
+  // successor's lock if ours was removed in between, and we would then delete theirs.
+  const identity = fstatSync(handle).ino;
   try {
-    writeFileSync(lockPath, token);
+    try {
+      writeSync(handle, String(process.pid));
+    } catch {
+      // The pid is a diagnostic for whoever finds a stale lock, never the lock itself.
+    }
     return body();
   } finally {
     closeSync(handle);
@@ -57,17 +68,13 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
       // Keep our hands off a lock that is now somebody else's. If this lock was deleted
       // while we still held it — the documented manual recovery, aimed at a crashed
       // holder — a second writer may already have created its own, and unlinking that
-      // would let a third in while the second is still working. Reading before unlinking
-      // cannot close that window either (the file can change between the two calls), but
-      // it turns the common case from "silently breaks the lock" into "leaves it alone".
-      //
-      // Anything empty is released, not preserved: every writer stamps its pid, so an
-      // empty lock is ours with a failed token write, or a truncated file no live writer
-      // is behind. Treating it as foreign would strand the file permanently.
-      const held = readFileSync(lockPath, "utf8");
-      if (held === "" || held === token) unlinkSync(lockPath);
+      // would let a third in while the second is still working. Comparing inodes before
+      // unlinking cannot close that window (the path can change between the two calls,
+      // and a freed inode number can be reused), but it turns the common case from
+      // "silently breaks the lock" into "leaves it alone".
+      if (statSync(lockPath).ino === identity) unlinkSync(lockPath);
     } catch {
-      // already gone, or unreadable — nothing safe left to do
+      // already gone, or unstattable — nothing safe left to do
     }
   }
 }
@@ -83,13 +90,19 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
  * that widens permissions is a worse failure than the torn read this avoids. */
 function writeFileAtomically(path: string, content: string): void {
   const temporaryPath = join(dirname(path), `${basename(path)}.tmp-${process.pid}-${randomUUID()}`);
+  let mode: number | undefined;
   try {
-    writeFileSync(temporaryPath, content);
-    try {
-      chmodSync(temporaryPath, statSync(path).mode);
-    } catch {
-      // No existing file (or no permission to read its mode): keep the default.
-    }
+    mode = statSync(path).mode;
+  } catch {
+    // No existing file (or its mode is unreadable): the default applies.
+  }
+  try {
+    // The mode goes on at creation, not afterwards. Writing first and chmodding second
+    // publishes the content at the default mode for the width of that window, which for a
+    // deliberately restricted OUTBOX.md is the exposure this is meant to prevent. The
+    // explicit chmod stays because the creation mode is still masked by the umask.
+    writeFileSync(temporaryPath, content, mode === undefined ? undefined : { mode });
+    if (mode !== undefined) chmodSync(temporaryPath, mode);
     renameSync(temporaryPath, path);
   } finally {
     rmSync(temporaryPath, { force: true });

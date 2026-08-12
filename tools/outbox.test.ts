@@ -173,16 +173,13 @@ describe("outbox file transactions", () => {
       expect(ran).toBe(false);
     });
 
-    test("does not strand the lock when its own initialization failed", () => {
-      // Between the exclusive create and the token write the file is ours but anonymous.
-      // A conditional release that only recognises the token would leave it forever.
-      expect(() =>
-        withOutboxLock(path, () => {
-          writeFileSync(`${path}.lock`, ""); // as if the token write never landed
-          throw new Error("boom");
-        }),
-      ).toThrow("boom");
-      expect(existsSync(`${path}.lock`)).toBe(false);
+    test("releases its own lock whatever the file ended up containing", () => {
+      // Identity is the inode, so a token write that failed, half-landed, or was
+      // overwritten cannot produce a lock nothing recognises and nothing removes.
+      for (const corruption of ["", "not-a-pid", "9".repeat(4096)]) {
+        withOutboxLock(path, () => writeFileSync(`${path}.lock`, corruption));
+        expect(existsSync(`${path}.lock`)).toBe(false);
+      }
     });
 
     test("leaves a replacement lock alone when its own was removed under it", () => {
@@ -193,6 +190,7 @@ describe("outbox file transactions", () => {
         rmSync(`${path}.lock`);
         writeFileSync(`${path}.lock`, "4242"); // a second writer acquired it
       });
+      // Untouched: a different inode is a different lock, whatever the path says.
       expect(readFileSync(`${path}.lock`, "utf8")).toBe("4242");
       rmSync(`${path}.lock`);
     });
