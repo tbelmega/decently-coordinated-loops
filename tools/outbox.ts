@@ -1,6 +1,6 @@
 // OUTBOX.md's programmatic writer. The file's format is the loops-queues entry
-// contract; this module is the only place DCL writes it, and every write goes through
-// the lock and the compare-and-swap below.
+// contract; this module is the only place DCL writes it, and every write takes the
+// shared lock and checks the file against the snapshot it transformed.
 import { closeSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
@@ -11,7 +11,8 @@ import type { OrphanRow } from "./preflight.ts";
  * **The lock is an optimisation, not the correctness mechanism.** It stops cooperating
  * writers wasting work on each other, but it cannot bind a writer that does not take
  * it — a person editing the file, a phone client, or a tool in another repository.
- * Correctness comes from the compare-and-swap every caller performs before its rename.
+ * Against those, `replaceIfUnchanged` narrows the window rather than closing it; read
+ * its contract before claiming this file is safe against any writer at all.
  * The lock filename (`<path>.lock`) is part of the contract: a second writer that picks
  * a different name serializes nothing.
  *
@@ -56,12 +57,18 @@ function writeFileAtomically(path: string, content: string): void {
   }
 }
 
-/** Writes `next` only while `path` still holds exactly `snapshot`, and reports whether
- * it did. This is the guarantee the lock cannot give: OUTBOX.md is hand-edited and
- * written from other tools, so a writer that renamed unconditionally would silently
- * drop whatever arrived between its read and its write. Losing the write is recoverable
- * — every caller here is idempotent and a re-run reproduces it — while losing the
- * owner's answer is not. */
+/** Writes `next` only if `path` still held exactly `snapshot` when last observed, and
+ * reports whether it wrote.
+ *
+ * **This is not an atomic compare-and-swap, and must not be described as one.** The
+ * check and the rename are two syscalls: an edit that lands in between is overwritten
+ * and lost, undetectably, because no lock-free protocol over a plain file can close that
+ * window. What the check does buy is real but bounded — it catches every edit made
+ * before the transaction started, which is the overwhelmingly likely shape of a
+ * conflict (a person editing OUTBOX.md, or a phone client committing an answer, while a
+ * long-running sync computes) — and it costs nothing. Full serialization is available
+ * only between writers that take `withOutboxLock`; against the ones that cannot, this
+ * narrows the race to microseconds rather than eliminating it. */
 export function replaceIfUnchanged(path: string, snapshot: string, next: string): boolean {
   if (readFileSync(path, "utf8") !== snapshot) return false;
   writeFileAtomically(path, next);
@@ -105,14 +112,15 @@ export function appendOrphanRowEntry(outboxText: string, orphan: OrphanRow): str
   const nextId = (existingIds.length ? Math.max(...existingIds) : 0) + 1;
 
   const entry = `
-### ${nextId} — question · ${orphan.project} · orphan BOARD.md row with no item file
+### ${nextId} — question · ${headingToken(orphan.project)} · orphan BOARD.md row with no item file
 
 Source: ${marker} - [${orphan.title}](${orphan.path}). The preflight run before regenerating
 the board found no matching item file under \`items/\`.
 
 The row was dropped from the regenerated board, so its data is recorded here rather than lost
-silently: state=${orphan.state}, next-actor=${orphan.nextActor}, awaiting=${orphan.awaiting},
-auto=${orphan.auto}, assignee=${orphan.assignee}, updated=${orphan.updated}.
+silently: project=${orphan.project}, state=${orphan.state}, next-actor=${orphan.nextActor},
+awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee},
+updated=${orphan.updated}.
 
 **The ask:** create an item file for it (per the loops-board skill), or confirm it should be
 discarded.
@@ -125,14 +133,23 @@ discarded.
   return `${section.head}${section.open.replace(/\n+$/, "")}\n${entry}${section.tail}`;
 }
 
+/** The heading's project field is one whitespace-free token to its readers, while the
+ * item schema asks only that `project` be non-blank. A label with a space in it would
+ * therefore emit exactly the unparseable entry this writer exists to stop producing, so
+ * whitespace is collapsed here — and the body records the label verbatim, because the
+ * entry's whole job is to preserve a dropped row's data. */
+function headingToken(project: string): string {
+  return project.trim().replace(/\s+/g, "-");
+}
+
 export type OrphanRoutingResult =
   | { status: "routed"; count: number }
   | { status: "unchanged" }
   | { status: "conflict" }
   | { status: "locked" };
 
-/** Route every orphan row into OUTBOX.md as one locked, compare-and-swapped
- * transaction, and report what happened. Nothing is reported as done that did not
+/** Route every orphan row into OUTBOX.md under the shared lock, against a single
+ * snapshot, and report what happened. Nothing is reported as done that did not
  * happen: a held lock and a concurrent edit each return their own status for the caller
  * to surface. Both are safe to leave — the rows stay orphaned, so the next sync files
  * them again. */
@@ -149,4 +166,33 @@ export function routeOrphanRows(outboxPath: string, orphans: OrphanRow[]): Orpha
       : { status: "conflict" };
   });
   return result ?? { status: "locked" };
+}
+
+/** What sync should do about a routing result, and what to tell the reader.
+ *
+ * `locked` and `conflict` abort the run. An orphan row has no item file, so BOARD.md is
+ * the only remaining copy of it: regenerating the board after a failed routing would
+ * drop the row from the one place the next sync could still find it, and the retry this
+ * module promises would be impossible. Aborting leaves both files exactly as they were. */
+export function orphanRoutingOutcome(
+  routing: OrphanRoutingResult,
+  rowCount: number,
+): { abort: boolean; message: string } {
+  const rows = `${rowCount} orphan row(s)`;
+  switch (routing.status) {
+    case "routed":
+      return { abort: false, message: `Routed ${routing.count} orphan row(s) to OUTBOX.md.` };
+    case "unchanged":
+      return { abort: false, message: `${rows} already recorded in OUTBOX.md.` };
+    case "locked":
+      return {
+        abort: true,
+        message: `${rows} NOT routed: OUTBOX.md.lock is held by another writer. Nothing was changed — re-run sync.`,
+      };
+    case "conflict":
+      return {
+        abort: true,
+        message: `${rows} NOT routed: OUTBOX.md changed while sync held the lock. Nothing was changed — re-run sync.`,
+      };
+  }
 }

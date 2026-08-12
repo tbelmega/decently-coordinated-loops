@@ -12,7 +12,7 @@ import { loadArchiveDir, loadForDeliveryDir, loadItemsDir } from "./parse.ts";
 import { runPreflight } from "./preflight.ts";
 import { renderBoardMd } from "./render.ts";
 import { planMoves, reconcileArchiveRows } from "./archive.ts";
-import { routeOrphanRows } from "./outbox.ts";
+import { orphanRoutingOutcome, routeOrphanRows } from "./outbox.ts";
 import { performMoves } from "./moves.ts";
 import { printDuplicateSlugs, printPreflightReport, printValidationReport } from "./report.ts";
 import { findDuplicateSlugs, validateItems } from "./validate.ts";
@@ -61,19 +61,15 @@ try {
     printValidationReport(validateItems(allItems));
 
     if (report.orphanRows.length) {
-      // Under the same `OUTBOX.md.lock` the other writers of this file take, with their
-      // compare-and-swap: sync's own `.loops-sync.lock` serializes sync against sync, not
-      // against a board server or an editor writing the outbox. Nothing here is retried —
-      // the rows stay orphaned, so the next sync files them again — but every outcome is
-      // reported, because a routing that silently did not happen is exactly how an owner
-      // ask goes missing.
-      const routing = routeOrphanRows(OUTBOX_PATH, report.orphanRows);
-      const rows = `${report.orphanRows.length} orphan row(s)`;
-      if (routing.status === "routed") console.log(`\nRouted ${routing.count} orphan row(s) to OUTBOX.md.`);
-      else if (routing.status === "unchanged") console.log(`\n${rows} already recorded in OUTBOX.md.`);
-      else if (routing.status === "locked") {
-        console.log(`\n${rows} NOT routed: OUTBOX.md.lock is held by another writer. Re-run sync.`);
-      } else console.log(`\n${rows} NOT routed: OUTBOX.md changed while sync held the lock. Re-run sync.`);
+      // Under the same `OUTBOX.md.lock` the other writers of this file take: sync's own
+      // `.loops-sync.lock` serializes sync against sync, not against a board server or an
+      // editor. A row that did not reach the outbox aborts the run BEFORE any move or
+      // board regeneration — the row has no item file, so the board is its only remaining
+      // copy, and regenerating without it would destroy the very thing the routing exists
+      // to preserve.
+      const outcome = orphanRoutingOutcome(routeOrphanRows(OUTBOX_PATH, report.orphanRows), report.orphanRows.length);
+      if (outcome.abort) throw new SyncAborted(outcome.message);
+      console.log(`\n${outcome.message}`);
     }
 
     const moves = planMoves(allItems);

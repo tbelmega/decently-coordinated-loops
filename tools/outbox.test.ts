@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendOrphanRowEntry,
+  orphanRoutingOutcome,
   replaceIfUnchanged,
   routeOrphanRows,
   withOutboxLock,
@@ -52,6 +53,16 @@ describe("appendOrphanRowEntry", () => {
     expect(result).toContain("items/does-not-exist.md");
     expect(result).toContain("assignee=codex/default");
     expect(result).toContain("state=idea");
+  });
+
+  test("keeps the heading parseable when the project label contains whitespace", () => {
+    // The consumer reads the project field as one whitespace-free token, while the item
+    // schema only requires `project` to be non-blank. A label like "family app" would
+    // otherwise reproduce the exact unparseable-entry defect this writer exists to fix.
+    const spaced: OrphanRow = { ...orphan, project: "family app" };
+    const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, spaced);
+    expect(CANONICAL_HEADING.exec(result)![3]).toBe("family-app");
+    expect(result).toContain("project=family app");
   });
 
   test("appends a new sequential entry after the highest existing ID", () => {
@@ -178,5 +189,23 @@ describe("outbox file transactions", () => {
       expect(routeOrphanRows(path, [orphan])).toEqual({ status: "locked" });
       expect(readFileSync(path, "utf8")).toBe(`# Outbox\n\n## Open\n`);
     });
+  });
+});
+
+describe("orphanRoutingOutcome", () => {
+  test("lets sync continue when the rows reached the outbox", () => {
+    expect(orphanRoutingOutcome({ status: "routed", count: 2 }, 2).abort).toBe(false);
+    expect(orphanRoutingOutcome({ status: "unchanged" }, 2).abort).toBe(false);
+  });
+
+  test("aborts sync when the rows did not reach the outbox", () => {
+    // Continuing would regenerate BOARD.md without the orphan rows — they have no item
+    // file, so the board is the only remaining copy. The next sync could not re-route
+    // what it can no longer see.
+    for (const routing of [{ status: "locked" } as const, { status: "conflict" } as const]) {
+      const outcome = orphanRoutingOutcome(routing, 2);
+      expect(outcome.abort).toBe(true);
+      expect(outcome.message).toContain("NOT routed");
+    }
   });
 });
