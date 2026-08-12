@@ -75,7 +75,7 @@ describe("buildCodexArgs", () => {
   // Regression: the prompt used to be the final argv entry, and Linux caps a SINGLE
   // argument at MAX_ARG_STRLEN (128 KiB) however much total argument space is free. On
   // 2026-08-06 an 88 KB review diff crossed it and `posix_spawn` failed with E2BIG,
-  // blocking two task-tracking items at once. argv must not scale with the prompt at all.
+  // blocking two work-streams at once. argv must not scale with the prompt at all.
   test("argv stays tiny no matter how large the prompt is", () => {
     const args = buildCodexArgs(fixed);
     const bytes = args.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
