@@ -38,20 +38,53 @@ The mirror: everything the fleet needs FROM the owner — questions, proposals,
 approval requests — aggregated in one place, answerable in one line each. The owner
 answers on `> A:` lines, in any order; partial answers and "later" are valid.
 
-**Entry contract:**
+**Entry shape.** One decision per entry, ≤6 lines of body, appended under `## Open`
+with a sequential ID:
 
-- Append entries under `## Open` with a sequential ID. One decision per entry, ≤6
-  lines: type (`question` | `proposal` | `approval` | `decision`), project, source
-  link (item file, spec), the ask itself, options where the answer space is known,
-  and an empty `> A:` line.
-- `decision` entries (provisional rule — adopted 2026-07-20, to be reviewed after
-  real-world use) record a call the agent already made and acted on under the
-  loops-pickup provisional-decision band: what was decided, why, and "object to
-  reverse". They don't block the item, but they count against the cap and are
-  routed like any answer — an objection reopens the decision on the item.
+````markdown
+### 42 — question · myapp · Which backend for the session store?
+
+- item: myapp-session-store
+
+Source: [the item](items/myapp-session-store.md). Redis needs an ops call I can't make.
+Options: (a) Redis, (b) a Postgres table, (c) in-memory until it hurts.
+
+> A:
+````
+
+The heading line is structural, not decoration: `### <id> — <type> · <project> ·
+<title>`, with an em dash after the id and middle dots between the fields. Only the
+first three separators are read as separators, so a title may contain both. IDs are
+sequential at append time but sparse over the file's life, because routed entries are
+deleted; never renumber to close a gap, since answered entries are cited by ID.
+
+- **`- item: <slug>`** is optional and authoritative when present: it joins the entry
+  to its board item. Write it whenever the entry has one. Without it a reader guesses
+  from prose links, which goes wrong exactly when an entry cites a second item (the
+  one a finding was raised on, say) alongside the one it is about.
+- The body carries the source link (item file, spec), the ask itself, and the options
+  where the answer space is known. It ends with an empty `> A:` line: an entry with no
+  `> A:` line cannot be answered in place.
 - Every question only the owner can answer that you write into an item file gets
   mirrored here — the item file holds the context, the outbox is where the owner
   finds it.
+
+**Types.** The vocabulary is closed: `question`, `proposal`, `approval`, `decision`.
+
+- `decision` is a **notice**: the agent made a reversible call under the loops-pickup
+  provisional-decision band, acted on it, and kept working. It records what was
+  decided, why, and "object to reverse". Notices don't block the item, but they count
+  against the cap and are routed like any answer, and an objection reopens the
+  decision on the item. (Provisional rule, adopted 2026-07-20, to be reviewed after
+  real-world use.)
+- Every other type is a **stopped ask**: the work is waiting on the answer.
+- `decide` is retired as an entry type. Write `question` instead, and re-type any
+  surviving `decide` entry when you next route it. This retirement does not touch the
+  item field `awaiting: decide`, which is a different field with its own vocabulary
+  (loops-board) and is unaffected.
+
+**Handling:**
+
 - Dedup before appending; don't re-ask what an existing entry covers.
 - **Cap: at most 3 new entries per unattended session.** Rank by what unblocks the
   most work; hold the rest in item files until slots free up.
