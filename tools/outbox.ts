@@ -135,11 +135,15 @@ discarded.
 
 /** The heading's project field is one whitespace-free token to its readers, while the
  * item schema asks only that `project` be non-blank. A label with a space in it would
- * therefore emit exactly the unparseable entry this writer exists to stop producing, so
- * whitespace is collapsed here — and the body records the label verbatim, because the
- * entry's whole job is to preserve a dropped row's data. */
+ * therefore emit exactly the unparseable entry this writer exists to stop producing.
+ *
+ * Percent-encoding, not substitution: mapping whitespace to `-` would alias two distinct
+ * valid labels ("family app" and "family-app") onto one structured field, and the
+ * structured field is the only project value consumers read — grouping and attribution
+ * would silently merge two projects. Encoding `%` first keeps the transform reversible,
+ * so the token identifies exactly one label. The body still records the label verbatim. */
 function headingToken(project: string): string {
-  return project.trim().replace(/\s+/g, "-");
+  return project.trim().replace(/%/g, "%25").replace(/\s/g, "%20");
 }
 
 export type OrphanRoutingResult =

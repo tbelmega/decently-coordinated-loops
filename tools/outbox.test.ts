@@ -61,8 +61,17 @@ describe("appendOrphanRowEntry", () => {
     // otherwise reproduce the exact unparseable-entry defect this writer exists to fix.
     const spaced: OrphanRow = { ...orphan, project: "family app" };
     const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, spaced);
-    expect(CANONICAL_HEADING.exec(result)![3]).toBe("family-app");
+    expect(CANONICAL_HEADING.exec(result)![3]).toBe("family%20app");
     expect(result).toContain("project=family app");
+  });
+
+  test("never aliases two distinct project labels onto one token", () => {
+    // The structured field is the only project value consumers read, so a lossy token
+    // would merge two real projects in every grouping and attribution the ledger does.
+    const heading = (project: string) =>
+      CANONICAL_HEADING.exec(appendOrphanRowEntry(`# Outbox\n\n## Open\n`, { ...orphan, project }))![3];
+    expect(heading("family app")).not.toBe(heading("family-app"));
+    expect(heading("100% done")).toBe("100%25%20done");
   });
 
   test("appends a new sequential entry after the highest existing ID", () => {
