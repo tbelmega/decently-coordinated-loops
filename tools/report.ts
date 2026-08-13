@@ -7,7 +7,7 @@ export function printPreflightReport(report: PreflightReport): void {
   console.log(`Preflight: ${report.orphanRows.length} orphan row(s), ${report.missingRows.length} missing row(s) (auto-added on regen), ${report.mismatches.length} field mismatch(es).`);
 
   if (report.orphanRows.length) {
-    console.log("\nOrphan rows (no item file — routed to OUTBOX.md, dropped from board):");
+    console.log("\nOrphan rows (no item file — filed in OUTBOX.md, kept on the board until a later sync sees the entry):");
     for (const row of report.orphanRows) {
       console.log(`  - ${row.path} (${row.title})`);
     }

@@ -66,6 +66,26 @@ describe("cli-sync orphan routing", () => {
     expect(readFileSync(join(root, "BOARD.md"), "utf8")).toContain("Ghost row");
   });
 
+  test("reports a repairable outbox instead of a stack trace, board intact", () => {
+    // OUTBOX.md is a file the owner edits: missing, or with its `## Open` section removed,
+    // are states to explain rather than crash on.
+    for (const damage of [null, "# Outbox\n\nnothing routable here\n"]) {
+      const root = dataRepoWithOrphanRow();
+      const board = readFileSync(join(root, "BOARD.md"), "utf8");
+      if (damage === null) rmSync(join(root, "OUTBOX.md"));
+      else writeFileSync(join(root, "OUTBOX.md"), damage);
+
+      const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+
+      expect(result.status).not.toBe(0);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).toContain("NOT routed");
+      expect(output).toContain("OUTBOX.md");
+      expect(output).not.toContain("at <anonymous>");
+      expect(readFileSync(join(root, "BOARD.md"), "utf8")).toBe(board);
+    }
+  });
+
   test("aborts and leaves BOARD.md untouched when the outbox lock is held", () => {
     const root = dataRepoWithOrphanRow();
     const board = readFileSync(join(root, "BOARD.md"), "utf8");

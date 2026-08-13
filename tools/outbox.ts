@@ -4,6 +4,7 @@
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   closeSync,
   fstatSync,
   openSync,
@@ -346,9 +347,21 @@ export function routeOrphanRows(
   read: ReadFile = defaultRead,
 ): OrphanRoutingResult {
   const result = withOutboxLock(outboxPath, (): OrphanRoutingResult => {
+    // OUTBOX.md is a file the owner edits, so "missing" and "no `## Open` section" are
+    // states to report, not exceptions to escape through. Both leave the board intact and
+    // tell the reader which file to repair; a stack trace would do neither.
+    if (!existsSync(outboxPath)) {
+      return { status: "unsupported", detail: `${outboxPath} does not exist.` };
+    }
     // ONE read. Everything below transforms this exact snapshot, and the rename replaces
     // the file it came from.
     const snapshot = read(outboxPath);
+    if (!openSection(snapshot)) {
+      return {
+        status: "unsupported",
+        detail: `${outboxPath} has no \`## Open\` section to file entries under.`,
+      };
+    }
     // Recorded before this run touched anything. A row may only leave the board once its
     // entry has survived at least one write it did not make itself — see the two-phase
     // note on the return type.
