@@ -33,12 +33,37 @@ function dataRepoWithOrphanRow(): string {
 }
 
 describe("cli-sync orphan routing", () => {
-  test("files the orphan row and regenerates the board", () => {
+  test("files the entry and keeps the row until a later run has seen it", () => {
+    // Two phases on purpose. Writing an entry and that entry still being there are not
+    // the same fact, and the row is the work-stream's only remaining copy, so it may not
+    // leave the board on the strength of a write this same run made.
     const root = dataRepoWithOrphanRow();
-    const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
-    expect(result.status).toBe(0);
+
+    const first = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+    expect(first.status).toBe(0);
     expect(readFileSync(join(root, "OUTBOX.md"), "utf8")).toContain("items/does-not-exist.md");
+    expect(readFileSync(join(root, "BOARD.md"), "utf8")).toContain("Ghost row");
+    expect(first.stdout).toContain("kept until a later sync");
+
+    const second = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+    expect(second.status).toBe(0);
     expect(readFileSync(join(root, "BOARD.md"), "utf8")).not.toContain("Ghost row");
+    // Still exactly one entry: the second run recognised its own marker, not re-filed.
+    const outbox = readFileSync(join(root, "OUTBOX.md"), "utf8");
+    expect([...outbox.matchAll(/<!-- loops:orphan /g)]).toHaveLength(1);
+  });
+
+  test("re-files the entry, and keeps the row again, if the entry was swallowed", () => {
+    // The case the two phases exist for: something replaced OUTBOX.md wholesale between
+    // runs. The row is still on the board, so nothing is lost and the next run refiles.
+    const root = dataRepoWithOrphanRow();
+    expect(spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" }).status).toBe(0);
+    writeFileSync(join(root, "OUTBOX.md"), "# Outbox\n\n## Open\n"); // an editor's save
+
+    const again = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+    expect(again.status).toBe(0);
+    expect(readFileSync(join(root, "OUTBOX.md"), "utf8")).toContain("items/does-not-exist.md");
+    expect(readFileSync(join(root, "BOARD.md"), "utf8")).toContain("Ghost row");
   });
 
   test("aborts and leaves BOARD.md untouched when the outbox lock is held", () => {

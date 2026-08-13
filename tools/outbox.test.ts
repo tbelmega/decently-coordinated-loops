@@ -25,6 +25,7 @@ import {
 import type { OrphanRow } from "./preflight.ts";
 
 const orphan: OrphanRow = {
+  raw: "| [Ghost row](items/does-not-exist.md) | atlas | idea | owner | decide | - | codex/default | 2026-07-01 |",
   title: "Ghost row",
   path: "items/does-not-exist.md",
   project: "atlas",
@@ -265,21 +266,25 @@ describe("outbox file transactions", () => {
 
   describe("routeOrphanRows", () => {
     test("routes the rows and reports how many", () => {
-      expect(routeOrphanRows(path, [orphan])).toEqual({ status: "routed", count: 1 });
+      expect(routeOrphanRows(path, [orphan])).toEqual({ status: "routed", count: 1, confirmed: [] });
       expect(CANONICAL_HEADING.test(readFileSync(path, "utf8"))).toBe(true);
     });
 
-    test("counts what it appended, not what it was asked to append", () => {
+    test("counts what it appended, and confirms only what predates this run", () => {
       const other: OrphanRow = { ...orphan, path: "items/other-ghost.md", title: "Other ghost" };
       routeOrphanRows(path, [orphan]);
-      expect(routeOrphanRows(path, [orphan, other])).toEqual({ status: "routed", count: 1 });
-      expect(orphanRoutingOutcome({ status: "routed", count: 1 }, 2).message).toContain("already recorded");
+      // The first row's entry survived a run that did not write it; the second is new.
+      expect(routeOrphanRows(path, [orphan, other])).toEqual({
+        status: "routed",
+        count: 1,
+        confirmed: [orphan.path],
+      });
     });
 
-    test("reports `unchanged` when every row is already recorded", () => {
+    test("a run that writes nothing new still confirms what it found", () => {
       routeOrphanRows(path, [orphan]);
       const after = readFileSync(path, "utf8");
-      expect(routeOrphanRows(path, [orphan])).toEqual({ status: "unchanged" });
+      expect(routeOrphanRows(path, [orphan])).toEqual({ status: "routed", count: 0, confirmed: [orphan.path] });
       expect(readFileSync(path, "utf8")).toBe(after);
     });
 
@@ -358,8 +363,13 @@ describe("outbox file transactions", () => {
 
 describe("orphanRoutingOutcome", () => {
   test("lets sync continue when the rows reached the outbox", () => {
-    expect(orphanRoutingOutcome({ status: "routed", count: 2 }, 2).abort).toBe(false);
-    expect(orphanRoutingOutcome({ status: "unchanged" }, 2).abort).toBe(false);
+    expect(orphanRoutingOutcome({ status: "routed", count: 2, confirmed: [] }, 2).abort).toBe(false);
+  });
+
+  test("says how many rows are being kept back rather than implying all are filed", () => {
+    const message = orphanRoutingOutcome({ status: "routed", count: 2, confirmed: ["items/a.md"] }, 2).message;
+    expect(message).toContain("1 confirmed and dropped");
+    expect(message).toContain("1 kept until a later sync");
   });
 
   test("aborts sync when the rows did not reach the outbox", () => {

@@ -49,45 +49,19 @@ git for-each-ref --format='%(refname)'   # expect exactly one refs/heads/<branch
 git push origin refs/heads/main:refs/heads/main
 ```
 
-## Auditing history, if you keep it
+## Keeping the history instead
 
-Only needed on the `git filter-repo` route. Set the environment variable rather than
-passing a flag, so nested invocations inherit it — a replacement ref substitutes a
-sanitised commit for the raw one, which means an audit that honours replacement is
-auditing the wrong history.
+This guide does not document a privacy audit for that route, and the omission is
+deliberate. A rigorous one has to disable replacement refs, walk every object reachable
+from every ref, dispatch each by type to inspect blob bytes and commit and tag metadata,
+cover tree path names, notes, stashes and reflogs, and assert an allowed ref set - and
+even then it is only as good as the patterns you thought to write. A checklist that
+looks thorough but misses one of those is worse than no checklist, because it is trusted.
 
-```bash
-export GIT_NO_REPLACE_OBJECTS=1
-PATTERN='<your names, hosts, employer, private repo names, home paths>'
-
-# 1. The ref set. refs/replace/* must be empty; anything outside the branches and tags
-#    you mean to publish is a ref a reader was never meant to receive.
-git for-each-ref --format='%(refname) %(objecttype)'
-
-# 2. Every reachable object, dispatched by type. Blob bytes and tag/commit metadata are
-#    where private data actually lives; a listing of object ids proves nothing.
-git rev-list --all --objects --no-object-names | sort -u |
-  while read -r sha; do
-    case "$(git cat-file -t "$sha")" in
-      blob)   git cat-file blob "$sha"   | grep -niE "$PATTERN" | sed "s|^|blob $sha: |" ;;
-      commit) git cat-file commit "$sha" | grep -niE "$PATTERN" | sed "s|^|commit $sha: |" ;;
-      tag)    git cat-file tag "$sha"    | grep -niE "$PATTERN" | sed "s|^|tag $sha: |" ;;
-    esac
-  done
-
-# 3. Path names, which travel in the trees whether or not any blob matches.
-git rev-list --all --objects | grep -iE "$PATTERN"
-
-# 4. Identities, author and committer both.
-git log --all --format='%an <%ae>%n%cn <%ce>' | sort -u
-
-# 5. The things that are not commits: notes, stashes, reflogs.
-git notes list 2>/dev/null; git stash list; git reflog --all | head
-```
-
-A clean run means the patterns found nothing. It does not mean nothing is there: the
-audit is only as good as `PATTERN`, which is the honest reason to prefer the fresh
-repository above.
+If you need the history, use `git filter-repo`, and treat auditing the result as its own
+piece of work with its own review rather than as a step in a publish checklist. The
+fresh-repository route above exists precisely so that this is not the normal path: it
+replaces the audit with an equality gate, which is a proof rather than a search.
 
 ## Before either push
 

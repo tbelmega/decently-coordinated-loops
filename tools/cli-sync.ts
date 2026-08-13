@@ -60,6 +60,7 @@ try {
     printPreflightReport(report);
     printValidationReport(validateItems(allItems));
 
+    let retainedOrphanRows: string[] = [];
     if (report.orphanRows.length) {
       // Under the same `OUTBOX.md.lock` the other writers of this file take: sync's own
       // `.loops-sync.lock` serializes sync against sync, not against a board server or an
@@ -67,9 +68,18 @@ try {
       // board regeneration — the row has no item file, so the board is its only remaining
       // copy, and regenerating without it would destroy the very thing the routing exists
       // to preserve.
-      const outcome = orphanRoutingOutcome(routeOrphanRows(OUTBOX_PATH, report.orphanRows), report.orphanRows.length);
+      const routing = routeOrphanRows(OUTBOX_PATH, report.orphanRows);
+      const outcome = orphanRoutingOutcome(routing, report.orphanRows.length);
       if (outcome.abort) throw new SyncAborted(outcome.message);
       console.log(`\n${outcome.message}`);
+      // Two phases, because writing an entry and that entry still being there are not the
+      // same fact. A row leaves the board only once a run OTHER than the one that wrote
+      // its entry has seen that entry in `## Open`. Until then the row stays, so a
+      // whole-file save that swallowed the entry costs a repeat, not the work-stream.
+      if (routing.status === "routed") {
+        const confirmed = new Set(routing.confirmed);
+        retainedOrphanRows = report.orphanRows.filter((row) => !confirmed.has(row.path)).map((row) => row.raw);
+      }
     }
 
     const moves = planMoves(allItems);
@@ -91,8 +101,16 @@ try {
     }
 
     const active = items.filter((i) => !moves.some((m) => m.item.slug === i.slug));
-    writeFileSync(BOARD_PATH, renderBoardMd(active, config));
-    console.log(`\nRegenerated BOARD.md (${active.length} active items, priority order).`);
+    const board = renderBoardMd(active, config);
+    writeFileSync(
+      BOARD_PATH,
+      retainedOrphanRows.length ? `${board.replace(/\n+$/, "")}\n${retainedOrphanRows.join("\n")}\n` : board,
+    );
+    console.log(
+      `\nRegenerated BOARD.md (${active.length} active items, priority order` +
+        (retainedOrphanRows.length ? `, plus ${retainedOrphanRows.length} unconfirmed orphan row(s)` : "") +
+        ").",
+    );
   });
 } catch (error) {
   if (error instanceof SyncAborted) {

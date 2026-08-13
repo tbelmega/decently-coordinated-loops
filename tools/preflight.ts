@@ -1,6 +1,9 @@
 import type { ItemFile } from "./types.ts";
 
 export interface BoardRow {
+  /** The row exactly as BOARD.md carried it, so a retained row is a copy of the
+   * original line rather than a rerendering of its parsed fields. */
+  raw: string;
   title: string;
   path: string;
   project: string;
@@ -20,7 +23,9 @@ export interface FieldMismatch {
 }
 
 /** A BOARD.md row with no matching items/*.md file — never blocks; routed to OUTBOX.md
- * (question, source = the orphan row) by the caller, then dropped from the regenerated board. */
+ * (question, source = the orphan row) by the caller, and dropped from the regenerated
+ * board only once its outbox entry has been observed by a later run. `raw` is the row
+ * exactly as the board carried it, so retaining it is a copy rather than a rerendering. */
 export interface OrphanRow extends BoardRow {}
 
 export interface PreflightReport {
@@ -51,6 +56,7 @@ export function parseBoardRows(boardText: string): BoardRow[] {
     if (!linkMatch) continue;
     const [, project, state, nextActor, awaiting, auto, assignee, updated] = cells;
     rows.push({
+      raw: trimmed,
       title: linkMatch[1].trim(),
       path: linkMatch[2].trim(),
       project,

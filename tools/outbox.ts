@@ -316,18 +316,21 @@ awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, u
  * file can tell those apart. */
 function verified(
   outboxPath: string,
-  markers: string[],
+  orphans: OrphanRow[],
+  confirmed: string[],
   appended: number,
   read: ReadFile,
 ): OrphanRoutingResult {
   const section = openSection(read(outboxPath));
-  const missing = markers.filter((marker) => !section?.open.includes(marker));
-  return missing.length ? { status: "conflict" } : { status: "routed", count: appended };
+  const missing = orphans.filter((orphan) => !section?.open.includes(orphanMarker(orphan.path)));
+  return missing.length ? { status: "conflict" } : { status: "routed", count: appended, confirmed };
 }
 
 export type OrphanRoutingResult =
-  | { status: "routed"; count: number }
-  | { status: "unchanged" }
+  /** `confirmed` names the orphan paths whose entry was already in `## Open` before this
+   * run wrote anything. Only those may leave the board: an entry this run just wrote has
+   * not survived anything yet. */
+  | { status: "routed"; count: number; confirmed: string[] }
   | { status: "conflict" }
   | { status: "locked" }
   | { status: "unsupported"; detail: string };
@@ -346,6 +349,13 @@ export function routeOrphanRows(
     // ONE read. Everything below transforms this exact snapshot, and the rename replaces
     // the file it came from.
     const snapshot = read(outboxPath);
+    // Recorded before this run touched anything. A row may only leave the board once its
+    // entry has survived at least one write it did not make itself — see the two-phase
+    // note on the return type.
+    const openBefore = openSection(snapshot)?.open ?? "";
+    const confirmed = orphans
+      .filter((orphan) => openBefore.includes(orphanMarker(orphan.path)))
+      .map((orphan) => orphan.path);
     let outboxText = snapshot;
     // Counted, not assumed: a batch mixing already-recorded rows with new ones would
     // otherwise report every row as newly routed, and that log line is the audit trail
@@ -356,7 +366,7 @@ export function routeOrphanRows(
       if (next !== outboxText) appended += 1;
       outboxText = next;
     }
-    if (outboxText === snapshot) return { status: "unchanged" };
+    if (outboxText === snapshot) return { status: "routed", count: 0, confirmed };
 
     // When `## Open` is the last section — the seeded shape, and the shape of every
     // outbox that has not grown an archive section — the new entries belong at the end of
@@ -365,15 +375,14 @@ export function routeOrphanRows(
     // have": O_APPEND places the write after whatever else has landed, and it keeps the
     // inode, so the mode, the symlink and any hard links survive untouched too.
     const section = openSection(snapshot);
-    const markers = orphans.map((orphan) => orphanMarker(orphan.path));
     if (section && section.tail === "") {
       appendFileSync(outboxPath, outboxText.slice(snapshot.replace(/\n+$/, "").length));
-      return verified(outboxPath, markers, appended, read);
+      return verified(outboxPath, orphans, confirmed, appended, read);
     }
 
     try {
       if (!replaceIfUnchanged(outboxPath, snapshot, outboxText, read)) return { status: "conflict" };
-      return verified(outboxPath, markers, appended, read);
+      return verified(outboxPath, orphans, confirmed, appended, read);
     } catch (error) {
       if (error instanceof UnsupportedOutboxError) return { status: "unsupported", detail: error.message };
       throw error;
@@ -395,16 +404,15 @@ export function orphanRoutingOutcome(
   const rows = `${rowCount} orphan row(s)`;
   switch (routing.status) {
     case "routed": {
-      const already = rowCount - routing.count;
+      const held = rowCount - routing.confirmed.length;
       return {
         abort: false,
         message:
-          `Routed ${routing.count} orphan row(s) to OUTBOX.md.` +
-          (already > 0 ? ` (${already} already recorded.)` : ""),
+          `${routing.count} orphan row(s) newly filed in OUTBOX.md; ` +
+          `${routing.confirmed.length} confirmed and dropped from the board, ` +
+          `${held} kept until a later sync sees their entry.`,
       };
     }
-    case "unchanged":
-      return { abort: false, message: `${rows} already recorded in OUTBOX.md.` };
     case "locked":
       return {
         abort: true,
