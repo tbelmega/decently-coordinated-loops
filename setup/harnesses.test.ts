@@ -69,15 +69,29 @@ describe("detectConfigTargets", () => {
     }
   });
 
-  test("our own skills link is not evidence that Claude Code is installed", () => {
-    // install.sh creates ~/.claude/skills unconditionally. If that counted as detection,
-    // `./install.sh --seed` would install a managed block into the CLAUDE.md of a machine
-    // that has never run Claude Code.
+  test("a skills tree this run created is not evidence that Claude Code is installed", () => {
     const home = tempHome();
     try {
       makeDir(home, ".claude/skills");
+      process.env.DCL_CREATED_SKILL_DIRS = ".claude/skills\n";
       expect(detectConfigTargets(home)).toEqual([]);
       writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
+      ]);
+    } finally {
+      delete process.env.DCL_CREATED_SKILL_DIRS;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a skills tree that was already there still counts as a Claude installation", () => {
+    // The opposite error, and the worse one: refusing to wire a real installation leaves
+    // every later session unaware of the board, while a block in a directory DCL made
+    // earlier is inert.
+    const home = tempHome();
+    try {
+      makeDir(home, ".claude/skills");
       expect(detectConfigTargets(home)).toEqual([
         { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
       ]);

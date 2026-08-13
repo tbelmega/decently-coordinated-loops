@@ -88,10 +88,19 @@ if [ ! -f "$skill_dirs_file" ]; then
   exit 1
 fi
 # Comments and blank lines skipped; every other line is a home-relative destination.
+#
+# Destinations this run creates are recorded and handed to the seeder. A harness whose
+# config home contains nothing but a skills tree we just made is not evidence that the
+# harness is installed, and without this the two halves of `./install.sh --seed` would
+# conspire: link first, then read our own directory back as detection.
+created_skill_dirs=""
 while IFS= read -r skill_dir || [ -n "$skill_dir" ]; do
   case "$skill_dir" in ""|\#*) continue ;; esac
+  [ -d "$HOME/$skill_dir" ] || created_skill_dirs="$created_skill_dirs$skill_dir
+"
   link_skills "$HOME/$skill_dir"
 done < "$skill_dirs_file"
+export DCL_CREATED_SKILL_DIRS="$created_skill_dirs"
 for extra_dir in ${extra_config_dirs[@]+"${extra_config_dirs[@]}"}; do
   link_skills "$extra_dir/skills"
 done

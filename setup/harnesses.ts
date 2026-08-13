@@ -68,19 +68,37 @@ function claudeProfileTargets(home: string): ConfigTarget[] {
   return targets;
 }
 
+/** Did this invocation's installer create `relative` moments ago? install.sh exports the
+ * destinations it made, newline-separated, so detection can tell its own footprint from
+ * the user's state. Absent (a direct `seed.ts` run) means nothing was created here. */
+function justCreated(relative: string): boolean {
+  return (process.env.DCL_CREATED_SKILL_DIRS ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .includes(relative);
+}
+
 /** Every harness DCL wires into. Order fixes the order of both the skill destinations
  * and the detected config targets, which the tests assert exactly. */
 export const harnesses: Harness[] = [
   {
     id: "claude",
     skillsDirs: [".claude/skills"],
-    // Not `existsSync(~/.claude)`: this installer creates `~/.claude/skills` itself, on
-    // every machine, before any seeding runs. Keying on the bare directory would let our
-    // own unconditional skill link stand in as evidence that Claude Code is installed,
-    // and `./install.sh --seed` would then write a managed block into the CLAUDE.md of a
-    // machine that has never run it. Anything in that directory other than the skills
-    // tree is evidence; the skills tree alone is our own footprint.
-    detect: (home) => readHomeEntries(join(home, ".claude")).some((entry) => entry.name !== "skills"),
+    // Not a bare `existsSync(~/.claude)`: `./install.sh --seed` links skills before it
+    // seeds, so the installer would otherwise create `~/.claude/skills` and then read its
+    // own directory back as proof that Claude Code is installed, writing a managed block
+    // into a machine that has never run it.
+    //
+    // Only a destination THIS run created is discounted, which install.sh reports in
+    // `DCL_CREATED_SKILL_DIRS`. A skills tree that was already there is left as evidence:
+    // it may be the user's own, and refusing to wire a real Claude installation is the
+    // worse error of the two — a block written into a directory DCL itself made earlier
+    // is inert, while a missing one leaves every later session unaware of the board.
+    detect: (home) => {
+      const entries = readHomeEntries(join(home, ".claude"));
+      if (!entries.length) return false;
+      return justCreated(".claude/skills") ? entries.some((entry) => entry.name !== "skills") : true;
+    },
     configTargets: (home) => [{ path: join(home, ".claude", "CLAUDE.md"), kind: "block" }],
   },
   {
