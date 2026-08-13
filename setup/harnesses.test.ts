@@ -69,10 +69,28 @@ describe("detectConfigTargets", () => {
     }
   });
 
+  test("our own skills link is not evidence that Claude Code is installed", () => {
+    // install.sh creates ~/.claude/skills unconditionally. If that counted as detection,
+    // `./install.sh --seed` would install a managed block into the CLAUDE.md of a machine
+    // that has never run Claude Code.
+    const home = tempHome();
+    try {
+      makeDir(home, ".claude/skills");
+      expect(detectConfigTargets(home)).toEqual([]);
+      writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a fully populated home yields every target, in registry order", () => {
     const home = tempHome();
     try {
       makeDir(home, ".claude");
+      writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
       makeDir(home, ".codex");
       makeDir(home, ".cursor");
       expect(detectConfigTargets(home)).toEqual([
@@ -249,12 +267,17 @@ describe("reviewer roster", () => {
 
   test("every reviewer resolves a binary through its env override", () => {
     for (const reviewer of allReviewers()) {
-      expect(reviewerBin(reviewer)).toBe(reviewer.defaultBin);
-      process.env[reviewer.binEnv] = "/somewhere/else";
+      // The override may already be set in this environment for real use, so the default
+      // is asserted with it cleared rather than assumed absent.
+      const configured = process.env[reviewer.binEnv];
       try {
+        delete process.env[reviewer.binEnv];
+        expect(reviewerBin(reviewer)).toBe(reviewer.defaultBin);
+        process.env[reviewer.binEnv] = "/somewhere/else";
         expect(reviewerBin(reviewer)).toBe("/somewhere/else");
       } finally {
-        delete process.env[reviewer.binEnv];
+        if (configured === undefined) delete process.env[reviewer.binEnv];
+        else process.env[reviewer.binEnv] = configured;
       }
     }
   });

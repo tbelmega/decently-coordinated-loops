@@ -34,19 +34,30 @@ mkdir ../public && git -C <private> archive "$REVIEWED" | tar -x -C ../public
 
 cd ../public && git init -q && git add -A
 
-# The equality gate. The staged tree must be the reviewed tree, exactly — same paths,
-# same contents, same modes. Any difference means something entered or left the export.
-test "$(git write-tree)" = "$(git -C <private> rev-parse "$REVIEWED^{tree}")" || echo MISMATCH
+# The equality gate, and it must stop you. The staged tree has to be the reviewed tree
+# exactly — same paths, same contents, same modes — so a difference means something
+# entered or left the export and nothing should be committed.
+test "$(git write-tree)" = "$(git -C <private> rev-parse "$REVIEWED^{tree}")" || {
+  echo "tree mismatch: refusing to publish" >&2
+  exit 1
+}
+git commit -qm "Initial public release"
 ```
 
-Then commit, and assert the ref set before pushing:
+Then assert the ref set, and push only what you named:
 
 ```bash
-git commit -qm "Initial public release"
-git for-each-ref --format='%(refname)'   # expect exactly one refs/heads/<branch>
+BRANCH=$(git symbolic-ref --short HEAD)     # whatever git initialised, not an assumed name
+
+# Exactly one branch, no tags, no refs/replace. Anything else is a ref no reader asked
+# for; stop and find out why it exists before pushing.
+test "$(git for-each-ref --format='%(refname)')" = "refs/heads/$BRANCH" || {
+  echo "unexpected refs present: refusing to publish" >&2
+  exit 1
+}
 
 # Explicit refspec. Never --all or --mirror: they publish whatever refs exist.
-git push origin refs/heads/main:refs/heads/main
+git push origin "refs/heads/$BRANCH:refs/heads/$BRANCH"
 ```
 
 ## Keeping the history instead

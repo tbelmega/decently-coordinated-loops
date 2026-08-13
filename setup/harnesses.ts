@@ -41,9 +41,9 @@ export interface Harness {
  * this process may not read — contributes no profiles, matching the existsSync probes
  * around it: detection reports what is there, and repairing a home is not our job.
  * Without this, scanning for profiles would make an unusable home abort seeding. */
-function readHomeEntries(home: string): Dirent[] {
+function readHomeEntries(directory: string): Dirent[] {
   try {
-    return readdirSync(home, { withFileTypes: true });
+    return readdirSync(directory, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -74,7 +74,13 @@ export const harnesses: Harness[] = [
   {
     id: "claude",
     skillsDirs: [".claude/skills"],
-    detect: (home) => existsSync(join(home, ".claude")),
+    // Not `existsSync(~/.claude)`: this installer creates `~/.claude/skills` itself, on
+    // every machine, before any seeding runs. Keying on the bare directory would let our
+    // own unconditional skill link stand in as evidence that Claude Code is installed,
+    // and `./install.sh --seed` would then write a managed block into the CLAUDE.md of a
+    // machine that has never run it. Anything in that directory other than the skills
+    // tree is evidence; the skills tree alone is our own footprint.
+    detect: (home) => readHomeEntries(join(home, ".claude")).some((entry) => entry.name !== "skills"),
     configTargets: (home) => [{ path: join(home, ".claude", "CLAUDE.md"), kind: "block" }],
   },
   {
