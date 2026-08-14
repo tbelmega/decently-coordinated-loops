@@ -15,6 +15,10 @@ export interface ReviewObligationResult {
   findingId: string;
   status: "fixed" | "documented" | "incomplete" | "regressed";
   evidence: string;
+  /** Stamped from the required obligation at validation time (never reviewer-supplied),
+   * so the audit history keeps the typed distinction even after a later supersession
+   * changes what the finding's current decision is. Absent on legacy results. */
+  type?: ReviewObligationType;
 }
 
 export interface AuditFinding extends Finding {
@@ -200,21 +204,27 @@ export function parseReviewPass(
     throw new Error(`coverage includes a file outside the review manifest: ${stray.path}`);
   }
   if (!Array.isArray(input.obligations)) throw new Error("obligations must be an array");
-  const obligations = input.obligations.map(parseObligation);
+  const rawObligations = input.obligations.map(parseObligation);
   const requiredById = new Map(requiredObligations.map((required) => [required.findingId, required]));
   for (const required of requiredObligations) {
-    if (!obligations.some((obligation) => obligation.findingId === required.findingId)) {
+    if (!rawObligations.some((obligation) => obligation.findingId === required.findingId)) {
       throw new Error(`open obligation ${required.findingId} is missing a classification`);
     }
   }
-  for (const obligation of obligations) {
+  const obligations = rawObligations.map((obligation): ReviewObligationResult => {
     const required = requiredById.get(obligation.findingId);
-    if (required && !validStatusesByType[required.type].includes(obligation.status)) {
+    // An unsolicited result could pre-close an obligation a later decision creates —
+    // results may only exist for obligations that were open when this round ran.
+    if (!required) {
+      throw new Error(`obligation result ${obligation.findingId} was not required by this pass`);
+    }
+    if (!validStatusesByType[required.type].includes(obligation.status)) {
       throw new Error(
         `obligation ${obligation.findingId} is a ${required.type} obligation and cannot be classified ${obligation.status}`,
       );
     }
-  }
+    return {...obligation, type: required.type};
+  });
   if (!Array.isArray(input.findings)) throw new Error("findings must be an array");
   const rawFindings = input.findings;
   const parsedReview = parseReview({summary: input.summary, findings: rawFindings});

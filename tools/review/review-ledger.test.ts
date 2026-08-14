@@ -598,6 +598,66 @@ describe("remediationChurnTripwire", () => {
   });
 });
 
+describe("parseReviewLedger — persisted decision invariants", () => {
+  function persistedLimitation(withOwner = false): any {
+    const seed = withOwner ? seededLedger(finding) : seededLedger(p2Finding);
+    return JSON.parse(
+      JSON.stringify(
+        recordDisposition(seed, "R1-F1", "accepted-as-limitation", "below the bar", {
+          doc: "docs/limits.md",
+          ...(withOwner ? {owner: true} : {}),
+        }),
+      ),
+    );
+  }
+
+  test("rejects a limitation without a doc path", () => {
+    const ledger = persistedLimitation();
+    delete ledger.rounds[0].findings[0].disposition.doc;
+    expect(() => parseReviewLedger(ledger)).toThrow(/doc/);
+  });
+
+  test("rejects a doc path on a non-limitation disposition", () => {
+    const ledger = JSON.parse(
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+    );
+    ledger.rounds[0].findings[0].disposition.doc = "docs/limits.md";
+    expect(() => parseReviewLedger(ledger)).toThrow(/doc/);
+  });
+
+  test("rejects a traversal or non-normalized doc path", () => {
+    const traversal = persistedLimitation();
+    traversal.rounds[0].findings[0].disposition.doc = "../outside.md";
+    expect(() => parseReviewLedger(traversal)).toThrow(/repository-relative/);
+    const unnormalized = persistedLimitation();
+    unnormalized.rounds[0].findings[0].disposition.doc = "./docs/limits.md";
+    expect(() => parseReviewLedger(unnormalized)).toThrow(/normalized/);
+  });
+
+  test("rejects a P0/P1 limitation without owner attribution, live or in history", () => {
+    const live = persistedLimitation(true);
+    delete live.rounds[0].findings[0].disposition.owner;
+    expect(() => parseReviewLedger(live)).toThrow(/owner/);
+
+    const reversed = JSON.parse(
+      JSON.stringify(
+        recordDisposition(
+          recordDisposition(seededLedger(finding), "R1-F1", "accepted-as-limitation", "owner ruled", {
+            doc: "docs/limits.md",
+            owner: true,
+          }),
+          "R1-F1",
+          "accepted",
+          "owner ruled: fix it",
+          {owner: true},
+        ),
+      ),
+    );
+    delete reversed.rounds[0].findings[0].history[0].owner;
+    expect(() => parseReviewLedger(reversed)).toThrow(/owner/);
+  });
+});
+
 describe("supersedeLedgerBase and liveRounds", () => {
   test("keeps every round and decision while resetting the live window", () => {
     let ledger = seededLedger(p2Finding);
@@ -651,6 +711,23 @@ describe("supersedeLedgerBase and liveRounds", () => {
     expect(parsed).toEqual(ledger);
     expect(parsed.rounds[1].stepBack).toEqual({path: "docs/step-back.md", triggerRounds: [1, 2]});
     expect(parsed.rounds[0].findings[0].history).toHaveLength(1);
+  });
+
+  test("labels a nonterminal documentation result from its persisted type", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "doc gap", findings: []},
+      audit: auditWith([
+        {findingId: "R1-F1", status: "incomplete", evidence: "doc misses the crash path", type: "documentation"},
+      ]),
+    });
+    expect(renderReviewLedger(ledger)).toContain("Documentation obligation R1-F1: incomplete");
   });
 
   test("renders limitation, owner attribution, step-back, and supersession context", () => {

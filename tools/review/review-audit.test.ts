@@ -209,12 +209,31 @@ describe("parseReviewPass", () => {
     ).toHaveLength(1);
   });
 
-  test("accepts the documented terminal for a documentation obligation", () => {
+  test("accepts the documented terminal and stamps the obligation type on the result", () => {
     const input = passResult("diff") as Record<string, unknown>;
     input.obligations = [{findingId: "R1-F2", status: "documented", evidence: "doc covers the limitation"}];
     expect(
       parseReviewPass(input, "diff", manifest, [{findingId: "R1-F2", type: "documentation"}]).obligations,
-    ).toEqual([{findingId: "R1-F2", status: "documented", evidence: "doc covers the limitation"}]);
+    ).toEqual([
+      {findingId: "R1-F2", status: "documented", evidence: "doc covers the limitation", type: "documentation"},
+    ]);
+  });
+
+  test("rejects an obligation result whose id was never required", () => {
+    // An unsolicited result could otherwise pre-close an obligation created by a later
+    // decision — results must post-date the decision that opened their obligation.
+    const unsolicited = passResult("diff") as Record<string, unknown>;
+    unsolicited.obligations = [{findingId: "R9-F9", status: "documented", evidence: "unsolicited"}];
+    expect(() => parseReviewPass(unsolicited, "diff", manifest, [])).toThrow(/R9-F9/);
+
+    const alongsideRequired = passResult("diff") as Record<string, unknown>;
+    alongsideRequired.obligations = [
+      {findingId: "R1-F1", status: "fixed", evidence: "guard added"},
+      {findingId: "R9-F9", status: "fixed", evidence: "unsolicited"},
+    ];
+    expect(() =>
+      parseReviewPass(alongsideRequired, "diff", manifest, [{findingId: "R1-F1", type: "remediation"}]),
+    ).toThrow(/R9-F9/);
   });
 
   test("rejects a terminal status recorded against the wrong obligation type", () => {

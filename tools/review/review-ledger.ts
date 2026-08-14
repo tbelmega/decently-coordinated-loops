@@ -215,6 +215,24 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
   };
 }
 
+/** Invariant 5: a persisted decision honors the recording rules even when the ledger
+ * arrived from disk — a malformed ledger must fail closed, not certify silently. */
+function assertDecisionInvariants(decision: ReviewDisposition, priority: Priority, path: string): void {
+  if (decision.kind === "accepted-as-limitation") {
+    if (!decision.doc) {
+      throw new Error(`${path} is accepted-as-limitation and must carry a doc path`);
+    }
+    if (decision.doc !== validateEvidencePath(decision.doc)) {
+      throw new Error(`${path}.doc must be a normalized repository-relative path`);
+    }
+    if ((priority === "P0" || priority === "P1") && decision.owner !== true) {
+      throw new Error(`${path} is a ${priority} limitation and must carry owner attribution`);
+    }
+  } else if (decision.doc) {
+    throw new Error(`${path}.doc is only valid on an accepted-as-limitation disposition`);
+  }
+}
+
 function parseStepBack(input: unknown, path: string): ReviewStepBack | undefined {
   if (input === undefined) return undefined;
   if (!isRecord(input)) throw new Error(`${path} must be an object`);
@@ -246,15 +264,18 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       const findingInput = roundFindings[findingIndex];
       if (!isRecord(findingInput)) throw new Error(`${path}.findings[${findingIndex}] must be an object`);
       const disposition = parseDisposition(findingInput.disposition, `${path}.findings[${findingIndex}].disposition`);
+      if (disposition) {
+        assertDecisionInvariants(disposition, finding.priority, `${path}.findings[${findingIndex}].disposition`);
+      }
       if (findingInput.history !== undefined && !Array.isArray(findingInput.history)) {
         throw new Error(`${path}.findings[${findingIndex}].history must be an array when present`);
       }
       const history = Array.isArray(findingInput.history)
         ? findingInput.history.map((entry, historyIndex) => {
-            const parsed = parseDisposition(entry, `${path}.findings[${findingIndex}].history[${historyIndex}]`);
-            if (!parsed) {
-              throw new Error(`${path}.findings[${findingIndex}].history[${historyIndex}] must be an object`);
-            }
+            const historyPath = `${path}.findings[${findingIndex}].history[${historyIndex}]`;
+            const parsed = parseDisposition(entry, historyPath);
+            if (!parsed) throw new Error(`${historyPath} must be an object`);
+            assertDecisionInvariants(parsed, finding.priority, historyPath);
             return parsed;
           })
         : undefined;
@@ -406,6 +427,25 @@ export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): Revi
   };
 }
 
+// The obligation contract's invariant list (C3 artifact; the C1/C2 enforcement contract
+// in the containment spec is the source). Every fix in this space is verified against
+// the whole list, not only against the finding that prompted it:
+//   1. Evidence paths are normalized repo-relative; resolution to a tracked regular
+//      file binds at each consuming gate, not at recording.
+//   2. Obligations are typed by the decision that created them; `fixed` is terminal
+//      only for remediation, `documented` only for documentation.
+//   3. Obligation ids are decision-specific; a result recorded against a retired
+//      decision's id never satisfies a live obligation.
+//   4. A result may only be recorded for an obligation that was open when its round
+//      ran (parseReviewPass rejects unsolicited ids), so every persisted result
+//      post-dates the decision that opened its obligation.
+//   5. Persisted decision state is parser-enforced, not only recorder-enforced: doc
+//      presence and shape, and P0/P1 owner attribution, hold for live decisions and
+//      history entries alike.
+//   6. Base supersession resets round mechanics only; decisions, obligations, and
+//      tripwire state carry forward by construction.
+//   7. Each persisted result carries its obligation type, so the audit history keeps
+//      the typed distinction even after a supersession changes the live decision.
 const obligationBearingKinds: readonly DispositionKind[] = ["accepted", "accepted-as-limitation"];
 
 /** The obligation id a finding's CURRENT decision owns. The first obligation-bearing
@@ -663,7 +703,10 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         lines.push("- Obligations: none");
       } else {
         for (const obligation of round.audit.obligations) {
-          const label = obligation.status === "documented" ? "Documentation obligation" : "Remediation obligation";
+          // Label from the persisted type; the status heuristic only covers legacy
+          // results recorded before results carried their type.
+          const type = obligation.type ?? (obligation.status === "documented" ? "documentation" : "remediation");
+          const label = type === "documentation" ? "Documentation obligation" : "Remediation obligation";
           lines.push(`- ${label} ${obligation.findingId}: ${obligation.status} — ${obligation.evidence}`);
         }
       }
@@ -739,7 +782,8 @@ function isReviewObligationResult(input: unknown): input is ReviewObligationResu
       input.status === "documented" ||
       input.status === "incomplete" ||
       input.status === "regressed") &&
-    typeof input.evidence === "string"
+    typeof input.evidence === "string" &&
+    (input.type === undefined || input.type === "remediation" || input.type === "documentation")
   );
 }
 

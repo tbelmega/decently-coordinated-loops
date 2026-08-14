@@ -800,7 +800,7 @@ describe("cli-review start", () => {
     expect(ledger.rounds).toHaveLength(2);
     expect(ledger.rounds[1].audit.kind).toBe("remediation");
     expect(ledger.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "fixed", evidence: "verified"},
+      {findingId: "R1-F1", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
   });
 
@@ -839,7 +839,7 @@ describe("cli-review start", () => {
     expect(ledger.supersessions).toHaveLength(1);
     expect(ledger.rounds).toHaveLength(2);
     expect(ledger.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "documented", evidence: "verified"},
+      {findingId: "R1-F1", status: "documented", evidence: "verified", type: "documentation"},
     ]);
   });
 
@@ -881,7 +881,7 @@ describe("cli-review start", () => {
     const ledger = readLedgerJson(repository, item);
     expect(ledger.supersessions).toHaveLength(1);
     expect(ledger.rounds.at(-1).audit.obligations).toEqual([
-      {findingId: "R1-F1#2", status: "fixed", evidence: "verified"},
+      {findingId: "R1-F1#2", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
   });
 
@@ -919,7 +919,7 @@ describe("cli-review start", () => {
     expect(ledger.supersessions ?? []).toHaveLength(0);
     expect(ledger.rounds.at(-1).audit.kind).toBe("base-delta");
     expect(ledger.rounds.at(-1).audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "documented", evidence: "verified"},
+      {findingId: "R1-F1", status: "documented", evidence: "verified", type: "documentation"},
     ]);
   });
 
@@ -1078,7 +1078,7 @@ describe("cli-review start", () => {
     expect(ledger.rounds).toHaveLength(2);
     expect(ledger.rounds[1].findings).toEqual([]);
     expect(ledger.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "documented", evidence: "verified"},
+      {findingId: "R1-F1", status: "documented", evidence: "verified", type: "documentation"},
     ]);
     const status = runStatus(repository, item);
     expect(status.status).toBe(0);
@@ -1215,7 +1215,7 @@ describe("cli-review start", () => {
     const confirmed = readLedgerJson(repository, item);
     expect(confirmed.rounds).toHaveLength(3);
     expect(confirmed.rounds[2].audit.obligations).toEqual([
-      {findingId: "R1-F1#2", status: "fixed", evidence: "verified"},
+      {findingId: "R1-F1#2", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
     expect(runStatus(repository, item).stdout).toContain("REVIEW_STATUS=passed");
   });
@@ -1369,7 +1369,7 @@ describe("cli-review start", () => {
     expect(refreshed.rounds).toHaveLength(2);
     expect(refreshed.rounds[1].audit.kind).toBe("base-delta");
     expect(refreshed.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "fixed", evidence: "verified"},
+      {findingId: "R1-F1", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
     expect(refreshed.rounds[1].findings).toEqual([]);
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(false);
