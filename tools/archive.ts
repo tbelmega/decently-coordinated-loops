@@ -63,15 +63,29 @@ function archiveRow(item: ItemFile): string {
  * and preflight keeps its board row and asks the owner to move it back. Indexing it would
  * record live work as finished in the one file whose entire contract is terminal work, and
  * the two derived indexes would then contradict each other. The rule lives here rather than
- * at the call site because ARCHIVE.md's contract is this function's to keep. */
+ * at the call site because ARCHIVE.md's contract is this function's to keep.
+ *
+ * Which is why a stranded file's row is also removed when one is already there — reopening
+ * an item by editing its state in place leaves the old terminal row behind, and a rule that
+ * only filters what it appends would keep publishing that stale row as the item's status
+ * forever. Both directions are derived from the folder, so a state that goes terminal again
+ * gets its row back on the next run. Rows whose slug has no file in `archive/` at all are
+ * left untouched: nothing here knows why they are there. */
 export function reconcileArchiveRows(archiveText: string, archivedItems: ItemFile[]): string {
+  const strandedSlugs = archivedItems.filter((item) => targetFolder(item.state) !== "archive").map((i) => i.slug);
+  const retained = strandedSlugs.length
+    ? archiveText
+        .split("\n")
+        .filter((line) => !strandedSlugs.some((slug) => line.includes(`](archive/${slug}.md)`)))
+        .join("\n")
+    : archiveText;
   const missing = archivedItems.filter(
-    (item) => targetFolder(item.state) === "archive" && !archiveText.includes(`](archive/${item.slug}.md)`),
+    (item) => targetFolder(item.state) === "archive" && !retained.includes(`](archive/${item.slug}.md)`),
   );
-  if (!missing.length) return archiveText;
+  if (!missing.length) return retained;
   const rows = [...missing].sort((a, b) => b.updated.localeCompare(a.updated)).map(archiveRow);
-  const hasTable = archiveText.includes(ARCHIVE_TABLE_HEADER);
-  const trimmed = archiveText.replace(/\n+$/, "");
+  const hasTable = retained.includes(ARCHIVE_TABLE_HEADER);
+  const trimmed = retained.replace(/\n+$/, "");
   const prefix = hasTable ? trimmed : `${trimmed}\n\n${ARCHIVE_TABLE_HEADER}`;
   return `${prefix}\n${rows.join("\n")}\n`;
 }

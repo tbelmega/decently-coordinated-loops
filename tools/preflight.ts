@@ -161,6 +161,12 @@ export function runPreflight(boardText: string, items: ItemFile[], terminalItems
         mismatches.push({ slug: item.slug, field, boardValue: norm(boardValue), fileValue: norm(fileValue) });
       }
     };
+    // The link itself is a field, and resolving identity by slug is what makes checking it
+    // necessary: a row reading `for-delivery/<slug>.md` for a file in `items/` now matches
+    // instead of being reported, so without this the only trace of a broken link would be
+    // gone from every report. An active item's canonical link is `items/<slug>.md`, which
+    // is what regeneration writes, so this drifts and self-heals exactly like the others.
+    cmp("link", row.path, `items/${item.slug}.md`);
     cmp("project", row.project, item.project);
     cmp("state", row.state, item.state);
     cmp("next-actor", row.nextActor, item.nextActor);

@@ -30,12 +30,13 @@ afterEach(() => {
   while (created.length) rmSync(created.pop()!, { recursive: true, force: true });
 });
 
-/** A data repo whose BOARD.md carries a row for an item whose file sits in `folder`. */
-function dataRepo(folder: "items" | "for-delivery" | "archive"): string {
+/** A data repo whose BOARD.md carries a row for an item whose file sits in `folder`.
+ * `rowPath` is what the row links to, which is not always where the file is. */
+function dataRepo(folder: "items" | "for-delivery" | "archive", rowPath = "items/reopened.md"): string {
   const root = mkdtempSync(join(tmpdir(), "dcl-check-"));
   created.push(root);
   for (const dir of ["items", "for-delivery", "archive"]) mkdirSync(join(root, dir));
-  const row = "| [Reopened](items/reopened.md) | atlas | in-progress | agent | - | - | - | 2026-07-08 |\n";
+  const row = `| [Reopened](${rowPath}) | atlas | in-progress | agent | - | - | - | 2026-07-08 |\n`;
   writeFileSync(join(root, "BOARD.md"), readFileSync(join(TEMPLATES, "BOARD.md"), "utf8") + row);
   writeFileSync(join(root, "ARCHIVE.md"), readFileSync(join(TEMPLATES, "ARCHIVE.md"), "utf8"));
   writeFileSync(join(root, "OUTBOX.md"), "# Outbox\n\n## Open\n");
@@ -59,6 +60,22 @@ describe("cli-check on a board row whose item is in the wrong folder", () => {
     test(`fails while an active item's file sits in ${folder}/`, () => {
       const result = spawnSync("bun", [CHECK], { cwd: dataRepo(folder), encoding: "utf8" });
       expect(result.status).toBe(1);
+      expect(result.stdout).toContain(`${folder}/reopened.md`);
+    });
+  }
+
+  // Review R6-F1, the cost of resolving identity by slug: this row used to be an orphan
+  // (no exact path match) and failed the gate. Matching by slug is right, but the link is
+  // still broken - a dispatcher following it finds nothing - so the row has to fail as a
+  // field mismatch instead, or correct classification would have bought silence.
+  for (const folder of ["for-delivery", "archive"] as const) {
+    test(`fails on an active item whose row links ${folder}/ instead of items/`, () => {
+      const result = spawnSync("bun", [CHECK], {
+        cwd: dataRepo("items", `${folder}/reopened.md`),
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("link");
       expect(result.stdout).toContain(`${folder}/reopened.md`);
     });
   }

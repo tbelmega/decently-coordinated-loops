@@ -177,6 +177,36 @@ Terminal work-streams.
     });
   }
 
+  // Review R6-F2. Reopening an item by editing its state in place, without moving the
+  // file, leaves the row an earlier run wrote. Filtering only the append set would keep
+  // publishing "finished" as that live item's status for good.
+  test("removes the row of an already-indexed file whose state left archive/", () => {
+    const items = loadItemsDir(FIXTURES);
+    const done = { ...items[0], slug: "reopened", title: "Reopened", state: "accepted", updated: "2026-07-10" };
+    const indexed = reconcileArchiveRows(ARCHIVE_MD, [done]);
+    expect(indexed).toContain("archive/reopened.md");
+
+    const reopened = { ...done, state: "in-progress" };
+    expect(reconcileArchiveRows(indexed, [reopened])).not.toContain("archive/reopened.md");
+  });
+
+  test("re-adds the row when a reopened file goes terminal again", () => {
+    const items = loadItemsDir(FIXTURES);
+    const item = { ...items[0], slug: "again", title: "Again", state: "accepted", updated: "2026-07-10" };
+    const indexed = reconcileArchiveRows(ARCHIVE_MD, [item]);
+    const removed = reconcileArchiveRows(indexed, [{ ...item, state: "tested" }]);
+    expect(removed).not.toContain("archive/again.md");
+    expect(reconcileArchiveRows(removed, [item])).toContain("archive/again.md");
+  });
+
+  test("leaves a row alone when its slug has no file in archive/ at all", () => {
+    const items = loadItemsDir(FIXTURES);
+    const gone = { ...items[0], slug: "gone", title: "Gone", state: "accepted", updated: "2026-07-10" };
+    const indexed = reconcileArchiveRows(ARCHIVE_MD, [gone]);
+    // The folder no longer holds it; nothing here knows why, so the row stands.
+    expect(reconcileArchiveRows(indexed, [])).toBe(indexed);
+  });
+
   test("indexes the terminal files in a batch that also holds a stranded one", () => {
     const items = loadItemsDir(FIXTURES);
     const done = { ...items[0], slug: "done", title: "Done", state: "accepted", updated: "2026-07-10" };
