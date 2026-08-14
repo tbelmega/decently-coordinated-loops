@@ -136,6 +136,7 @@ function runStart(
   item: string,
   baseRef = "master",
   extraEnv: Record<string, string> = {},
+  extraArgs: string[] = [],
 ) {
   mkdirSync(`${dataRepo}/items`, {recursive: true});
   const itemPath = `${dataRepo}/items/${item}.md`;
@@ -144,7 +145,7 @@ function runStart(
   }
   return spawnSync(
     "bun",
-    ["run", CLI, "start", "--item", item, "--base", baseRef, "--data-repo", dataRepo],
+    ["run", CLI, "start", "--item", item, "--base", baseRef, "--data-repo", dataRepo, ...extraArgs],
     {
       cwd: repository,
       encoding: "utf8",
@@ -966,6 +967,89 @@ describe("cli-review start", () => {
       {findingId: "R1-F1#2", status: "fixed", evidence: "verified"},
     ]);
     expect(runStatus(repository, item).stdout).toContain("REVIEW_STATUS=passed");
+  });
+
+  /** Two completed remediation-dominated rounds at the given head, all findings
+   * rejected so the round loop itself may continue. */
+  function seedTripwireLedger(repository: string, item: string, baseSha: string, headSha: string): void {
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), {recursive: true});
+    let ledger = createReviewLedger({item, branch: "feature/review-receipt", baseRef: "master", baseSha});
+    for (const roundNumber of [1, 2]) {
+      ledger = addReviewRound(ledger, {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: `2026-08-14T12:00:0${roundNumber}Z`,
+        review: {
+          summary: "churn",
+          findings: [{
+            priority: "P2",
+            title: `Guard interaction ${roundNumber}`,
+            evidence: "the previous fix created this",
+            impact: "regression",
+            direction: "patch it",
+            confidence: "high",
+            origin: "remediation",
+          }],
+        },
+      });
+      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not reproducible on re-check");
+    }
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+  }
+
+  test("refuses the round after two remediation-dominated rounds until a step-back note is supplied", () => {
+    const {repository, baseSha, headSha} = createReviewRepository();
+    const item = "tripwire-armed";
+    const dataRepo = createReviewDataRepo(9);
+    seedTripwireLedger(repository, item, baseSha, headSha);
+
+    const refused = runStart(repository, dataRepo, item);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("rounds 1 and 2");
+    expect(refused.stderr).toContain("1/1");
+    expect(refused.stderr).toContain("--step-back");
+  });
+
+  test("rejects a pre-trigger step-back note and accepts an updated one", () => {
+    const {repository, baseSha} = createReviewRepository();
+    const item = "tripwire-freshness";
+    const dataRepo = createReviewDataRepo(9);
+    writeFileSync(`${repository}/step-back.md`, "Invariants: none yet. Decision: continue.\n");
+    git(repository, ["add", "step-back.md"]);
+    git(repository, ["commit", "-q", "-m", "Write a note before the tripwire fired"]);
+    const headWithNote = git(repository, ["rev-parse", "HEAD"]);
+    seedTripwireLedger(repository, item, baseSha, headWithNote);
+
+    const stale = runStart(repository, dataRepo, item, "master", {}, ["--step-back", "step-back.md"]);
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toContain("unchanged from round 2");
+
+    writeFileSync(
+      `${repository}/step-back.md`,
+      "Invariants: lock identity, release-on-crash. Decision: rewrite from the invariant list. Covers R1-F1, R2-F1.\n",
+    );
+    git(repository, ["add", "step-back.md"]);
+    git(repository, ["commit", "-q", "-m", "Step back after rounds 1 and 2"]);
+
+    const accepted = runStart(repository, dataRepo, item, "master", {}, ["--step-back", "step-back.md"]);
+    expect(accepted.status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds).toHaveLength(3);
+    expect(ledger.rounds[2].stepBack).toEqual({path: "step-back.md", triggerRounds: [1, 2]});
+  });
+
+  test("refuses --step-back while no tripwire is armed", () => {
+    const {repository} = createReviewRepository();
+    const item = "step-back-unarmed";
+    const dataRepo = createReviewDataRepo(9);
+    writeFileSync(`${repository}/step-back.md`, "premature\n");
+    git(repository, ["add", "step-back.md"]);
+    git(repository, ["commit", "-q", "-m", "Premature note"]);
+
+    const result = runStart(repository, dataRepo, item, "master", {}, ["--step-back", "step-back.md"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("no remediation-churn tripwire is armed");
   });
 
   test("starts a fresh confirming review after an accepted fix is rebased", () => {

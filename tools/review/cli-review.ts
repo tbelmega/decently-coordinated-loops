@@ -24,12 +24,15 @@ import {
   priorDispositionNotes,
   recordDisposition,
   recordReviewFailure,
+  remediationChurnTripwire,
   renderReviewLedger,
   reviewCanContinue,
   isDispositionKind,
+  validateEvidencePath,
   type DispositionKind,
   type ReviewLedger,
   type ReviewRoundAudit,
+  type ReviewStepBack,
 } from "./review-ledger.ts";
 import {
   auditFindingIdentity,
@@ -65,6 +68,8 @@ interface StartOptions {
   effort?: string;
   /** Effective round cap from config or an owner-authorized `--max-rounds` override. */
   maxRounds?: number;
+  /** Step-back note path answering an armed remediation-churn tripwire (C1). */
+  stepBack?: string;
   auditPasses: ReviewAuditPass[];
   metadataPaths: string[];
   dataRepo?: string;
@@ -126,6 +131,7 @@ function parseStartOptions(args: string[]): StartOptions {
   const flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string; item?: string } = {};
   let baseRef = "";
   let maxRounds: number | undefined;
+  let stepBack: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     const value = args[index + 1];
@@ -135,6 +141,7 @@ function parseStartOptions(args: string[]): StartOptions {
     else if (arg === "--model" && value) flags.model = value;
     else if (arg === "--effort" && value) flags.effort = value;
     else if (arg === "--item" && value) flags.item = value;
+    else if (arg === "--step-back" && value) stepBack = value;
     else if (arg === "--max-rounds" && value) {
       maxRounds = Number(value);
       if (!Number.isInteger(maxRounds) || maxRounds < 1) {
@@ -154,6 +161,7 @@ function parseStartOptions(args: string[]): StartOptions {
     model: configured.model,
     effort: configured.effort,
     maxRounds: maxRounds ?? configured.maxRounds,
+    ...(stepBack ? {stepBack} : {}),
     auditPasses: configured.auditPasses,
     metadataPaths: configured.metadataPaths,
     dataRepo: configured.dataRepo,
@@ -504,6 +512,41 @@ async function startReview(options: StartOptions): Promise<void> {
         );
       }
       if (auditKind === "full" && obligations.length > 0) auditKind = "remediation";
+      // C1: two consecutive remediation-dominated rounds force a written step-back
+      // before the next round opens. The note must resolve at the HEAD under review and
+      // must differ from the newer triggering round's tree — a file written before the
+      // tripwire fired cannot prove analysis of the rounds that fired it.
+      const tripwire = remediationChurnTripwire(ledger);
+      let stepBack: ReviewStepBack | undefined;
+      if (tripwire.armed && !options.stepBack) {
+        const [older, newer] = tripwire.rounds;
+        throw new Error(
+          `remediation-churn tripwire: rounds ${older.number} and ${newer.number} are both remediation-dominated ` +
+            `(${older.remediationCount}/${older.findingCount} and ${newer.remediationCount}/${newer.findingCount} findings remediation-origin). ` +
+            "Write the step-back analysis (full invariant list; remove, rewrite, or continue-patching decision with reasoning; covered obligations) and re-run with --step-back <path>.",
+        );
+      }
+      if (!tripwire.armed && options.stepBack) {
+        throw new Error("no remediation-churn tripwire is armed — omit --step-back");
+      }
+      if (tripwire.armed && options.stepBack) {
+        const notePath = validateEvidencePath(options.stepBack);
+        assertTrackedRegularFile(repository, headSha, notePath, "step-back note");
+        const [older, newer] = tripwire.rounds;
+        const currentBlob = git(["-C", repository, "rev-parse", `${headSha}:${notePath}`]);
+        let triggerBlob: string | undefined;
+        try {
+          triggerBlob = git(["-C", repository, "rev-parse", `${newer.headSha}:${notePath}`]);
+        } catch {
+          triggerBlob = undefined;
+        }
+        if (triggerBlob === currentBlob) {
+          throw new Error(
+            `step-back note ${notePath} is unchanged from round ${newer.number}'s reviewed tree — a note written before the tripwire fired cannot prove analysis of the rounds that fired it`,
+          );
+        }
+        stepBack = {path: notePath, triggerRounds: [older.number, newer.number]};
+      }
       const previousHeadSha = ledger.rounds.at(-1)?.headSha;
       const remediationRange = obligations.length > 0 && previousHeadSha && previousHeadSha !== headSha
         ? {baseSha: previousHeadSha, headSha}
@@ -610,6 +653,7 @@ async function startReview(options: StartOptions): Promise<void> {
           obligations: combined.obligations,
           metrics,
         },
+        ...(stepBack ? {stepBack} : {}),
       });
       await writeLedger(ledger, paths);
       process.stdout.write(`Review round ${ledger.rounds.length} written to ${paths.markdownPath}\n`);
