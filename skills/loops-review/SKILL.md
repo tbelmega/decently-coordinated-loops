@@ -125,7 +125,9 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    owner's call and get escalated; a reviewer failure or a stale review is yours to
    recover from, as below. When the owner later decides a deferred
    finding, record that decision as a new disposition (reason citing the owner) —
-   only `deferred-to-human` may be superseded — then continue the round loop. When
+   only `deferred-to-human` and `accepted-as-limitation` may be superseded, the
+   latter solely by an owner-attributed `accepted` disposition — then continue the
+   round loop. When
    the owner authorizes rounds beyond the configured cap, pass `--max-rounds <n>` to
    `start` and log the authorization on the item; never extend the cap on your own
    judgment. A failed or incomplete attempt is yours to recover from — fix the cause

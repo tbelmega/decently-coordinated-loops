@@ -502,6 +502,18 @@ async function startReview(options: StartOptions): Promise<void> {
 
     try {
       const obligations = openObligations(ledger);
+      // The same-HEAD remediation guard holds on EVERY path, not only same-base: a
+      // base refresh (either kind) must not reach the reviewer while a remediation
+      // obligation is open at the exact HEAD the last round already reviewed — an
+      // owner reversal creates such an obligation without moving HEAD.
+      if (
+        ledger.rounds.at(-1)?.headSha === headSha &&
+        obligations.some((obligation) => obligation.type === "remediation")
+      ) {
+        throw new Error(
+          "latest round has accepted findings — implement and commit them before the next round",
+        );
+      }
       // Enforcement contract rule 1: a documentation obligation's evidence resolves at
       // consumption. From the first gate after the disposition on, the named doc must be
       // a tracked regular file in the reviewed tree — a directory proves nothing was

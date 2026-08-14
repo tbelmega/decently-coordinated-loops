@@ -267,6 +267,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
   if (!isRecord(input)) throw new Error("review ledger must be an object");
   if (input.version !== 1) throw new Error("review ledger version must be 1");
   if (!Array.isArray(input.rounds)) throw new Error("review ledger rounds must be an array");
+  const totalRounds = input.rounds.length;
   const rounds = input.rounds.map((roundInput, roundIndex): ReviewRound => {
     const path = `rounds[${roundIndex}]`;
     if (!isRecord(roundInput)) throw new Error(`${path} must be an object`);
@@ -299,9 +300,29 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       // The recorder permits exactly two supersessions; a persisted chain claiming any
       // other transition is malformed, not merely unusual.
       const decisions = [...(history ?? []), ...(disposition ? [disposition] : [])];
+      for (const decision of decisions) {
+        // No decision can be recorded before its finding's round exists or after more
+        // rounds than the ledger holds — a forged stamp would let a pre-decision
+        // result close the obligation (openObligations trusts this value).
+        if (
+          decision.decidedAfterRound !== undefined &&
+          (decision.decidedAfterRound < roundIndex + 1 || decision.decidedAfterRound > totalRounds)
+        ) {
+          throw new Error(
+            `${findingPath} has a decision whose decidedAfterRound (${decision.decidedAfterRound}) lies outside the finding's possible decision window`,
+          );
+        }
+      }
       for (let decisionIndex = 0; decisionIndex + 1 < decisions.length; decisionIndex += 1) {
         const predecessor = decisions[decisionIndex];
         const successor = decisions[decisionIndex + 1];
+        if (
+          predecessor.decidedAfterRound !== undefined &&
+          successor.decidedAfterRound !== undefined &&
+          successor.decidedAfterRound < predecessor.decidedAfterRound
+        ) {
+          throw new Error(`${findingPath} has a supersession chain whose decidedAfterRound stamps run backwards`);
+        }
         const permitted =
           predecessor.kind === "deferred-to-human" ||
           (predecessor.kind === "accepted-as-limitation" &&
@@ -474,12 +495,13 @@ export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): Revi
 //      ran (parseReviewPass rejects unsolicited ids), so every persisted result
 //      post-dates the decision that opened its obligation.
 //   5. Persisted decision state is parser-enforced, not only recorder-enforced: doc
-//      presence and shape, and P0/P1 owner attribution, hold for live decisions and
-//      history entries alike.
+//      presence and shape, P0/P1 owner attribution, the permitted supersession chain,
+//      and each decision's round stamp (bounded by the finding's round and the round
+//      count, monotonic along the chain) hold for live decisions and history alike.
 //   6. Base supersession resets round mechanics only; decisions, obligations, and
 //      tripwire state carry forward by construction.
-//   7. Each persisted result carries its obligation type, so the audit history keeps
-//      the typed distinction even after a supersession changes the live decision.
+//   7. Each persisted result carries its obligation type; a result whose status
+//      contradicts its stamped type is malformation and never closes anything.
 const obligationBearingKinds: readonly DispositionKind[] = ["accepted", "accepted-as-limitation"];
 
 /** The obligation id a finding's CURRENT decision owns. The first obligation-bearing
@@ -506,7 +528,12 @@ export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
   const terminalResults = ledger.rounds.flatMap((round) =>
     round.audit?.obligations
       .filter((result) => result.status === "fixed" || result.status === "documented")
-      .map((result) => ({round: round.number, key: `${result.status}:${result.findingId}`})) ?? [],
+      // A result's stamped type must agree with what its status closes; the status
+      // itself types a legacy unstamped result.
+      .map((result) => ({
+        round: round.number,
+        key: `${result.status}:${result.findingId}:${result.type ?? (result.status === "documented" ? "documentation" : "remediation")}`,
+      })) ?? [],
   );
   return ledger.rounds.flatMap((round) =>
     round.findings.flatMap((finding): ReviewObligation[] => {
@@ -521,7 +548,7 @@ export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
       const decidedAfterRound = decision.decidedAfterRound ?? round.number;
       const closed = terminalResults.some(
         (result) =>
-          result.key === `${terminalStatusByType[type]}:${id}` && result.round > decidedAfterRound,
+          result.key === `${terminalStatusByType[type]}:${id}:${type}` && result.round > decidedAfterRound,
       );
       if (closed) return [];
       return [{
@@ -825,7 +852,11 @@ function isReviewObligationResult(input: unknown): input is ReviewObligationResu
       input.status === "incomplete" ||
       input.status === "regressed") &&
     typeof input.evidence === "string" &&
-    (input.type === undefined || input.type === "remediation" || input.type === "documentation")
+    (input.type === undefined || input.type === "remediation" || input.type === "documentation") &&
+    // A terminal status belongs to exactly one obligation type; a contradictory stamp
+    // is malformation, not data.
+    !(input.status === "fixed" && input.type === "documentation") &&
+    !(input.status === "documented" && input.type === "remediation")
   );
 }
 

@@ -885,6 +885,42 @@ describe("cli-review start", () => {
     ]);
   });
 
+  test("refuses a base refresh at an unchanged HEAD while a reversal's obligation is open", () => {
+    // The same-HEAD remediation guard must hold on every path, not only same-base:
+    // shrinking the base to a mid-series ancestor changes the patch series without
+    // moving HEAD, and used to reach the reviewer with no fix committed. (The
+    // patch-equivalent variant of this cannot be constructed - an unchanged HEAD with
+    // a changed base always changes the series except for empty-patch edge commits -
+    // so the guard is placed path-independently instead of per-path.)
+    const {repository, baseSha} = createReviewRepository();
+    const item = "refresh-unfixed-reversal";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, baseSha, {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "The lock is an optimisation; loss is tolerated.\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Document the limitation"]);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted", "owner ruled: fix it", ["--owner"]).status,
+    ).toBe(0);
+
+    const midSeriesBase = git(repository, ["rev-parse", "HEAD~1"]);
+    const refreshed = runStart(repository, dataRepo, item, midSeriesBase);
+    expect(refreshed.status).toBe(1);
+    expect(refreshed.stderr).toContain("implement and commit");
+  });
+
   test("keeps a documentation obligation live through a patch-equivalent rebase", () => {
     const {repository, baseSha} = createReviewRepository();
     const item = "base-delta-documentation";

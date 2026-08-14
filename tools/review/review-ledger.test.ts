@@ -556,6 +556,60 @@ describe("openObligations — result ordering", () => {
   });
 });
 
+describe("parseReviewLedger — decision ordering and result types", () => {
+  test("rejects a decision stamped before its finding's round or beyond the round count", () => {
+    const precedesFinding = JSON.parse(
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+    );
+    precedesFinding.rounds[0].findings[0].disposition.decidedAfterRound = 0;
+    expect(() => parseReviewLedger(precedesFinding)).toThrow(/decidedAfterRound/);
+
+    const beyondRounds = JSON.parse(
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+    );
+    beyondRounds.rounds[0].findings[0].disposition.decidedAfterRound = 5;
+    expect(() => parseReviewLedger(beyondRounds)).toThrow(/decidedAfterRound/);
+  });
+
+  test("rejects a supersession chain whose round stamps run backwards", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "clean", findings: []},
+    });
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    const forged = JSON.parse(JSON.stringify(ledger));
+    forged.rounds[0].findings[0].history[0].decidedAfterRound = 2;
+    forged.rounds[0].findings[0].disposition.decidedAfterRound = 1;
+    expect(() => parseReviewLedger(forged)).toThrow(/decidedAfterRound/);
+  });
+
+  test("fails closed on a result whose status contradicts its stamped type", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "clean", findings: []},
+      audit: auditWith([
+        {findingId: "R1-F1", status: "documented", evidence: "forged", type: "remediation"},
+      ]),
+    });
+    // The malformed result must not close the documentation obligation, however the
+    // ledger arrived: directly constructed or re-read from disk.
+    expect(openObligations(ledger)).toHaveLength(1);
+    expect(openObligations(parseReviewLedger(JSON.parse(JSON.stringify(ledger))))).toHaveLength(1);
+  });
+});
+
 describe("parseReviewLedger — supersession sequence", () => {
   test("rejects a persisted reversal that lacks owner attribution", () => {
     const reversed = JSON.parse(
