@@ -165,7 +165,8 @@ Terminal work-streams.
     expect(result.match(/archive\/orphaned\.md/g)?.length).toBe(1);
   });
 
-  // Review R6-F1. Sitting in archive/ is not being terminal. A file hand-moved there with
+  // Round-6 attempt 1 (invalidated mid-run, so its findings carry no ledger ID). Sitting
+  // in archive/ is not being terminal. A file hand-moved there with
   // a live state is stranded: preflight keeps its board row and asks the owner to move it
   // back, so indexing it here would record the same work-stream as both live and finished
   // in the two derived indexes. Every non-terminal state, not just the active ones.
@@ -177,7 +178,7 @@ Terminal work-streams.
     });
   }
 
-  // Review R6-F2. Reopening an item by editing its state in place, without moving the
+  // Round-6 attempt 2. Reopening an item by editing its state in place, without moving the
   // file, leaves the row an earlier run wrote. Filtering only the append set would keep
   // publishing "finished" as that live item's status for good.
   test("removes the row of an already-indexed file whose state left archive/", () => {

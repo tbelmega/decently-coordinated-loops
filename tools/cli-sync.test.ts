@@ -115,7 +115,7 @@ describe("cli-sync rows whose item has moved to a terminal folder", () => {
   });
 
   test("clears the ARCHIVE.md row of a file reopened in place, and asks for it", () => {
-    // Review R6-F2, the other half of the same invariant: an item accepted, archived and
+    // Round-6 attempt 2, the other half of the same invariant: an item accepted, archived and
     // indexed, then reopened by editing its state without moving the file. The append
     // filter alone leaves the earlier row standing, so ARCHIVE.md would keep reporting a
     // live work-stream as finished while OUTBOX.md asks the owner to revive it.
@@ -185,7 +185,7 @@ describe("cli-sync rows whose item has moved to a terminal folder", () => {
       expect(outbox).toContain("Do not create a second item file");
       expect(outbox).not.toContain("**The ask:** create an item file");
 
-      // Review R6-F1. Reconciling ARCHIVE.md on every run reaches these files too, and
+      // Round-6 attempt 1. Reconciling ARCHIVE.md on every run reaches these files too, and
       // indexing one would file live work as finished: the same item would be a retained
       // work-stream on BOARD.md and a completed row in ARCHIVE.md at once.
       expect(readFileSync(join(root, "ARCHIVE.md"), "utf8")).not.toContain("archive/moved-on.md");

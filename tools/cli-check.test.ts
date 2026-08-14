@@ -64,7 +64,7 @@ describe("cli-check on a board row whose item is in the wrong folder", () => {
     });
   }
 
-  // Review R6-F1, the cost of resolving identity by slug: this row used to be an orphan
+  // Round-6 attempt 2, the cost of resolving identity by slug: this row used to be an orphan
   // (no exact path match) and failed the gate. Matching by slug is right, but the link is
   // still broken - a dispatcher following it finds nothing - so the row has to fail as a
   // field mismatch instead, or correct classification would have bought silence.
