@@ -538,6 +538,16 @@ async function startReview(options: StartOptions): Promise<void> {
         assertTrackedRegularFile(repository, headSha, notePath, "step-back note");
         const [older, newer] = tripwire.rounds;
         const currentBlob = git(["-C", repository, "rev-parse", `${headSha}:${notePath}`]);
+        // Only a path missing from a RESOLVABLE triggering tree counts as fresh. An
+        // unavailable tree (e.g. the pre-rebase commit was pruned) must fail closed,
+        // or any stale note would pass the freshness check unverified.
+        try {
+          git(["-C", repository, "rev-parse", "--verify", `${newer.headSha}^{tree}`]);
+        } catch {
+          throw new Error(
+            `round ${newer.number}'s reviewed tree (${newer.headSha}) is not available in this repository — step-back freshness cannot be verified`,
+          );
+        }
         let triggerBlob: string | undefined;
         try {
           triggerBlob = git(["-C", repository, "rev-parse", `${newer.headSha}:${notePath}`]);

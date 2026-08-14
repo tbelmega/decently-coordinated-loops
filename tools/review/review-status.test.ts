@@ -5,6 +5,7 @@ import {
   recordDisposition,
   recordReviewFailure,
   type Review,
+  type ReviewRoundAudit,
 } from "./review-ledger.ts";
 import { evaluateReviewStatus, renderReviewStatus } from "./review-status.ts";
 
@@ -117,6 +118,62 @@ describe("evaluateReviewStatus", () => {
       headSha: "current",
       ledgerPath: ".reviews/feature.md",
       reason: "latest review attempt failed: reviewer timed out",
+    });
+  });
+
+  test("blocks a clean current-HEAD round once an owner reversal reopens an obligation", () => {
+    const documentedAudit: ReviewRoundAudit = {
+      kind: "remediation",
+      manifest: {
+        baseSha: "base",
+        headSha: "current",
+        files: [],
+        metadataFiles: [],
+        metadataPaths: [],
+        remediationFiles: [],
+        baseDeltaFiles: [],
+        instructionFiles: [],
+        contextReferences: [],
+        patchIds: [],
+      },
+      passes: [],
+      obligations: [{findingId: "R1-F1", status: "documented", evidence: "limitation documented"}],
+      metrics: {
+        findingsByPass: {diff: 0, integration: 0, adversarial: 0},
+        findingsByPriority: {P0: 0, P1: 0, P2: 0, P3: 0},
+        findingsByOrigin: {original: 0, remediation: 0, "base-delta": 0, unknown: 0},
+        repeatedFindings: 0,
+        lateHighPriorityFindings: 0,
+        unchangedHeadDrift: false,
+      },
+    };
+    let ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "current",
+        model: "codex-default",
+        reviewedAt: "2026-08-14T12:00:00Z",
+        review: { summary: "one issue", findings: [{ ...finding, priority: "P2" as const }] },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "current",
+      model: "codex-default",
+      reviewedAt: "2026-08-14T12:05:00Z",
+      review: cleanReview,
+      audit: documentedAudit,
+    });
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md").kind).toBe("passed");
+
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md")).toEqual({
+      kind: "blocked",
+      headSha: "current",
+      ledgerPath: ".reviews/feature.md",
+      reason: "review has 1 open obligation; run another round to classify it",
     });
   });
 

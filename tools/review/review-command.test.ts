@@ -1204,6 +1204,9 @@ describe("cli-review start", () => {
     const unchangedHead = runStart(repository, dataRepo, item);
     expect(unchangedHead.status).toBe(1);
     expect(unchangedHead.stderr).toContain("implement and commit");
+    const reopenedStatus = runStatus(repository, item);
+    expect(reopenedStatus.status).toBe(1);
+    expect(reopenedStatus.stdout).toContain("open obligation");
 
     writeFileSync(`${repository}/change.txt`, "review me\ncrash-safe now\n");
     git(repository, ["add", "change.txt"]);
@@ -1285,6 +1288,24 @@ describe("cli-review start", () => {
     const ledger = readLedgerJson(repository, item);
     expect(ledger.rounds).toHaveLength(3);
     expect(ledger.rounds[2].stepBack).toEqual({path: "step-back.md", triggerRounds: [1, 2]});
+  });
+
+  test("fails closed when the triggering round's reviewed tree is unavailable", () => {
+    const {repository, baseSha} = createReviewRepository();
+    const item = "tripwire-pruned-trigger";
+    const dataRepo = createReviewDataRepo(9);
+    seedTripwireLedger(repository, item, baseSha, "0123456789abcdef0123456789abcdef01234567");
+    writeFileSync(
+      `${repository}/step-back.md`,
+      "Invariants: lock identity. Decision: rewrite. Covers R1-F1, R2-F1.\n",
+    );
+    git(repository, ["add", "step-back.md"]);
+    git(repository, ["commit", "-q", "-m", "Fresh step-back note"]);
+
+    const result = runStart(repository, dataRepo, item, "master", {}, ["--step-back", "step-back.md"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("reviewed tree");
+    expect(result.stderr).toContain("not available");
   });
 
   test("refuses --step-back while no tripwire is armed", () => {

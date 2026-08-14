@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { ReviewLedger } from "./review-ledger.ts";
+import { openObligations, type ReviewLedger } from "./review-ledger.ts";
 
 export interface ReviewEvidencePaths {
   jsonPath: string;
@@ -89,6 +89,18 @@ export function evaluateReviewStatus(
       headSha: currentHeadSha,
       ledgerPath,
       reason: `latest review has ${latestRound.findings.length} ${noun}; run another round to obtain a clean review`,
+    };
+  }
+  // A clean round certifies nothing while an obligation is still open: an owner
+  // reversal of a documented limitation reopens a defect without adding a round, so
+  // the pre-reversal clean round must not keep reporting passed.
+  const open = openObligations(ledger);
+  if (open.length > 0) {
+    return {
+      kind: "blocked",
+      headSha: currentHeadSha,
+      ledgerPath,
+      reason: `review has ${open.length} open ${open.length === 1 ? "obligation" : "obligations"}; run another round to classify ${open.length === 1 ? "it" : "them"}`,
     };
   }
   return {
