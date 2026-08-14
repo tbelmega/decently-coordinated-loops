@@ -843,6 +843,133 @@ describe("cli-review start", () => {
     ]);
   });
 
+  test("carries a reversal-created obligation across a changed-patch supersession", () => {
+    const {repository, baseSha} = createReviewRepository();
+    const item = "supersession-reversal";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, baseSha, {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "The lock is an optimisation; loss is tolerated.\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Document the limitation"]);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted", "owner ruled: fix it", ["--owner"]).status,
+    ).toBe(0);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+    writeFileSync(`${repository}/change.txt`, "review me\nfix folded into the changed patch\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Change reviewed patch"]);
+
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.supersessions).toHaveLength(1);
+    expect(ledger.rounds.at(-1).audit.obligations).toEqual([
+      {findingId: "R1-F1#2", status: "fixed", evidence: "verified"},
+    ]);
+  });
+
+  test("keeps a documentation obligation live through a patch-equivalent rebase", () => {
+    const {repository, baseSha} = createReviewRepository();
+    const item = "base-delta-documentation";
+    const dataRepo = createReviewDataRepo(9);
+    // The doc is part of the reviewed series BEFORE the first round, so the later
+    // rebase replays an unchanged patch series.
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "The lock is an optimisation; loss is tolerated.\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Document the limitation"]);
+    expect(
+      runStart(repository, dataRepo, item, baseSha, {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.supersessions ?? []).toHaveLength(0);
+    expect(ledger.rounds.at(-1).audit.kind).toBe("base-delta");
+    expect(ledger.rounds.at(-1).audit.obligations).toEqual([
+      {findingId: "R1-F1", status: "documented", evidence: "verified"},
+    ]);
+  });
+
+  test("keeps the tripwire armed through a patch-equivalent rebase", () => {
+    const {repository, baseSha, headSha} = createReviewRepository();
+    const item = "base-delta-tripwire";
+    const dataRepo = createReviewDataRepo(9);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), {recursive: true});
+    let ledger = createReviewLedger({
+      item,
+      branch: "feature/review-receipt",
+      baseRef: "master",
+      baseSha,
+      patchIds: [patchId(repository, headSha)],
+    });
+    for (const roundNumber of [1, 2]) {
+      ledger = addReviewRound(ledger, {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: `2026-08-14T12:00:0${roundNumber}Z`,
+        review: {
+          summary: "churn",
+          findings: [{
+            priority: "P2",
+            title: `Guard interaction ${roundNumber}`,
+            evidence: "the previous fix created this",
+            impact: "regression",
+            direction: "patch it",
+            confidence: "high",
+            origin: "remediation",
+          }],
+        },
+      });
+      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not reproducible on re-check");
+    }
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+
+    const refused = runStart(repository, dataRepo, item);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("remediation-churn tripwire");
+  });
+
   test("keeps the tripwire armed across a changed-patch supersession", () => {
     const {repository, baseSha, headSha} = createReviewRepository();
     const item = "supersession-tripwire";
@@ -979,6 +1106,31 @@ describe("cli-review start", () => {
     symlinkSync("../real.md", `${repository}/docs/limits.md`);
     git(repository, ["add", "real.md", "docs/limits.md"]);
     git(repository, ["commit", "-q", "-m", "Symlink the doc path"]);
+
+    const result = runStart(repository, dataRepo, item);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tracked regular file");
+  });
+
+  test("rejects a doc path that resolves to a directory at the start gate", () => {
+    const {repository} = createReviewRepository();
+    const item = "directory-doc";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs",
+      ]).status,
+    ).toBe(0);
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "content lives below the recorded path\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Commit a directory at the doc path"]);
 
     const result = runStart(repository, dataRepo, item);
     expect(result.status).toBe(1);
