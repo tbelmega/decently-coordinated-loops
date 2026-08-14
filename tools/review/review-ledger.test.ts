@@ -1,17 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import {
-  acceptedFindingObligations,
   addReviewRound,
   createReviewLedger,
+  liveRounds,
+  openObligations,
   parseReview,
   parseReviewLedger,
   priorDispositionNotes,
   recordDisposition,
+  remediationChurnTripwire,
   renderReviewLedger,
   reviewCanContinue,
+  supersedeLedgerBase,
+  validateEvidencePath,
   type Review,
 } from "./review-ledger.ts";
-import type {ReviewRoundAudit} from "./review-ledger.ts";
+import type {Finding, ReviewLedger, ReviewRoundAudit} from "./review-ledger.ts";
+import type {ReviewObligationResult} from "./review-audit.ts";
 
 const finding = {
   priority: "P1" as const,
@@ -164,7 +169,7 @@ describe("priorDispositionNotes", () => {
   });
 });
 
-describe("acceptedFindingObligations", () => {
+describe("openObligations — accepted findings", () => {
   test("retains accepted finding intent until a later audit verifies it fixed", () => {
     let ledger = addReviewRound(createReviewLedger({branch: "f", baseRef: "master", baseSha: "b"}), {
       headSha: "h1",
@@ -173,8 +178,9 @@ describe("acceptedFindingObligations", () => {
       review,
     });
     ledger = recordDisposition(ledger, "R1-F1", "accepted", "replace the boundary check");
-    expect(acceptedFindingObligations(ledger)).toEqual([{
+    expect(openObligations(ledger)).toEqual([{
       findingId: "R1-F1",
+      type: "remediation",
       title: "off-by-one",
       evidence: "loop uses <=",
       direction: "use <",
@@ -212,7 +218,7 @@ describe("acceptedFindingObligations", () => {
         },
       },
     });
-    expect(acceptedFindingObligations(ledger)).toEqual([]);
+    expect(openObligations(ledger)).toEqual([]);
   });
 });
 
@@ -249,6 +255,393 @@ describe("reviewCanContinue", () => {
   test("allows another round when the latest has an accepted finding to act on", () => {
     const rounds = [{ findings: [{ id: "R1-F1", disposition: "accepted" as const }] }];
     expect(reviewCanContinue(rounds).allowed).toBe(true);
+  });
+});
+
+const p2Finding = { ...finding, priority: "P2" as const };
+
+/** Minimal audit block carrying only what obligation-closure semantics read. */
+function auditWith(obligations: ReviewObligationResult[]): ReviewRoundAudit {
+  return {
+    kind: "remediation",
+    manifest: {
+      baseSha: "b",
+      headSha: "h",
+      files: [],
+      metadataFiles: [],
+      metadataPaths: [],
+      remediationFiles: [],
+      baseDeltaFiles: [],
+      instructionFiles: [],
+      contextReferences: [],
+      patchIds: [],
+    },
+    passes: [],
+    obligations,
+    metrics: {
+      findingsByPass: {diff: 0, integration: 0, adversarial: 0},
+      findingsByPriority: {P0: 0, P1: 0, P2: 0, P3: 0},
+      findingsByOrigin: {original: 0, remediation: 0, "base-delta": 0, unknown: 0},
+      repeatedFindings: 0,
+      lateHighPriorityFindings: 0,
+      unchangedHeadDrift: false,
+    },
+  };
+}
+
+function seededLedger(seedFinding: Finding): ReviewLedger {
+  return addReviewRound(createReviewLedger({ branch: "f", baseRef: "master", baseSha: "b" }), {
+    headSha: "h1",
+    model: "m",
+    reviewedAt: "t1",
+    review: { summary: "one issue", findings: [seedFinding] },
+  });
+}
+
+describe("validateEvidencePath", () => {
+  test("normalizes a repo-relative path and strips a leading ./", () => {
+    expect(validateEvidencePath("docs/limits.md")).toBe("docs/limits.md");
+    expect(validateEvidencePath("./docs/limits.md")).toBe("docs/limits.md");
+  });
+
+  test("rejects absolute, traversal, and empty forms", () => {
+    expect(() => validateEvidencePath("/etc/passwd")).toThrow(/repository-relative/);
+    expect(() => validateEvidencePath("../outside.md")).toThrow(/repository-relative/);
+    expect(() => validateEvidencePath("docs/../../outside.md")).toThrow(/repository-relative/);
+    expect(() => validateEvidencePath("")).toThrow(/repository-relative/);
+  });
+});
+
+describe("recordDisposition — accepted-as-limitation", () => {
+  test("requires a documentation path", () => {
+    expect(() =>
+      recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "cost exceeds bar"),
+    ).toThrow(/doc/);
+  });
+
+  test("records the doc path and rejects a doc path on any other kind", () => {
+    const disposed = recordDisposition(
+      seededLedger(p2Finding),
+      "R1-F1",
+      "accepted-as-limitation",
+      "cost exceeds the documented bar",
+      {doc: "./docs/limits.md"},
+    );
+    expect(disposed.rounds[0].findings[0].disposition).toEqual({
+      kind: "accepted-as-limitation",
+      reason: "cost exceeds the documented bar",
+      doc: "docs/limits.md",
+    });
+    expect(() =>
+      recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix", {doc: "docs/limits.md"}),
+    ).toThrow(/doc/);
+  });
+
+  test("refuses a P0/P1 finding without owner attribution and accepts with it", () => {
+    expect(() =>
+      recordDisposition(seededLedger(finding), "R1-F1", "accepted-as-limitation", "too costly", {
+        doc: "docs/limits.md",
+      }),
+    ).toThrow(/owner/);
+    const disposed = recordDisposition(
+      seededLedger(finding),
+      "R1-F1",
+      "accepted-as-limitation",
+      "owner ruled 2026-08-14: below the assurance bar",
+      {doc: "docs/limits.md", owner: true},
+    );
+    expect(disposed.rounds[0].findings[0].disposition?.owner).toBe(true);
+  });
+
+  test("is superseded only by an owner-attributed accepted decision, preserving both", () => {
+    const limited = recordDisposition(
+      seededLedger(p2Finding),
+      "R1-F1",
+      "accepted-as-limitation",
+      "cost exceeds bar",
+      {doc: "docs/limits.md"},
+    );
+    expect(() => recordDisposition(limited, "R1-F1", "accepted", "changed my mind")).toThrow(/owner/);
+    expect(() => recordDisposition(limited, "R1-F1", "rejected", "owner: not real", {owner: true})).toThrow(
+      /accepted/,
+    );
+    const reversed = recordDisposition(limited, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    expect(reversed.rounds[0].findings[0].disposition).toEqual({
+      kind: "accepted",
+      reason: "owner ruled: fix it",
+      owner: true,
+    });
+    expect(reversed.rounds[0].findings[0].history).toEqual([
+      {kind: "accepted-as-limitation", reason: "cost exceeds bar", doc: "docs/limits.md"},
+    ]);
+  });
+
+  test("still supersedes deferred-to-human while preserving the parked decision", () => {
+    const deferred = recordDisposition(seededLedger(p2Finding), "R1-F1", "deferred-to-human", "owner call");
+    const resolved = recordDisposition(deferred, "R1-F1", "rejected", "owner: not reproducible");
+    expect(resolved.rounds[0].findings[0].history).toEqual([
+      {kind: "deferred-to-human", reason: "owner call"},
+    ]);
+  });
+});
+
+describe("openObligations", () => {
+  test("types remediation and documentation obligations and carries the doc path", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = {
+      ...ledger,
+      rounds: [
+        ...ledger.rounds.map((round) => ({...round})),
+      ],
+    };
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "second", findings: [{...p2Finding, title: "missing doc"}]},
+    });
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "fix the boundary");
+    ledger = recordDisposition(ledger, "R2-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    expect(openObligations(ledger)).toEqual([
+      {
+        findingId: "R1-F1",
+        type: "remediation",
+        title: "off-by-one",
+        evidence: "loop uses <=",
+        direction: "use <",
+        dispositionReason: "fix the boundary",
+      },
+      {
+        findingId: "R2-F1",
+        type: "documentation",
+        title: "missing doc",
+        evidence: "loop uses <=",
+        direction: "use <",
+        dispositionReason: "below the bar",
+        doc: "docs/limits.md",
+      },
+    ]);
+  });
+
+  test("closes a remediation obligation on fixed and a documentation obligation on documented", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "clean", findings: []},
+      audit: auditWith([{findingId: "R1-F1", status: "documented", evidence: "limitation documented"}]),
+    });
+    expect(openObligations(ledger)).toEqual([]);
+  });
+
+  test("does not let a fixed result close a documentation obligation", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "clean", findings: []},
+      audit: auditWith([{findingId: "R1-F1", status: "fixed", evidence: "wrong terminal"}]),
+    });
+    expect(openObligations(ledger)).toHaveLength(1);
+  });
+
+  test("the owner reversal creates a fresh qualified obligation no retired result can satisfy", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "clean", findings: []},
+      audit: auditWith([
+        {findingId: "R1-F1", status: "documented", evidence: "limitation documented"},
+        {findingId: "R1-F1", status: "fixed", evidence: "stale result under the retired decision"},
+      ]),
+    });
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    expect(openObligations(ledger)).toEqual([
+      {
+        findingId: "R1-F1#2",
+        type: "remediation",
+        title: "off-by-one",
+        evidence: "loop uses <=",
+        direction: "use <",
+        dispositionReason: "owner ruled: fix it",
+      },
+    ]);
+    const confirmed = addReviewRound(ledger, {
+      headSha: "h3",
+      model: "m",
+      reviewedAt: "t3",
+      review: {summary: "clean", findings: []},
+      audit: auditWith([{findingId: "R1-F1#2", status: "fixed", evidence: "boundary rewritten"}]),
+    });
+    expect(openObligations(confirmed)).toEqual([]);
+  });
+});
+
+describe("remediationChurnTripwire", () => {
+  function roundOf(origins: ("original" | "remediation")[], number: number): Review {
+    return {
+      summary: `round ${number}`,
+      findings: origins.map((origin, index) => ({
+        ...p2Finding,
+        title: `finding ${number}-${index}`,
+        origin,
+      })),
+    };
+  }
+
+  function ledgerOf(...rounds: Review[]): ReviewLedger {
+    let ledger = createReviewLedger({branch: "f", baseRef: "master", baseSha: "b"});
+    for (const [index, review] of rounds.entries()) {
+      ledger = addReviewRound(ledger, {headSha: `h${index + 1}`, model: "m", reviewedAt: `t${index + 1}`, review});
+    }
+    return ledger;
+  }
+
+  test("arms when the last two completed rounds are both strictly majority remediation", () => {
+    const state = remediationChurnTripwire(
+      ledgerOf(
+        roundOf(["original"], 1),
+        roundOf(["remediation", "remediation", "original"], 2),
+        roundOf(["remediation"], 3),
+      ),
+    );
+    expect(state.armed).toBe(true);
+    if (state.armed) {
+      expect(state.rounds.map((round) => round.number)).toEqual([2, 3]);
+      expect(state.rounds.map((round) => round.remediationCount)).toEqual([2, 1]);
+      expect(state.rounds.map((round) => round.findingCount)).toEqual([3, 1]);
+    }
+  });
+
+  test("stays disarmed when only one of the last two rounds is dominated", () => {
+    expect(
+      remediationChurnTripwire(
+        ledgerOf(roundOf(["remediation"], 1), roundOf(["original", "remediation"], 2)),
+      ).armed,
+    ).toBe(false);
+  });
+
+  test("stays disarmed when the dominated rounds are not the two most recent", () => {
+    expect(
+      remediationChurnTripwire(
+        ledgerOf(roundOf(["remediation"], 1), roundOf(["remediation"], 2), roundOf(["original"], 3)),
+      ).armed,
+    ).toBe(false);
+  });
+
+  test("treats exactly half remediation as not dominated and needs two completed rounds", () => {
+    expect(
+      remediationChurnTripwire(
+        ledgerOf(roundOf(["remediation", "original"], 1), roundOf(["remediation"], 2)),
+      ).armed,
+    ).toBe(false);
+    expect(remediationChurnTripwire(ledgerOf(roundOf(["remediation"], 1))).armed).toBe(false);
+  });
+
+  test("an empty round and origin-less findings never dominate", () => {
+    let ledger = ledgerOf(roundOf(["remediation"], 1));
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "no origin", findings: [p2Finding]},
+    });
+    expect(remediationChurnTripwire(ledger).armed).toBe(false);
+  });
+});
+
+describe("supersedeLedgerBase and liveRounds", () => {
+  test("keeps every round and decision while resetting the live window", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    const superseded = supersedeLedgerBase(ledger, {
+      baseRef: "master",
+      baseSha: "b2",
+      patchIds: ["p2"],
+      archivedAt: "t-archive",
+    });
+    expect(superseded.rounds).toHaveLength(1);
+    expect(superseded.baseSha).toBe("b2");
+    expect(superseded.patchIds).toEqual(["p2"]);
+    expect(superseded.supersessions).toEqual([
+      {afterRound: 1, baseRef: "master", baseSha: "b", archivedAt: "t-archive"},
+    ]);
+    expect(liveRounds(superseded)).toEqual([]);
+    expect(openObligations(superseded)).toHaveLength(1);
+
+    const resumed = addReviewRound(superseded, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "post-supersession", findings: []},
+    });
+    expect(resumed.rounds).toHaveLength(2);
+    expect(resumed.rounds[1].number).toBe(2);
+    expect(liveRounds(resumed)).toHaveLength(1);
+  });
+
+  test("round-trips supersessions, decision history, step-back, doc, and owner through parse", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    ledger = supersedeLedgerBase(ledger, {
+      baseRef: "master",
+      baseSha: "b2",
+      patchIds: ["p2"],
+      archivedAt: "t-archive",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "with step-back", findings: []},
+      stepBack: {path: "docs/step-back.md", triggerRounds: [1, 2]},
+    });
+    const parsed = parseReviewLedger(JSON.parse(JSON.stringify(ledger)));
+    expect(parsed).toEqual(ledger);
+    expect(parsed.rounds[1].stepBack).toEqual({path: "docs/step-back.md", triggerRounds: [1, 2]});
+    expect(parsed.rounds[0].findings[0].history).toHaveLength(1);
+  });
+
+  test("renders limitation, owner attribution, step-back, and supersession context", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = supersedeLedgerBase(ledger, {
+      baseRef: "master",
+      baseSha: "b2",
+      archivedAt: "t-archive",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "post", findings: []},
+      stepBack: {path: "docs/step-back.md", triggerRounds: [1, 2]},
+    });
+    const md = renderReviewLedger(ledger);
+    expect(md).toContain("**accepted-as-limitation**");
+    expect(md).toContain("documented at: docs/limits.md");
+    expect(md).toContain("Step-back note: docs/step-back.md");
+    expect(md).toContain("Base superseded after round 1");
   });
 });
 

@@ -17,9 +17,9 @@ import { resolveDataRepo } from "./data-repo.ts";
 import { parseItemFileText } from "../parse.ts";
 import { expandHome } from "../registration.ts";
 import {
-  acceptedFindingObligations,
   addReviewRound,
   createReviewLedger,
+  openObligations,
   parseReviewLedger,
   priorDispositionNotes,
   recordDisposition,
@@ -475,7 +475,7 @@ async function startReview(options: StartOptions): Promise<void> {
     }
 
     try {
-      const obligations = acceptedFindingObligations(ledger);
+      const obligations = openObligations(ledger);
       if (auditKind === "full" && obligations.length > 0) auditKind = "remediation";
       const previousHeadSha = ledger.rounds.at(-1)?.headSha;
       const remediationRange = obligations.length > 0 && previousHeadSha && previousHeadSha !== headSha
@@ -496,6 +496,13 @@ async function startReview(options: StartOptions): Promise<void> {
         : options.auditPasses;
       if (passes.length === 0) throw new Error("base-delta audit requires integration or adversarial pass");
       const obligationPass = passes.includes("diff") ? "diff" : passes[0];
+      const docArtifacts = obligations
+        .filter((obligation) => obligation.type === "documentation" && obligation.doc)
+        .map((obligation) => ({
+          findingId: obligation.findingId,
+          path: obligation.doc as string,
+          content: git(["-C", repository, "show", `${headSha}:${obligation.doc}`]),
+        }));
       const passResults: ReviewPassResult[] = [];
       for (const pass of passes) {
         const prompt = reviewPrompt({
@@ -505,6 +512,7 @@ async function startReview(options: StartOptions): Promise<void> {
           priorNotes: priorDispositionNotes(ledger),
           obligations,
           classifyObligations: pass === obligationPass,
+          ...(pass === obligationPass && docArtifacts.length > 0 ? {docArtifacts} : {}),
           ...(remediationRange
             ? {remediationBaseSha: remediationRange.baseSha}
             : {}),
@@ -523,7 +531,9 @@ async function startReview(options: StartOptions): Promise<void> {
           raw,
           pass,
           manifest,
-          pass === obligationPass ? obligations.map((obligation) => obligation.findingId) : [],
+          pass === obligationPass
+            ? obligations.map((obligation) => ({findingId: obligation.findingId, type: obligation.type}))
+            : [],
         ));
       }
       const combined = combineReviewPasses(
@@ -531,10 +541,13 @@ async function startReview(options: StartOptions): Promise<void> {
         priorFindingIdentities(ledger),
         ledger.rounds.length + 1,
       );
-      for (const obligation of combined.obligations.filter((result) => result.status !== "fixed")) {
-        if (!combined.findings.some((finding) => finding.obligationId === obligation.findingId)) {
+      for (const result of combined.obligations) {
+        const obligation = obligations.find((open) => open.findingId === result.findingId);
+        const terminal = obligation?.type === "documentation" ? "documented" : "fixed";
+        if (result.status === terminal) continue;
+        if (!combined.findings.some((finding) => finding.obligationId === result.findingId)) {
           throw new Error(
-            `incomplete or regressed remediation obligation ${obligation.findingId} must remain an actionable finding`,
+            `incomplete or regressed obligation ${result.findingId} must remain an actionable finding`,
           );
         }
       }

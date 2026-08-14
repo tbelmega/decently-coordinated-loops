@@ -1,9 +1,17 @@
 import type {ReviewAuditPass} from "../config.ts";
-import type {AcceptedFindingObligation} from "./review-ledger.ts";
+import type {ReviewObligation} from "./review-ledger.ts";
 import type {ReviewManifest} from "./review-manifest.ts";
 
 export interface ReviewContextDocument {
   label: string;
+  path: string;
+  content: string;
+}
+
+/** The persisted doc file a documentation obligation names, read at the HEAD under
+ * review — the exact artifact the confirmation pass must verify. */
+export interface ReviewDocArtifact {
+  findingId: string;
   path: string;
   content: string;
 }
@@ -13,8 +21,9 @@ export interface ReviewPromptInput {
   manifest: ReviewManifest;
   contextDocuments: ReviewContextDocument[];
   priorNotes: string[];
-  obligations: AcceptedFindingObligation[];
+  obligations: ReviewObligation[];
   classifyObligations: boolean;
+  docArtifacts?: ReviewDocArtifact[];
   remediationBaseSha?: string;
   baseDeltaRange?: {baseSha: string; headSha: string};
 }
@@ -50,11 +59,19 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     "coverage.instructionFiles must repeat every path in the manifest's instructionFiles, including files you judged irrelevant to this change. It records that you considered the repository's instructions, so any deviation from that exact set invalidates the round.",
     "Report every actionable correctness, security, data-loss, concurrency, compatibility, accessibility, or material maintainability defect; omit style preferences.",
     "Classify each finding origin as original, remediation, base-delta, or unknown.",
-    ...(input.classifyObligations && input.obligations.length > 0
+    ...(input.classifyObligations && input.obligations.some((obligation) => obligation.type === "remediation")
       ? [
-          "Accepted findings are remediation obligations. This pass must classify every obligation as fixed, incomplete, or regressed with concrete evidence; each incomplete or regressed obligation must remain an actionable finding whose obligationId names it.",
+          "Accepted findings are remediation obligations. This pass must classify every remediation obligation as fixed, incomplete, or regressed with concrete evidence; each incomplete or regressed obligation must remain an actionable finding whose obligationId names it.",
         ]
       : []),
+    ...(input.classifyObligations && input.obligations.some((obligation) => obligation.type === "documentation")
+      ? [
+          "For documentation obligations correctness is conceded — the finding is factually correct and the fix was declined against the component's documented assurance bar, so do not re-prove the defect. Verify instead that the DOCUMENTATION_ARTIFACT content honestly covers the finding's limitation, and classify each documentation obligation as documented, incomplete, or regressed; each incomplete or regressed one must remain an actionable finding whose obligationId names it. Challenge the disposition itself only if the finding's impact exceeds what the cited contract admits.",
+        ]
+      : []),
+    ...(input.docArtifacts ?? []).map(
+      (artifact) => `DOCUMENTATION_ARTIFACT ${artifact.findingId} (${artifact.path}):\n${artifact.content}`,
+    ),
     ...(metadataPaths.length > 0
       ? [`These paths are landing metadata excluded from terminal code coverage: ${metadataPaths.join(", ")}. Inspect them only for contradictions that affect the reviewed behavior.`]
       : []),

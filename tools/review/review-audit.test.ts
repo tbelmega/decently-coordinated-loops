@@ -198,11 +198,37 @@ describe("parseReviewPass", () => {
     );
   });
 
-  test("requires the diff pass to classify every accepted-finding obligation", () => {
+  test("requires the diff pass to classify every open obligation", () => {
     const input = passResult("diff") as Record<string, unknown>;
-    expect(() => parseReviewPass(input, "diff", manifest, ["R1-F1"])).toThrow(/R1-F1/);
+    expect(() => parseReviewPass(input, "diff", manifest, [{findingId: "R1-F1", type: "remediation"}])).toThrow(
+      /R1-F1/,
+    );
     input.obligations = [{findingId: "R1-F1", status: "fixed", evidence: "guard added"}];
-    expect(parseReviewPass(input, "diff", manifest, ["R1-F1"]).obligations).toHaveLength(1);
+    expect(
+      parseReviewPass(input, "diff", manifest, [{findingId: "R1-F1", type: "remediation"}]).obligations,
+    ).toHaveLength(1);
+  });
+
+  test("accepts the documented terminal for a documentation obligation", () => {
+    const input = passResult("diff") as Record<string, unknown>;
+    input.obligations = [{findingId: "R1-F2", status: "documented", evidence: "doc covers the limitation"}];
+    expect(
+      parseReviewPass(input, "diff", manifest, [{findingId: "R1-F2", type: "documentation"}]).obligations,
+    ).toEqual([{findingId: "R1-F2", status: "documented", evidence: "doc covers the limitation"}]);
+  });
+
+  test("rejects a terminal status recorded against the wrong obligation type", () => {
+    const documentedRemediation = passResult("diff") as Record<string, unknown>;
+    documentedRemediation.obligations = [{findingId: "R1-F1", status: "documented", evidence: "wrong"}];
+    expect(() =>
+      parseReviewPass(documentedRemediation, "diff", manifest, [{findingId: "R1-F1", type: "remediation"}]),
+    ).toThrow(/R1-F1.*remediation.*documented/);
+
+    const fixedDocumentation = passResult("diff") as Record<string, unknown>;
+    fixedDocumentation.obligations = [{findingId: "R1-F2", status: "fixed", evidence: "wrong"}];
+    expect(() =>
+      parseReviewPass(fixedDocumentation, "diff", manifest, [{findingId: "R1-F2", type: "documentation"}]),
+    ).toThrow(/R1-F2.*documentation.*fixed/);
   });
 });
 

@@ -1,5 +1,5 @@
 import type {ReviewAuditPass} from "../config.ts";
-import {parseReview, type Finding, type Priority} from "./review-ledger.ts";
+import {parseReview, type Finding, type Priority, type ReviewObligationType} from "./review-ledger.ts";
 import {matchesMetadataPath, type ReviewFileCoverage, type ReviewManifest} from "./review-manifest.ts";
 
 export const findingOrigins = ["original", "remediation", "base-delta", "unknown"] as const;
@@ -13,7 +13,7 @@ export interface ReviewCoverage {
 
 export interface ReviewObligationResult {
   findingId: string;
-  status: "fixed" | "incomplete" | "regressed";
+  status: "fixed" | "documented" | "incomplete" | "regressed";
   evidence: string;
 }
 
@@ -79,11 +79,24 @@ function parseStringArray(input: unknown, path: string): string[] {
   return input;
 }
 
+/** What the reviewer must classify this pass, typed so the terminal result can be
+ * validated against the decision that created the obligation: `fixed` is terminal only
+ * for remediation obligations, `documented` only for documentation obligations. */
+export interface RequiredReviewObligation {
+  findingId: string;
+  type: ReviewObligationType;
+}
+
+const validStatusesByType: Record<ReviewObligationType, readonly ReviewObligationResult["status"][]> = {
+  remediation: ["fixed", "incomplete", "regressed"],
+  documentation: ["documented", "incomplete", "regressed"],
+};
+
 function parseObligation(input: unknown, index: number): ReviewObligationResult {
   const path = `obligations[${index}]`;
   if (!isRecord(input)) throw new Error(`${path} must be an object`);
   const status = input.status;
-  if (status !== "fixed" && status !== "incomplete" && status !== "regressed") {
+  if (status !== "fixed" && status !== "documented" && status !== "incomplete" && status !== "regressed") {
     throw new Error(`${path}.status is invalid`);
   }
   return {
@@ -108,7 +121,7 @@ export function parseReviewPass(
   input: unknown,
   expectedPass: ReviewAuditPass,
   manifest: ReviewManifest,
-  requiredObligations: string[],
+  requiredObligations: RequiredReviewObligation[],
 ): ReviewPassResult {
   if (!isRecord(input)) throw new Error("review pass result must be an object");
   if (input.pass !== expectedPass) throw new Error(`review pass must be ${expectedPass}`);
@@ -188,9 +201,18 @@ export function parseReviewPass(
   }
   if (!Array.isArray(input.obligations)) throw new Error("obligations must be an array");
   const obligations = input.obligations.map(parseObligation);
-  for (const findingId of requiredObligations) {
-    if (!obligations.some((obligation) => obligation.findingId === findingId)) {
-      throw new Error(`accepted-finding obligation ${findingId} is missing`);
+  const requiredById = new Map(requiredObligations.map((required) => [required.findingId, required]));
+  for (const required of requiredObligations) {
+    if (!obligations.some((obligation) => obligation.findingId === required.findingId)) {
+      throw new Error(`open obligation ${required.findingId} is missing a classification`);
+    }
+  }
+  for (const obligation of obligations) {
+    const required = requiredById.get(obligation.findingId);
+    if (required && !validStatusesByType[required.type].includes(obligation.status)) {
+      throw new Error(
+        `obligation ${obligation.findingId} is a ${required.type} obligation and cannot be classified ${obligation.status}`,
+      );
     }
   }
   if (!Array.isArray(input.findings)) throw new Error("findings must be an array");

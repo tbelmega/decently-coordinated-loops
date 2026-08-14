@@ -23,6 +23,7 @@ function prompt(pass: "diff" | "integration" | "adversarial"): string {
     priorNotes: ["R1-F2 rejected: pre-existing"],
     obligations: [{
       findingId: "R1-F1",
+      type: "remediation",
       title: "Race",
       evidence: "two writers",
       direction: "serialize",
@@ -59,5 +60,30 @@ describe("reviewPrompt", () => {
   test("marks landing metadata as excluded from terminal code coverage", () => {
     expect(prompt("integration")).toContain("docs/release-state.md");
     expect(prompt("integration")).toContain("landing metadata");
+  });
+
+  test("hands a documentation obligation its artifact and concedes the finding's correctness", () => {
+    const value = reviewPrompt({
+      pass: "diff",
+      manifest,
+      contextDocuments: [],
+      priorNotes: [],
+      obligations: [{
+        findingId: "R2-F1",
+        type: "documentation",
+        title: "Lock loss on crash",
+        evidence: "lock file survives",
+        direction: "document or fix",
+        dispositionReason: "below the component's assurance bar",
+        doc: "docs/limits.md",
+      }],
+      classifyObligations: true,
+      docArtifacts: [{findingId: "R2-F1", path: "docs/limits.md", content: "The lock is an optimisation only."}],
+    });
+    expect(value).toContain("DOCUMENTATION_ARTIFACT R2-F1 (docs/limits.md)");
+    expect(value).toContain("The lock is an optimisation only.");
+    expect(value).toContain("correctness is conceded");
+    expect(value).toContain("documented, incomplete, or regressed");
+    expect(value).toContain("do not re-prove the defect");
   });
 });

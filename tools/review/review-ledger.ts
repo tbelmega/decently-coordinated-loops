@@ -14,7 +14,13 @@ import type {ReviewManifest} from "./review-manifest.ts";
 
 export const priorities = ["P0", "P1", "P2", "P3"] as const;
 export const confidenceLevels = ["high", "medium", "low"] as const;
-export const dispositionKinds = ["accepted", "rejected", "already-addressed", "deferred-to-human"] as const;
+export const dispositionKinds = [
+  "accepted",
+  "rejected",
+  "already-addressed",
+  "deferred-to-human",
+  "accepted-as-limitation",
+] as const;
 
 export type Priority = (typeof priorities)[number];
 export type Confidence = (typeof confidenceLevels)[number];
@@ -55,11 +61,27 @@ export interface RoundState {
 export interface ReviewDisposition {
   kind: DispositionKind;
   reason: string;
+  /** Documentation evidence path (accepted-as-limitation only): repository-relative,
+   * recorded normalized; resolution binds at each consuming gate, not at recording. */
+  doc?: string;
+  /** Owner attribution — required for accepted-as-limitation on P0/P1 findings and for
+   * the accepted disposition that reverses a limitation. */
+  owner?: boolean;
 }
 
 export interface LedgerFinding extends Finding {
   id: string;
   disposition?: ReviewDisposition;
+  /** Superseded decisions, chronological. Both sides of a supersession stay auditable;
+   * obligations belong to the decision that created them, so this history is what makes
+   * a reversal-created obligation distinguishable from the retired one. */
+  history?: ReviewDisposition[];
+}
+
+export interface ReviewStepBack {
+  path: string;
+  /** The remediation-dominated round pair that armed the tripwire this note answers. */
+  triggerRounds: [number, number];
 }
 
 export interface ReviewRound {
@@ -70,6 +92,7 @@ export interface ReviewRound {
   summary: string;
   findings: LedgerFinding[];
   audit?: ReviewRoundAudit;
+  stepBack?: ReviewStepBack;
 }
 
 export interface ReviewRoundAudit {
@@ -78,6 +101,15 @@ export interface ReviewRoundAudit {
   passes: {pass: ReviewAuditPass; summary: string; coverage: ReviewCoverage}[];
   obligations: ReviewObligationResult[];
   metrics: ReviewMetrics;
+}
+
+export interface ReviewSupersession {
+  /** rounds[0..afterRound-1] reviewed the superseded base recorded here. */
+  afterRound: number;
+  baseRef: string;
+  baseSha: string;
+  patchIds?: string[];
+  archivedAt: string;
 }
 
 export interface ReviewLedger {
@@ -89,6 +121,7 @@ export interface ReviewLedger {
   patchIds?: string[];
   rounds: ReviewRound[];
   failures?: ReviewFailure[];
+  supersessions?: ReviewSupersession[];
 }
 
 export interface ReviewFailure {
@@ -112,14 +145,25 @@ export interface AddRoundInput {
   reviewedAt: string;
   review: Review;
   audit?: ReviewRoundAudit;
+  stepBack?: ReviewStepBack;
 }
 
-export interface AcceptedFindingObligation {
+export type ReviewObligationType = "remediation" | "documentation";
+
+export interface ReviewObligation {
+  /** Obligation id the reviewer classifies against: the finding id, qualified with
+   * `#<decision>` when a superseding decision created it. An obligation belongs to the
+   * decision, so a result recorded against a retired decision's id can never satisfy a
+   * live one. */
   findingId: string;
+  type: ReviewObligationType;
   title: string;
   evidence: string;
   direction: string;
   dispositionReason: string;
+  /** Documentation obligations carry the recorded doc path, consumed by the start gate
+   * and handed to the confirmation pass as the artifact to verify. */
+  doc?: string;
 }
 
 export function isDispositionKind(value: unknown): value is DispositionKind {
@@ -138,12 +182,54 @@ export function createReviewLedger(input: CreateLedgerInput): ReviewLedger {
   return { version: 1, ...input, rounds: [] };
 }
 
+/** Evidence paths (--doc, --step-back) are recorded normalized and repository-relative;
+ * absolute and traversal forms are rejected at recording time, and resolution to a
+ * tracked regular file binds at each consuming gate (enforcement contract rule 1). */
+export function validateEvidencePath(path: string): string {
+  const normalized = path.startsWith("./") ? path.slice(2) : path;
+  const segments = normalized.split("/");
+  if (
+    normalized.length === 0 ||
+    path.startsWith("/") ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(`evidence path must be repository-relative without traversal: ${JSON.stringify(path)}`);
+  }
+  return normalized;
+}
+
 function parseDisposition(input: unknown, path: string): ReviewDisposition | undefined {
   if (input === undefined) return undefined;
   if (!isRecord(input)) throw new Error(`${path} must be an object`);
   const kind = input.kind;
   if (!isDispositionKind(kind)) throw new Error(`${path}.kind is invalid`);
-  return { kind, reason: requiredString(input, "reason", path) };
+  if (input.owner !== undefined && typeof input.owner !== "boolean") {
+    throw new Error(`${path}.owner must be a boolean when present`);
+  }
+  const doc = optionalString(input, "doc", path);
+  return {
+    kind,
+    reason: requiredString(input, "reason", path),
+    ...(doc ? {doc} : {}),
+    ...(input.owner === true ? {owner: true} : {}),
+  };
+}
+
+function parseStepBack(input: unknown, path: string): ReviewStepBack | undefined {
+  if (input === undefined) return undefined;
+  if (!isRecord(input)) throw new Error(`${path} must be an object`);
+  const triggerRounds = input.triggerRounds;
+  if (
+    !Array.isArray(triggerRounds) ||
+    triggerRounds.length !== 2 ||
+    triggerRounds.some((value) => typeof value !== "number" || !Number.isInteger(value) || value < 1)
+  ) {
+    throw new Error(`${path}.triggerRounds must be two positive round numbers`);
+  }
+  return {
+    path: requiredString(input, "path", path),
+    triggerRounds: [triggerRounds[0], triggerRounds[1]],
+  };
 }
 
 export function parseReviewLedger(input: unknown): ReviewLedger {
@@ -160,6 +246,18 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       const findingInput = roundFindings[findingIndex];
       if (!isRecord(findingInput)) throw new Error(`${path}.findings[${findingIndex}] must be an object`);
       const disposition = parseDisposition(findingInput.disposition, `${path}.findings[${findingIndex}].disposition`);
+      if (findingInput.history !== undefined && !Array.isArray(findingInput.history)) {
+        throw new Error(`${path}.findings[${findingIndex}].history must be an array when present`);
+      }
+      const history = Array.isArray(findingInput.history)
+        ? findingInput.history.map((entry, historyIndex) => {
+            const parsed = parseDisposition(entry, `${path}.findings[${findingIndex}].history[${historyIndex}]`);
+            if (!parsed) {
+              throw new Error(`${path}.findings[${findingIndex}].history[${historyIndex}] must be an object`);
+            }
+            return parsed;
+          })
+        : undefined;
       return {
         ...finding,
         id: requiredString(findingInput, "id", `${path}.findings[${findingIndex}]`),
@@ -178,12 +276,14 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
           : {}),
         ...(isStringArray(findingInput.repeatedFrom) ? {repeatedFrom: findingInput.repeatedFrom} : {}),
         ...(disposition ? { disposition } : {}),
+        ...(history?.length ? {history} : {}),
       };
     });
     const number = roundInput.number;
     if (typeof number !== "number" || !Number.isInteger(number) || number !== roundIndex + 1) {
       throw new Error(`${path}.number must be ${roundIndex + 1}`);
     }
+    const stepBack = parseStepBack(roundInput.stepBack, `${path}.stepBack`);
     return {
       number,
       headSha: requiredString(roundInput, "headSha", path),
@@ -192,6 +292,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       summary: parsedReview.summary,
       findings,
       ...(isReviewRoundAudit(roundInput.audit) ? {audit: roundInput.audit} : {}),
+      ...(stepBack ? {stepBack} : {}),
     };
   });
   if (input.failures !== undefined && !Array.isArray(input.failures)) {
@@ -209,6 +310,31 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
         };
       })
     : undefined;
+  if (input.supersessions !== undefined && !Array.isArray(input.supersessions)) {
+    throw new Error("review ledger supersessions must be an array when present");
+  }
+  const supersessions = Array.isArray(input.supersessions)
+    ? input.supersessions.map((supersessionInput, supersessionIndex): ReviewSupersession => {
+        const path = `supersessions[${supersessionIndex}]`;
+        if (!isRecord(supersessionInput)) throw new Error(`${path} must be an object`);
+        const afterRound = supersessionInput.afterRound;
+        if (
+          typeof afterRound !== "number" ||
+          !Number.isInteger(afterRound) ||
+          afterRound < 0 ||
+          afterRound > rounds.length
+        ) {
+          throw new Error(`${path}.afterRound must be a completed-round count`);
+        }
+        return {
+          afterRound,
+          baseRef: requiredString(supersessionInput, "baseRef", path),
+          baseSha: requiredString(supersessionInput, "baseSha", path),
+          ...(isStringArray(supersessionInput.patchIds) ? {patchIds: supersessionInput.patchIds} : {}),
+          archivedAt: requiredString(supersessionInput, "archivedAt", path),
+        };
+      })
+    : undefined;
   return {
     version: 1,
     ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
@@ -218,6 +344,38 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
     ...(isStringArray(input.patchIds) ? {patchIds: input.patchIds} : {}),
     rounds,
     ...(failures ? { failures } : {}),
+    ...(supersessions?.length ? {supersessions} : {}),
+  };
+}
+
+export function liveRounds(ledger: ReviewLedger): ReviewRound[] {
+  const latest = ledger.supersessions?.at(-1);
+  return latest ? ledger.rounds.slice(latest.afterRound) : ledger.rounds;
+}
+
+/** Enforcement contract rule 5: a changed patch series resets round mechanics only. The
+ * same ledger continues — every disposition, obligation, and the tripwire's round
+ * history stay in place by construction — while the superseded base context is recorded
+ * here and the live window restarts after the last completed round. */
+export function supersedeLedgerBase(
+  ledger: ReviewLedger,
+  next: {baseRef: string; baseSha: string; patchIds?: string[]; archivedAt: string},
+): ReviewLedger {
+  return {
+    ...ledger,
+    baseRef: next.baseRef,
+    baseSha: next.baseSha,
+    ...(next.patchIds ? {patchIds: next.patchIds} : {}),
+    supersessions: [
+      ...(ledger.supersessions ?? []),
+      {
+        afterRound: ledger.rounds.length,
+        baseRef: ledger.baseRef,
+        baseSha: ledger.baseSha,
+        ...(ledger.patchIds ? {patchIds: ledger.patchIds} : {}),
+        archivedAt: next.archivedAt,
+      },
+    ],
   };
 }
 
@@ -242,32 +400,92 @@ export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): Revi
           id: `R${number}-F${index + 1}`,
         })),
         ...(input.audit ? {audit: input.audit} : {}),
+        ...(input.stepBack ? {stepBack: input.stepBack} : {}),
       },
     ],
   };
 }
 
-export function acceptedFindingObligations(_ledger: ReviewLedger): AcceptedFindingObligation[] {
-  const fixedFindingIds = new Set(
-    _ledger.rounds.flatMap((round) =>
+const obligationBearingKinds: readonly DispositionKind[] = ["accepted", "accepted-as-limitation"];
+
+/** The obligation id a finding's CURRENT decision owns. The first obligation-bearing
+ * decision keeps the bare finding id (every legacy ledger recorded results that way);
+ * a superseding decision gets `#<decision-number>`, so no result recorded against a
+ * retired decision can satisfy the live obligation (enforcement contract rule 4). */
+function currentObligationId(finding: LedgerFinding): string {
+  const priorBearing = (finding.history ?? []).filter((decision) =>
+    obligationBearingKinds.includes(decision.kind),
+  ).length;
+  return priorBearing === 0 ? finding.id : `${finding.id}#${priorBearing + 1}`;
+}
+
+const terminalStatusByType: Record<ReviewObligationType, "fixed" | "documented"> = {
+  remediation: "fixed",
+  documentation: "documented",
+};
+
+/** Every open obligation across the whole ledger, typed by the decision that created it:
+ * `accepted` creates a remediation obligation (terminal: fixed), `accepted-as-limitation`
+ * a documentation obligation (terminal: documented). Supersession of the review base
+ * never drops these — the rounds carrying the decisions stay in the ledger. */
+export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
+  const terminalResults = new Set(
+    ledger.rounds.flatMap((round) =>
       round.audit?.obligations
-        .filter((obligation) => obligation.status === "fixed")
-        .map((obligation) => obligation.findingId) ?? [],
+        .filter((result) => result.status === "fixed" || result.status === "documented")
+        .map((result) => `${result.status}:${result.findingId}`) ?? [],
     ),
   );
-  return _ledger.rounds.flatMap((round) =>
-    round.findings.flatMap((finding) =>
-      finding.disposition?.kind === "accepted" && !fixedFindingIds.has(finding.id)
-        ? [{
-            findingId: finding.id,
-            title: finding.title,
-            evidence: finding.evidence,
-            direction: finding.direction,
-            dispositionReason: finding.disposition.reason,
-          }]
-        : [],
-    ),
+  return ledger.rounds.flatMap((round) =>
+    round.findings.flatMap((finding): ReviewObligation[] => {
+      const decision = finding.disposition;
+      if (!decision || !obligationBearingKinds.includes(decision.kind)) return [];
+      const type: ReviewObligationType = decision.kind === "accepted" ? "remediation" : "documentation";
+      const id = currentObligationId(finding);
+      if (terminalResults.has(`${terminalStatusByType[type]}:${id}`)) return [];
+      return [{
+        findingId: id,
+        type,
+        title: finding.title,
+        evidence: finding.evidence,
+        direction: finding.direction,
+        dispositionReason: decision.reason,
+        ...(type === "documentation" && decision.doc ? {doc: decision.doc} : {}),
+      }];
+    }),
   );
+}
+
+export interface TripwireRound {
+  number: number;
+  headSha: string;
+  remediationCount: number;
+  findingCount: number;
+}
+
+export type TripwireState = {armed: false} | {armed: true; rounds: [TripwireRound, TripwireRound]};
+
+/** C1: a completed round is remediation-dominated when it has at least one finding and
+ * strictly more than half carry `origin: remediation`. The tripwire arms when the two
+ * most recently completed rounds are both dominated. It reads the full round history —
+ * base supersession resets round mechanics, not containment state. */
+export function remediationChurnTripwire(ledger: ReviewLedger): TripwireState {
+  if (ledger.rounds.length < 2) return {armed: false};
+  const [older, newer] = ledger.rounds.slice(-2).map((round): TripwireRound => ({
+    number: round.number,
+    headSha: round.headSha,
+    remediationCount: round.findings.filter((finding) => finding.origin === "remediation").length,
+    findingCount: round.findings.length,
+  }));
+  const dominated = [older, newer].every(
+    (round) => round.findingCount > 0 && round.remediationCount * 2 > round.findingCount,
+  );
+  return dominated ? {armed: true, rounds: [older, newer]} : {armed: false};
+}
+
+export interface RecordDispositionOptions {
+  doc?: string;
+  owner?: boolean;
 }
 
 export function recordDisposition(
@@ -275,21 +493,62 @@ export function recordDisposition(
   findingId: string,
   kind: DispositionKind,
   reason: string,
+  options: RecordDispositionOptions = {},
 ): ReviewLedger {
   if (!reason) throw new Error("disposition reason must not be empty");
+  if (options.doc !== undefined && kind !== "accepted-as-limitation") {
+    throw new Error("a doc path is only valid on an accepted-as-limitation disposition");
+  }
+  let doc: string | undefined;
+  if (kind === "accepted-as-limitation") {
+    if (!options.doc) {
+      throw new Error("accepted-as-limitation requires a doc path naming where the limitation is documented");
+    }
+    doc = validateEvidencePath(options.doc);
+  }
+  const next: ReviewDisposition = {
+    kind,
+    reason,
+    ...(doc ? {doc} : {}),
+    ...(options.owner ? {owner: true} : {}),
+  };
   let found = false;
   const rounds = ledger.rounds.map((round) => ({
     ...round,
     findings: round.findings.map((finding) => {
       if (finding.id !== findingId) return finding;
       found = true;
-      // Only a deferred-to-human disposition may be superseded — it parks a finding on
-      // the owner, and the owner's eventual decision needs a sanctioned way back into
-      // the ledger (hand-editing is forbidden). All other dispositions are immutable.
-      if (finding.disposition && finding.disposition.kind !== "deferred-to-human") {
+      if (
+        kind === "accepted-as-limitation" &&
+        (finding.priority === "P0" || finding.priority === "P1") &&
+        !options.owner
+      ) {
+        throw new Error(
+          `${findingId} is ${finding.priority}: accepted-as-limitation requires owner attribution`,
+        );
+      }
+      if (!finding.disposition) return { ...finding, disposition: next };
+      // Two dispositions may be superseded, and both sides always stay in the ledger
+      // (hand-editing is forbidden): deferred-to-human parks a finding on the owner,
+      // whose eventual decision needs a sanctioned way back in; accepted-as-limitation
+      // may be reversed, but only by the owner converting it into a fix commitment,
+      // which creates a fresh obligation the retired decision's results cannot satisfy.
+      const supersedable =
+        finding.disposition.kind === "deferred-to-human" ||
+        (finding.disposition.kind === "accepted-as-limitation" && kind === "accepted" && options.owner === true);
+      if (!supersedable) {
+        if (finding.disposition.kind === "accepted-as-limitation") {
+          throw new Error(
+            `${findingId} is accepted-as-limitation — only an owner-attributed accepted disposition may supersede it`,
+          );
+        }
         throw new Error(`${findingId} already has a disposition`);
       }
-      return { ...finding, disposition: { kind, reason } };
+      return {
+        ...finding,
+        history: [...(finding.history ?? []), finding.disposition],
+        disposition: next,
+      };
     }),
   }));
   if (!found) throw new Error(`finding ${findingId} not found`);
@@ -311,6 +570,12 @@ export function priorDispositionNotes(ledger: ReviewLedger): string[] {
   );
 }
 
+function renderDisposition(disposition: ReviewDisposition): string {
+  const attribution = disposition.owner ? " (owner-attributed)" : "";
+  const doc = disposition.doc ? ` (documented at: ${disposition.doc})` : "";
+  return `**${disposition.kind}**${attribution} — ${disposition.reason}${doc}`;
+}
+
 export function renderReviewLedger(ledger: ReviewLedger): string {
   const lines = [
     "# Local review",
@@ -320,6 +585,15 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     `- Base ref: \`${ledger.baseRef}\``,
     `- Base SHA: \`${ledger.baseSha}\``,
   ];
+  if (ledger.supersessions?.length) {
+    lines.push("", "## Base supersessions");
+    for (const supersession of ledger.supersessions) {
+      lines.push(
+        "",
+        `- Base superseded after round ${supersession.afterRound}: was \`${supersession.baseSha.slice(0, 12)}\` (${supersession.baseRef}), archived ${supersession.archivedAt}`,
+      );
+    }
+  }
   if (ledger.failures?.length) {
     lines.push("", "## Incomplete attempts");
     for (const failure of ledger.failures) {
@@ -337,6 +611,9 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
       `- Head SHA: \`${round.headSha}\``,
       `- Model: \`${round.model}\``,
       `- Reviewed at: ${round.reviewedAt}`,
+      ...(round.stepBack
+        ? [`- Step-back note: ${round.stepBack.path} (triggered by rounds ${round.stepBack.triggerRounds.join(", ")})`]
+        : []),
       "",
       round.summary,
     );
@@ -357,7 +634,10 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         `- Evidence: ${finding.evidence}`,
         `- Impact: ${finding.impact}`,
         `- Direction: ${finding.direction}`,
-        `- Disposition: ${finding.disposition ? `**${finding.disposition.kind}** — ${finding.disposition.reason}` : "pending"}`,
+        `- Disposition: ${finding.disposition ? renderDisposition(finding.disposition) : "pending"}`,
+        ...(finding.history?.length
+          ? [`- Superseded decisions: ${finding.history.map(renderDisposition).join("; ")}`]
+          : []),
       );
     }
     if (round.audit) {
@@ -380,10 +660,11 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         ...(metrics.declineRatio === undefined ? [] : [`- Decline ratio: ${metrics.declineRatio}`]),
       );
       if (round.audit.obligations.length === 0) {
-        lines.push("- Remediation obligations: none");
+        lines.push("- Obligations: none");
       } else {
         for (const obligation of round.audit.obligations) {
-          lines.push(`- Remediation obligation ${obligation.findingId}: ${obligation.status} — ${obligation.evidence}`);
+          const label = obligation.status === "documented" ? "Documentation obligation" : "Remediation obligation";
+          lines.push(`- ${label} ${obligation.findingId}: ${obligation.status} — ${obligation.evidence}`);
         }
       }
     }
@@ -454,7 +735,10 @@ function isReviewObligationResult(input: unknown): input is ReviewObligationResu
   return (
     isRecord(input) &&
     typeof input.findingId === "string" &&
-    (input.status === "fixed" || input.status === "incomplete" || input.status === "regressed") &&
+    (input.status === "fixed" ||
+      input.status === "documented" ||
+      input.status === "incomplete" ||
+      input.status === "regressed") &&
     typeof input.evidence === "string"
   );
 }

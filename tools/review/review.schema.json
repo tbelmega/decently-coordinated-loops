@@ -35,7 +35,7 @@
         "required": ["findingId", "status", "evidence"],
         "properties": {
           "findingId": { "type": "string", "minLength": 1 },
-          "status": { "enum": ["fixed", "incomplete", "regressed"] },
+          "status": { "enum": ["fixed", "documented", "incomplete", "regressed"] },
           "evidence": { "type": "string", "minLength": 1 }
         }
       }
