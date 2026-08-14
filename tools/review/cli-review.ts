@@ -9,7 +9,7 @@
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { loadConfig, reviewAuditPasses, type ReviewAuditPass } from "../config.ts";
@@ -19,6 +19,7 @@ import { expandHome } from "../registration.ts";
 import {
   addReviewRound,
   createReviewLedger,
+  liveRounds,
   openObligations,
   parseReviewLedger,
   priorDispositionNotes,
@@ -27,6 +28,7 @@ import {
   remediationChurnTripwire,
   renderReviewLedger,
   reviewCanContinue,
+  supersedeLedgerBase,
   isDispositionKind,
   validateEvidencePath,
   type DispositionKind,
@@ -178,14 +180,17 @@ async function writeLedger(ledger: ReviewLedger, paths: { jsonPath: string; mark
   await writeFileAtomically(paths.markdownPath, renderReviewLedger(ledger));
 }
 
-function archiveReviewEvidence(
+/** A snapshot COPY, not a move: the live ledger continues at the same path with every
+ * round and decision carried (enforcement contract rule 5); the copy preserves the
+ * pre-supersession state of the evidence for human diffing. */
+function snapshotReviewEvidence(
   ledger: ReviewLedger,
   paths: { jsonPath: string; markdownPath: string },
 ): void {
   const suffix = `${ledger.baseSha.slice(0, 12)}-${Date.now()}`;
   for (const path of [paths.jsonPath, paths.markdownPath]) {
     if (!existsSync(path)) continue;
-    renameSync(path, join(dirname(path), `superseded-${suffix}-${basename(path)}`));
+    copyFileSync(path, join(dirname(path), `superseded-${suffix}-${basename(path)}`));
   }
 }
 
@@ -449,7 +454,7 @@ async function startReview(options: StartOptions): Promise<void> {
       if (ledger.baseSha !== resolvedBaseSha) {
         assertBaseRefreshCanSupersede(ledger, headSha);
         if (patchSeriesEqual(ledger.patchIds, currentPatchIds)) {
-          if (ledger.rounds.length >= (options.maxRounds ?? 3)) {
+          if (liveRounds(ledger).length >= (options.maxRounds ?? 3)) {
             throw new Error(`review round limit of ${options.maxRounds ?? 3} reached`);
           }
           baseDeltaRange = {baseSha: ledger.baseSha, headSha: resolvedBaseSha};
@@ -457,20 +462,19 @@ async function startReview(options: StartOptions): Promise<void> {
           ledger = {...ledger, baseRef: options.baseRef, baseSha, patchIds: currentPatchIds};
           auditKind = "base-delta";
         } else {
-          archiveReviewEvidence(ledger, paths);
+          snapshotReviewEvidence(ledger, paths);
           baseSha = resolvedBaseSha;
-          ledger = createReviewLedger({
-            item: options.item,
-            branch,
+          ledger = supersedeLedgerBase(ledger, {
             baseRef: options.baseRef,
             baseSha,
             patchIds: currentPatchIds,
+            archivedAt: new Date().toISOString(),
           });
         }
       } else {
         baseSha = ledger.baseSha;
         const continuation = reviewCanContinue(
-          ledger.rounds.map((round) => ({
+          liveRounds(ledger).map((round) => ({
             headSha: round.headSha,
             findings: round.findings.map((finding) => ({ id: finding.id, disposition: finding.disposition?.kind })),
           })),

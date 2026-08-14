@@ -741,7 +741,11 @@ describe("cli-review start", () => {
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(false);
   });
 
-  test("archives prior evidence and restarts when the rebased patch series changes", () => {
+  // Enforcement contract rule 5 replaced the fresh-ledger restart this test used to
+  // assert: a changed patch series now supersedes the base IN the same ledger — round
+  // mechanics reset while every round and decision stays — with a snapshot of the
+  // pre-supersession evidence left beside it.
+  test("supersedes the base in place when the rebased patch series changes", () => {
     const {repository, baseSha} = createReviewRepository();
     const item = "changed-rebased-patch";
     const dataRepo = createReviewDataRepo(5);
@@ -756,13 +760,105 @@ describe("cli-review start", () => {
     writeFileSync(`${repository}/change.txt`, "review me\nchanged patch\n");
     git(repository, ["add", "change.txt"]);
     git(repository, ["commit", "-q", "-m", "Change reviewed patch"]);
+    const newBaseSha = git(repository, ["rev-parse", "master"]);
 
     expect(runStart(repository, dataRepo, item).status).toBe(0);
     const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
-    const restarted = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
-    expect(restarted.rounds).toHaveLength(1);
-    expect(restarted.rounds[0].audit.kind).toBe("full");
+    const superseded = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(superseded.rounds).toHaveLength(2);
+    expect(superseded.baseSha).toBe(newBaseSha);
+    expect(superseded.supersessions).toHaveLength(1);
+    expect(superseded.supersessions[0]).toMatchObject({afterRound: 1, baseSha});
+    expect(superseded.rounds[1].audit.kind).toBe("full");
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
+  });
+
+  test("carries an open remediation obligation across a changed-patch supersession", () => {
+    const {repository, baseSha} = createReviewRepository();
+    const item = "supersession-remediation";
+    const dataRepo = createReviewDataRepo(5);
+    expect(
+      runStart(repository, dataRepo, item, baseSha, {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(runDisposition(repository, item, "R1-F1", "accepted", "will fix").status).toBe(0);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+    writeFileSync(`${repository}/change.txt`, "review me\nfix folded into the changed patch\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Change reviewed patch"]);
+
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.supersessions).toHaveLength(1);
+    expect(ledger.rounds).toHaveLength(2);
+    expect(ledger.rounds[1].audit.kind).toBe("remediation");
+    expect(ledger.rounds[1].audit.obligations).toEqual([
+      {findingId: "R1-F1", status: "fixed", evidence: "verified"},
+    ]);
+  });
+
+  test("carries an open documentation obligation across a changed-patch supersession", () => {
+    const {repository, baseSha} = createReviewRepository();
+    const item = "supersession-documentation";
+    const dataRepo = createReviewDataRepo(5);
+    expect(
+      runStart(repository, dataRepo, item, baseSha, {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "The lock is an optimisation; loss is tolerated.\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Document the limitation"]);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+    writeFileSync(`${repository}/change.txt`, "review me\nchanged patch\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Change reviewed patch"]);
+
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.supersessions).toHaveLength(1);
+    expect(ledger.rounds).toHaveLength(2);
+    expect(ledger.rounds[1].audit.obligations).toEqual([
+      {findingId: "R1-F1", status: "documented", evidence: "verified"},
+    ]);
+  });
+
+  test("keeps the tripwire armed across a changed-patch supersession", () => {
+    const {repository, baseSha, headSha} = createReviewRepository();
+    const item = "supersession-tripwire";
+    const dataRepo = createReviewDataRepo(9);
+    seedTripwireLedger(repository, item, baseSha, headSha);
+
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/base-two.txt`, "new base\n");
+    git(repository, ["add", "base-two.txt"]);
+    git(repository, ["commit", "-q", "-m", "Advance base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+
+    const refused = runStart(repository, dataRepo, item);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("remediation-churn tripwire");
   });
 
   test("records a limitation disposition with its doc path and gates P0/P1 on owner attribution", () => {
