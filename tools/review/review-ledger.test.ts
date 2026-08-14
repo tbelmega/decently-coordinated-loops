@@ -603,10 +603,17 @@ describe("parseReviewLedger — decision ordering and result types", () => {
         {findingId: "R1-F1", status: "documented", evidence: "forged", type: "remediation"},
       ]),
     });
-    // The malformed result must not close the documentation obligation, however the
-    // ledger arrived: directly constructed or re-read from disk.
+    // In memory the malformed result must not close the documentation obligation; a
+    // persisted ledger carrying it must fail closed at parse rather than silently
+    // dropping the round's audit evidence on the next rewrite.
     expect(openObligations(ledger)).toHaveLength(1);
-    expect(openObligations(parseReviewLedger(JSON.parse(JSON.stringify(ledger))))).toHaveLength(1);
+    expect(() => parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toThrow(/audit/);
+  });
+
+  test("throws on a present-but-invalid audit instead of dropping it", () => {
+    const ledger = JSON.parse(JSON.stringify(seededLedger(p2Finding)));
+    ledger.rounds[0].audit = {kind: "full"};
+    expect(() => parseReviewLedger(ledger)).toThrow(/audit/);
   });
 });
 

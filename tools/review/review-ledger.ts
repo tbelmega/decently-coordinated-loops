@@ -360,6 +360,16 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       throw new Error(`${path}.number must be ${roundIndex + 1}`);
     }
     const stepBack = parseStepBack(roundInput.stepBack, `${path}.stepBack`);
+    // A present audit must parse or the ledger fails closed: silently dropping it
+    // would erase the round's persisted review evidence on the next rewrite and turn
+    // a malformed terminal classification into a fresh attempt.
+    let audit: ReviewRoundAudit | undefined;
+    if (roundInput.audit !== undefined) {
+      if (!isReviewRoundAudit(roundInput.audit)) {
+        throw new Error(`${path}.audit is present but invalid`);
+      }
+      audit = roundInput.audit;
+    }
     return {
       number,
       headSha: requiredString(roundInput, "headSha", path),
@@ -367,7 +377,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       reviewedAt: requiredString(roundInput, "reviewedAt", path),
       summary: parsedReview.summary,
       findings,
-      ...(isReviewRoundAudit(roundInput.audit) ? {audit: roundInput.audit} : {}),
+      ...(audit ? {audit} : {}),
       ...(stepBack ? {stepBack} : {}),
     };
   });
