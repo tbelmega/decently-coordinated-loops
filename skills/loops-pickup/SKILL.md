@@ -106,6 +106,14 @@ not implementable, whatever its autonomy. Its pickup
 converts to spec-drafting — take it through refinement (purpose-clear branch, below)
 instead of steps 3–5. A refined item description is never a spec.
 
+A spec that introduces a hand-rolled concurrency or filesystem protocol counts as
+adequate only if it answers, in writing, whether the invariant family could be removed
+by a different primitive or design rather than covered by guards - the review loop's
+cost is proportional to the size of the invariant space, and a skill that only runs
+after implementation cannot gate a design commitment. Without that written answer the
+item stays spec-sized: its pickup converts to spec work even when a spec document
+exists.
+
 **`merged` items are their own work-type.** Any `merged` item is eligible (it is
 `autonomy: auto` / `next-actor: agent` by construction) but its work is
 *verification*, not implementation — take it through "Verify a landed item" instead

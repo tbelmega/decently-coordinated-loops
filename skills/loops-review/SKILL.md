@@ -71,16 +71,55 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
      --status accepted --reason "<technical reason>"
    ```
 
-   Status is `accepted`, `rejected`, `already-addressed`, or `deferred-to-human`.
+   Status is `accepted`, `rejected`, `already-addressed`, `accepted-as-limitation`, or
+   `deferred-to-human`.
+
+   **`accepted-as-limitation`** concedes the finding is factually correct and declines
+   the fix because its cost or added complexity exceeds the component's documented
+   assurance bar. It requires `--doc <repo-relative-path>` naming where the limitation
+   is (or will be) documented - the component's doc comment or its spec - and the
+   reason must cite the documented contract that makes the defect tolerable. It creates
+   a *documentation obligation* instead of a fix obligation: `start` refuses the next
+   round until the doc path resolves to a tracked regular file at HEAD, and the
+   confirmation pass verifies that the artifact's content honestly covers the finding
+   rather than that the defect is fixed. On P0/P1 findings the CLI requires `--owner`
+   with a reason citing the owner's ruling. When used unattended on P2/P3 findings,
+   mirror each such disposition to `OUTBOX.md` as a `decision` entry for retroactive
+   ruling, following the provisional-decisions house pattern. The owner may later
+   reverse a limitation: record an owner-attributed `accepted` disposition (`--owner`,
+   reason citing the ruling). Both decisions stay in the ledger, the documentation
+   obligation is retired, and a fresh remediation obligation is created that the
+   earlier `documented` result cannot satisfy.
 4. **Implement** the accepted findings, re-run the project's checks, commit.
+
+   **Coupled-fix protocol.** Before implementing, when two or more accepted findings in
+   the round target the same function or module, or any accepted finding has
+   `origin: remediation`: first write or update the unit's invariant list (a doc
+   comment at the unit or a design note it references - the same artifact a step-back
+   note uses), and verify **every** fix against the whole list rather than against its
+   own finding alone. Two defaults follow:
+
+   - **Rewrite over stacking guards.** When a fix would add a second or later
+     error-handling or cleanup guard to the same code path, default to rewriting the
+     unit from the invariant list instead of adding the guard.
+   - **Interaction tests over scenario tests.** For concurrency and
+     filesystem-protocol findings, prefer tests that exercise interleavings and
+     failure-path interactions over one test per finding scenario. Per-finding
+     regression tests stay; they are necessary but not sufficient.
 5. **Start again** against the same base. Accepted findings remain explicit remediation
    obligations carrying their original evidence, direction, and disposition reason.
    The manifest records the exact previous-reviewed-HEAD-to-current-HEAD fix delta;
-   the reviewer must classify every obligation as fixed, incomplete, or regressed and
-   scan the delta for new defects. Prior non-accepted dispositions remain context so
-   the reviewer does not blindly re-raise them.
+   the reviewer must classify every remediation obligation as fixed, incomplete, or
+   regressed and every documentation obligation as documented, incomplete, or
+   regressed - handed the exact artifact each obligation names: the fix delta for
+   remediation, the persisted doc file for documentation - and scan the delta for new
+   defects. Prior non-accepted dispositions remain context so the reviewer does not
+   blindly re-raise them.
 6. **Stop with `PASSED`** only on a clean round covering the current HEAD. Rejected
-   findings get one clean confirmation round. A deferred-to-human finding, reviewer
+   and accepted-as-limitation findings get one clean confirmation round; the
+   limitation's confirmation verifies the named doc file, and correctness is conceded,
+   so no pass re-proves the defect - though a later round may still challenge the
+   disposition if the finding's impact turns out worse than the cited contract admits. A deferred-to-human finding, reviewer
    failure, stale review, or configured round cap is `BLOCKED` — never claim
    completion over any of them. Only the deferred finding and the round cap are the
    owner's call and get escalated; a reviewer failure or a stale review is yours to
@@ -103,14 +142,42 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    / `owner` / `awaiting: review-merge` once given); or drop the change (`dropped`).
    Never make the request for more rounds the only option they can see.
 
+**Remediation-churn tripwire.** A completed round is *remediation-dominated* when it
+has at least one finding and strictly more than half its findings carry
+`origin: remediation`. When the two most recently completed rounds are both
+remediation-dominated, `start` refuses the next round unless invoked with
+`--step-back <repo-relative-path>`. The CLI validates that the path resolves at the
+HEAD under review to a tracked regular file whose content changed since the newer
+triggering round's reviewed tree - a note written before the tripwire fired cannot
+prove analysis of the rounds that fired it. The note's content is skill-governed and
+must contain:
+
+1. the affected unit's full invariant list (not just the invariants findings have
+   named so far);
+2. a decision with reasoning: **remove** the invariant family by a different design or
+   primitive, **rewrite** the unit from the invariant list with all open obligations
+   as spec, or **continue patching** with a stated justification. "Remove" is listed
+   first deliberately: the review loop's cost is proportional to the size of the
+   invariant space the reviewer can probe, and choosing a smaller space is cheaper
+   than reviewing the larger one - the same design-time question the loops-pickup
+   spec gate asks of a spec introducing a hand-rolled concurrency or filesystem
+   protocol;
+3. which open remediation obligations the decision covers.
+
+Home the note where the analysis survives for later rounds and future work: the
+unit's own doc comment or a design note the unit references, not the ledger.
+
 **Changed review base.** If the integration branch moves after review and the item is
 rebased onto its new head, rerun the full quality gate and start review again with the
 same symbolic `--base`. The CLI compares stable patch identities. A patch-equivalent
 rebase retains the ledger and runs integration/adversarial passes against an explicit
 new-base delta plus its intersections with the reviewed files. A changed patch series
-archives the old evidence and starts a full ledger at the new base. All earlier
-findings must be dispositioned and none may remain deferred. The CLI refuses review
-when the new base is not an ancestor of current `HEAD`.
+snapshots the old evidence and supersedes the base in the same ledger: round mechanics
+reset (coverage, manifests, findings open for re-discovery) while every disposition,
+typed obligation, and the tripwire state carry forward by construction - nothing
+decision-bearing is dropped. All earlier findings must be dispositioned and none may
+remain deferred. The CLI refuses review when the new base is not an ancestor of
+current `HEAD`.
 
 **Landing metadata.** Finish code review before committing files configured by
 `review.metadataPaths`. A later commit that changes only those paths keeps a clean
