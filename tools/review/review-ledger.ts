@@ -839,6 +839,7 @@ export function reviewCanContinue(
   rounds: RoundState[],
   limit = 3,
   currentHeadSha?: string,
+  obligations: ReviewObligation[] = [],
 ): { allowed: boolean; reason?: string } {
   for (const round of rounds) {
     for (const finding of round.findings) {
@@ -847,7 +848,10 @@ export function reviewCanContinue(
   }
   if (rounds.length >= limit) return { allowed: false, reason: `review round limit of ${limit} reached` };
   const latestRound = rounds.at(-1);
-  if (latestRound && latestRound.findings.length === 0) {
+  // A clean latest round is terminal only when nothing is owed: an open obligation —
+  // e.g. the fresh remediation obligation an owner reversal creates after a clean
+  // confirmation round — still needs a round to classify it.
+  if (latestRound && latestRound.findings.length === 0 && obligations.length === 0) {
     return { allowed: false, reason: "latest review round has no actionable findings" };
   }
   if (latestRound?.findings.some((finding) => finding.disposition === "deferred-to-human")) {
@@ -855,11 +859,15 @@ export function reviewCanContinue(
   }
   // Accepting a finding is a commitment to fix it. Re-running at the same HEAD would
   // let a clean round certify the branch with the accepted defect still in the tree
-  // (a fresh reviewer isn't guaranteed to re-find it) — the fix must be committed first.
+  // (a fresh reviewer isn't guaranteed to re-find it) — the fix must be committed
+  // first. Open remediation obligations extend the same rule to decisions recorded in
+  // earlier rounds (an owner reversal); documentation obligations are exempt because
+  // verifying an already-committed doc needs no new commit.
   if (
     currentHeadSha &&
     latestRound?.headSha === currentHeadSha &&
-    latestRound.findings.some((finding) => finding.disposition === "accepted")
+    (latestRound.findings.some((finding) => finding.disposition === "accepted") ||
+      obligations.some((obligation) => obligation.type === "remediation"))
   ) {
     return {
       allowed: false,

@@ -216,6 +216,19 @@ function dirtyOutsideReviewEvidence(repository: string): string {
   ]);
 }
 
+function assertTrackedRegularFile(repository: string, treeSha: string, path: string, label: string): void {
+  let entry = "";
+  try {
+    entry = git(["-C", repository, "ls-tree", treeSha, "--", path]);
+  } catch {
+    entry = "";
+  }
+  const match = entry.match(/^(\d{6}) blob /);
+  if (!match || (match[1] !== "100644" && match[1] !== "100755")) {
+    throw new Error(`${label} ${path}, which does not resolve to a tracked regular file at the reviewed HEAD`);
+  }
+}
+
 function gitPatchIds(repository: string, baseSha: string, headSha: string): string[] {
   const commits = git(["-C", repository, "rev-list", "--reverse", `${baseSha}..${headSha}`])
     .split("\n")
@@ -455,6 +468,7 @@ async function startReview(options: StartOptions): Promise<void> {
           })),
           options.maxRounds,
           headSha,
+          openObligations(ledger),
         );
         if (!continuation.allowed) throw new Error(continuation.reason || "review cannot continue");
         ledger = {...ledger, baseRef: options.baseRef, patchIds: currentPatchIds};
@@ -476,6 +490,19 @@ async function startReview(options: StartOptions): Promise<void> {
 
     try {
       const obligations = openObligations(ledger);
+      // Enforcement contract rule 1: a documentation obligation's evidence resolves at
+      // consumption. From the first gate after the disposition on, the named doc must be
+      // a tracked regular file in the reviewed tree — a directory proves nothing was
+      // written, and a tracked symlink can point outside the reviewed tree.
+      for (const obligation of obligations) {
+        if (obligation.type !== "documentation" || !obligation.doc) continue;
+        assertTrackedRegularFile(
+          repository,
+          headSha,
+          obligation.doc,
+          `documentation obligation ${obligation.findingId} names`,
+        );
+      }
       if (auditKind === "full" && obligations.length > 0) auditKind = "remediation";
       const previousHeadSha = ledger.rounds.at(-1)?.headSha;
       const remediationRange = obligations.length > 0 && previousHeadSha && previousHeadSha !== headSha
@@ -607,15 +634,23 @@ interface DispositionOptions {
   findingId: string;
   kind: DispositionKind;
   reason: string;
+  doc?: string;
+  owner?: boolean;
 }
 
 function parseDispositionOptions(args: string[]): DispositionOptions {
   const values = new Map<string, string>();
-  for (let index = 0; index < args.length; index += 2) {
+  let owner = false;
+  for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
+    if (flag === "--owner") {
+      owner = true;
+      continue;
+    }
     const value = args[index + 1];
     if (!flag?.startsWith("--") || !value) throw new Error(`unknown or incomplete argument: ${flag ?? ""}`);
     values.set(flag, value);
+    index += 1;
   }
   const findingId = values.get("--finding");
   const status = values.get("--status");
@@ -624,7 +659,14 @@ function parseDispositionOptions(args: string[]): DispositionOptions {
     throw new Error("disposition requires --finding <id> --status <status> --reason <reason>");
   }
   if (!isDispositionKind(status)) throw new Error(`invalid disposition: ${status}`);
-  return { item: values.get("--item"), findingId, kind: status, reason };
+  return {
+    item: values.get("--item"),
+    findingId,
+    kind: status,
+    reason,
+    ...(values.get("--doc") ? {doc: values.get("--doc")} : {}),
+    ...(owner ? {owner: true} : {}),
+  };
 }
 
 async function addDisposition(options: DispositionOptions): Promise<void> {
@@ -639,7 +681,10 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
       throw new Error(`review ledger branch is ${existingLedger.branch}, expected ${branch}`);
     }
     if (existingLedger.item !== options.item) throw new Error("review item does not match the existing ledger");
-    const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason);
+    const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason, {
+      ...(options.doc ? {doc: options.doc} : {}),
+      ...(options.owner ? {owner: true} : {}),
+    });
     await writeLedger(ledger, paths);
     process.stdout.write(`${options.findingId} marked ${options.kind}\n`);
   } finally {

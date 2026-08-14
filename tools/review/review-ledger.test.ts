@@ -256,6 +256,39 @@ describe("reviewCanContinue", () => {
     const rounds = [{ findings: [{ id: "R1-F1", disposition: "accepted" as const }] }];
     expect(reviewCanContinue(rounds).allowed).toBe(true);
   });
+
+  function obligationOf(type: "remediation" | "documentation") {
+    return {
+      findingId: "R1-F1#2",
+      type,
+      title: "off-by-one",
+      evidence: "loop uses <=",
+      direction: "use <",
+      dispositionReason: "owner ruled: fix it",
+    };
+  }
+
+  test("allows continuation after a clean round while an obligation is still open", () => {
+    // The owner reversal of a limitation reopens work after a clean confirmation round:
+    // without the obligation the clean round would dead-end the ledger.
+    const rounds = [
+      { headSha: "h1", findings: [{ id: "R1-F1", disposition: "accepted-as-limitation" as const }] },
+      { headSha: "h2", findings: [] },
+    ];
+    expect(reviewCanContinue(rounds, 5, "h3", [obligationOf("remediation")]).allowed).toBe(true);
+    expect(reviewCanContinue(rounds, 5, "h3").reason).toMatch(/no actionable findings/);
+  });
+
+  test("refuses an unchanged HEAD while a remediation obligation is open, but not a documentation one", () => {
+    const rounds = [
+      { headSha: "h1", findings: [{ id: "R1-F1", disposition: "accepted-as-limitation" as const }] },
+      { headSha: "h2", findings: [] },
+    ];
+    expect(reviewCanContinue(rounds, 5, "h2", [obligationOf("remediation")]).reason).toMatch(
+      /implement and commit/,
+    );
+    expect(reviewCanContinue(rounds, 5, "h2", [obligationOf("documentation")]).allowed).toBe(true);
+  });
 });
 
 const p2Finding = { ...finding, priority: "P2" as const };

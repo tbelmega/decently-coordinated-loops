@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -117,9 +117,12 @@ function createFakeCodex(): string {
       // it to be inspected, so coverage comes back including them. The validator must permit
       // that — rejecting it invalidated rounds that had found nothing wrong.
       'const files = [...covered, ...(audit.manifest.metadataFiles ?? [])];',
-      'const obligationStatus = process.env.FAKE_OBLIGATION_STATUS ?? "fixed";',
-      'const obligations = audit.requiredObligationIds.length > 0 ? audit.obligations.map((obligation) => ({ findingId: obligation.findingId, status: obligationStatus, evidence: "verified" })) : [];',
-      'await Bun.write(args[outputIndex + 1], JSON.stringify({ pass: audit.pass, summary: "clean", coverage: { files, instructionFiles: audit.manifest.instructionFiles, callsites: [] }, obligations, findings: [] }));',
+      // Typed statuses mirror a compliant reviewer: remediation obligations classify
+      // fixed, documentation obligations documented, unless a test overrides either.
+      'const obligationStatusFor = (obligation) => obligation.type === "documentation" ? (process.env.FAKE_DOC_STATUS ?? "documented") : (process.env.FAKE_OBLIGATION_STATUS ?? "fixed");',
+      'const obligations = audit.requiredObligationIds.length > 0 ? audit.obligations.map((obligation) => ({ findingId: obligation.findingId, status: obligationStatusFor(obligation), evidence: "verified" })) : [];',
+      'const findings = process.env.FAKE_FINDINGS_JSON ? JSON.parse(process.env.FAKE_FINDINGS_JSON) : [];',
+      'await Bun.write(args[outputIndex + 1], JSON.stringify({ pass: audit.pass, summary: "clean", coverage: { files, instructionFiles: audit.manifest.instructionFiles, callsites: [] }, obligations, findings }));',
       "",
     ].join("\n"),
   );
@@ -169,6 +172,43 @@ function runStatus(repository: string, item?: string, cwd = repository) {
     cwd,
     encoding: "utf8",
   });
+}
+
+function runDisposition(
+  repository: string,
+  item: string,
+  findingId: string,
+  status: string,
+  reason: string,
+  extraArgs: string[] = [],
+) {
+  return spawnSync(
+    "bun",
+    ["run", CLI, "disposition", "--item", item, "--finding", findingId, "--status", status, "--reason", reason, ...extraArgs],
+    { cwd: repository, encoding: "utf8" },
+  );
+}
+
+/** A finding the fake reviewer reports, satisfying the response schema. */
+function fakeFinding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    priority: "P2",
+    title: "Lock loss on crash",
+    file: "change.txt",
+    line: 1,
+    evidence: "lock file survives a crash",
+    impact: "next writer waits forever",
+    direction: "document or fix the recovery path",
+    confidence: "high",
+    origin: "original",
+    obligationId: null,
+    ...overrides,
+  };
+}
+
+function readLedgerJson(repository: string, item: string): any {
+  const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+  return JSON.parse(readFileSync(paths.jsonPath, "utf8"));
 }
 
 describe("cli-review status", () => {
@@ -722,6 +762,210 @@ describe("cli-review start", () => {
     expect(restarted.rounds).toHaveLength(1);
     expect(restarted.rounds[0].audit.kind).toBe("full");
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
+  });
+
+  test("records a limitation disposition with its doc path and gates P0/P1 on owner attribution", () => {
+    const {repository} = createReviewRepository();
+    const item = "limitation-disposition";
+    const dataRepo = createReviewDataRepo(9);
+    const findings = [fakeFinding(), fakeFinding({priority: "P1", title: "High severity defect"})];
+    expect(
+      runStart(repository, dataRepo, item, "master", {FAKE_FINDINGS_JSON: JSON.stringify(findings)}).status,
+    ).toBe(0);
+
+    const limited = runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the documented bar", [
+      "--doc",
+      "docs/limits.md",
+    ]);
+    expect(limited.status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds[0].findings[0].disposition).toEqual({
+      kind: "accepted-as-limitation",
+      reason: "below the documented bar",
+      doc: "docs/limits.md",
+    });
+
+    const withoutOwner = runDisposition(repository, item, "R1-F2", "accepted-as-limitation", "too costly", [
+      "--doc",
+      "docs/limits.md",
+    ]);
+    expect(withoutOwner.status).toBe(1);
+    expect(withoutOwner.stderr).toContain("owner");
+    const withOwner = runDisposition(
+      repository,
+      item,
+      "R1-F2",
+      "accepted-as-limitation",
+      "owner ruled 2026-08-14: below the bar",
+      ["--doc", "docs/limits.md", "--owner"],
+    );
+    expect(withOwner.status).toBe(0);
+    expect(readLedgerJson(repository, item).rounds[0].findings[1].disposition.owner).toBe(true);
+  });
+
+  test("rejects an absolute or traversal doc path at recording time", () => {
+    const {repository} = createReviewRepository();
+    const item = "doc-path-shape";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+
+    for (const doc of ["/etc/limits.md", "../outside.md"]) {
+      const result = runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        doc,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("repository-relative");
+    }
+  });
+
+  test("refuses the next round until the documentation obligation's path is a tracked regular file", () => {
+    const {repository} = createReviewRepository();
+    const item = "missing-documentation";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+
+    const missing = runStart(repository, dataRepo, item);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("tracked regular file");
+
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "The lock is an optimisation; loss is tolerated.\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Document the lock limitation"]);
+
+    const confirmed = runStart(repository, dataRepo, item);
+    expect(confirmed.status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds).toHaveLength(2);
+    expect(ledger.rounds[1].findings).toEqual([]);
+    expect(ledger.rounds[1].audit.obligations).toEqual([
+      {findingId: "R1-F1", status: "documented", evidence: "verified"},
+    ]);
+    const status = runStatus(repository, item);
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain("REVIEW_STATUS=passed");
+  });
+
+  test("rejects a symlinked doc path at the start gate", () => {
+    const {repository} = createReviewRepository();
+    const item = "symlinked-doc";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/real.md`, "documented elsewhere\n");
+    symlinkSync("../real.md", `${repository}/docs/limits.md`);
+    git(repository, ["add", "real.md", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Symlink the doc path"]);
+
+    const result = runStart(repository, dataRepo, item);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tracked regular file");
+  });
+
+  test("keeps an incomplete documentation result actionable even with an empty findings array", () => {
+    const {repository} = createReviewRepository();
+    const item = "incomplete-documentation";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "unrelated text\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Add an unrelated doc"]);
+
+    const result = runStart(repository, dataRepo, item, "master", {FAKE_DOC_STATUS: "incomplete"});
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("must remain an actionable finding");
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds).toHaveLength(1);
+    expect(ledger.failures).toHaveLength(1);
+  });
+
+  test("walks the owner-reversal chain: documented, reversed, unchanged-HEAD refusal, then a required fresh obligation", () => {
+    const {repository} = createReviewRepository();
+    const item = "limitation-reversal";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "The lock is an optimisation; loss is tolerated.\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Document the lock limitation"]);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    expect(runStatus(repository, item).stdout).toContain("REVIEW_STATUS=passed");
+
+    const withoutOwner = runDisposition(repository, item, "R1-F1", "accepted", "changed my mind");
+    expect(withoutOwner.status).toBe(1);
+    const reversal = runDisposition(repository, item, "R1-F1", "accepted", "owner ruled: fix it", ["--owner"]);
+    expect(reversal.status).toBe(0);
+    const reversed = readLedgerJson(repository, item);
+    expect(reversed.rounds[0].findings[0].disposition).toEqual({
+      kind: "accepted",
+      reason: "owner ruled: fix it",
+      owner: true,
+    });
+    expect(reversed.rounds[0].findings[0].history).toEqual([
+      {kind: "accepted-as-limitation", reason: "below the bar", doc: "docs/limits.md"},
+    ]);
+
+    const unchangedHead = runStart(repository, dataRepo, item);
+    expect(unchangedHead.status).toBe(1);
+    expect(unchangedHead.stderr).toContain("implement and commit");
+
+    writeFileSync(`${repository}/change.txt`, "review me\ncrash-safe now\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Fix the reversed limitation"]);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const confirmed = readLedgerJson(repository, item);
+    expect(confirmed.rounds).toHaveLength(3);
+    expect(confirmed.rounds[2].audit.obligations).toEqual([
+      {findingId: "R1-F1#2", status: "fixed", evidence: "verified"},
+    ]);
+    expect(runStatus(repository, item).stdout).toContain("REVIEW_STATUS=passed");
   });
 
   test("starts a fresh confirming review after an accepted fix is rebased", () => {
