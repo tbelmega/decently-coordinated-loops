@@ -178,34 +178,29 @@ Terminal work-streams.
     });
   }
 
-  // Round-6 attempt 2. Reopening an item by editing its state in place, without moving the
-  // file, leaves the row an earlier run wrote. Filtering only the append set would keep
-  // publishing "finished" as that live item's status for good.
-  test("removes the row of an already-indexed file whose state left archive/", () => {
+  // Round 6, R6-F1/F2/F4. Round-6 attempt 2 had me delete the row of an already-indexed
+  // file that went stranded. That is the tidier-looking rule and the destructive one: an
+  // item archived the ordinary way has no board row, so this row is its last derived
+  // trace, and deleting it left a live work-stream indexed nowhere at all. The staleness
+  // is real but it is a reporting problem, and validateItem reports it from the file.
+  test("keeps the row of an already-indexed file whose state left archive/", () => {
     const items = loadItemsDir(FIXTURES);
     const done = { ...items[0], slug: "reopened", title: "Reopened", state: "accepted", updated: "2026-07-10" };
     const indexed = reconcileArchiveRows(ARCHIVE_MD, [done]);
     expect(indexed).toContain("archive/reopened.md");
 
-    const reopened = { ...done, state: "in-progress" };
-    expect(reconcileArchiveRows(indexed, [reopened])).not.toContain("archive/reopened.md");
+    expect(reconcileArchiveRows(indexed, [{ ...done, state: "in-progress" }])).toBe(indexed);
   });
 
-  test("re-adds the row when a reopened file goes terminal again", () => {
+  // R6-F3, the same rule's other casualty: the removal matched any line carrying the link,
+  // so a hand-written note about an archived item was deleted along with its row. Appending
+  // only cannot touch prose, which is the point.
+  test("never rewrites hand-written prose that links to an archived item", () => {
     const items = loadItemsDir(FIXTURES);
-    const item = { ...items[0], slug: "again", title: "Again", state: "accepted", updated: "2026-07-10" };
-    const indexed = reconcileArchiveRows(ARCHIVE_MD, [item]);
-    const removed = reconcileArchiveRows(indexed, [{ ...item, state: "tested" }]);
-    expect(removed).not.toContain("archive/again.md");
-    expect(reconcileArchiveRows(removed, [item])).toContain("archive/again.md");
-  });
-
-  test("leaves a row alone when its slug has no file in archive/ at all", () => {
-    const items = loadItemsDir(FIXTURES);
-    const gone = { ...items[0], slug: "gone", title: "Gone", state: "accepted", updated: "2026-07-10" };
-    const indexed = reconcileArchiveRows(ARCHIVE_MD, [gone]);
-    // The folder no longer holds it; nothing here knows why, so the row stands.
-    expect(reconcileArchiveRows(indexed, [])).toBe(indexed);
+    const item = { ...items[0], slug: "noted", title: "Noted", state: "accepted", updated: "2026-07-10" };
+    const prose = `${ARCHIVE_MD}\nSee [Noted](archive/noted.md) for the rationale we kept.\n`;
+    expect(reconcileArchiveRows(prose, [{ ...item, state: "in-progress" }])).toBe(prose);
+    expect(reconcileArchiveRows(prose, [item])).toContain("for the rationale we kept.");
   });
 
   test("indexes the terminal files in a batch that also holds a stranded one", () => {

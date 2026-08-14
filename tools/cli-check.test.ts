@@ -31,12 +31,13 @@ afterEach(() => {
 });
 
 /** A data repo whose BOARD.md carries a row for an item whose file sits in `folder`.
- * `rowPath` is what the row links to, which is not always where the file is. */
-function dataRepo(folder: "items" | "for-delivery" | "archive", rowPath = "items/reopened.md"): string {
+ * `rowPath` is what the row links to, which is not always where the file is; `rowPath:
+ * null` writes no row at all, which is what an item archived the ordinary way looks like. */
+function dataRepo(folder: "items" | "for-delivery" | "archive", rowPath: string | null = "items/reopened.md"): string {
   const root = mkdtempSync(join(tmpdir(), "dcl-check-"));
   created.push(root);
   for (const dir of ["items", "for-delivery", "archive"]) mkdirSync(join(root, dir));
-  const row = `| [Reopened](${rowPath}) | atlas | in-progress | agent | - | - | - | 2026-07-08 |\n`;
+  const row = rowPath ? `| [Reopened](${rowPath}) | atlas | in-progress | agent | - | - | - | 2026-07-08 |\n` : "";
   writeFileSync(join(root, "BOARD.md"), readFileSync(join(TEMPLATES, "BOARD.md"), "utf8") + row);
   writeFileSync(join(root, "ARCHIVE.md"), readFileSync(join(TEMPLATES, "ARCHIVE.md"), "utf8"));
   writeFileSync(join(root, "OUTBOX.md"), "# Outbox\n\n## Open\n");
@@ -79,4 +80,22 @@ describe("cli-check on a board row whose item is in the wrong folder", () => {
       expect(result.stdout).toContain(`${folder}/reopened.md`);
     });
   }
+
+  // Round 6, R6-F1/F2/F4, the case every row-based check is blind to by construction: an
+  // item archived the ordinary way keeps no board row, so reopening it by editing its state
+  // in archive/ leaves nothing for preflight to classify. The file is the only evidence, so
+  // this is checked from the file.
+  test("fails on a reopened archive/ file that has no board row at all", () => {
+    const result = spawnSync("bun", [CHECK], { cwd: dataRepo("archive", null), encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("reopened");
+    expect(result.stdout).toContain("which sync never moves a file out of");
+  });
+
+  test("passes on a genuinely finished item sitting in archive/", () => {
+    const root = dataRepo("archive", null);
+    writeFileSync(join(root, "archive", "reopened.md"), ITEM.replace("state: in-progress", "state: accepted"));
+    const result = spawnSync("bun", [CHECK], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  });
 });

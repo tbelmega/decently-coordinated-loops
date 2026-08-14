@@ -114,11 +114,10 @@ describe("cli-sync rows whose item has moved to a terminal folder", () => {
     expect(readFileSync(join(root, "BOARD.md"), "utf8")).not.toContain("Moved on");
   });
 
-  test("clears the ARCHIVE.md row of a file reopened in place, and asks for it", () => {
-    // Round-6 attempt 2, the other half of the same invariant: an item accepted, archived and
-    // indexed, then reopened by editing its state without moving the file. The append
-    // filter alone leaves the earlier row standing, so ARCHIVE.md would keep reporting a
-    // live work-stream as finished while OUTBOX.md asks the owner to revive it.
+  test("keeps a reopened file's ARCHIVE.md row and reports the misplacement", () => {
+    // Round 6, R6-F1/F2/F4. An item accepted, archived and indexed the ordinary way, then
+    // reopened by editing its state without moving the file. Deleting the row leaves it in
+    // no index at all, so the row stays and sync says out loud that the file is misplaced.
     const root = dataRepoWithMovedItem("archive", "in-progress");
     const archivePath = join(root, "ARCHIVE.md");
     const indexed = `${readFileSync(archivePath, "utf8")}| [Moved on](archive/moved-on.md) | atlas | 2026-07-08 |\n`;
@@ -127,8 +126,8 @@ describe("cli-sync rows whose item has moved to a terminal folder", () => {
     const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
 
     expect(result.status).toBe(0);
-    expect(readFileSync(archivePath, "utf8")).not.toContain("archive/moved-on.md");
-    expect(readFileSync(join(root, "OUTBOX.md"), "utf8")).toContain("stranded in archive/");
+    expect(readFileSync(archivePath, "utf8")).toBe(indexed);
+    expect(result.stdout).toContain("which sync never moves a file out of");
   });
 
   test("every row on the regenerated board links to a file that exists", () => {

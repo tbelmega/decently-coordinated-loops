@@ -65,27 +65,20 @@ function archiveRow(item: ItemFile): string {
  * the two derived indexes would then contradict each other. The rule lives here rather than
  * at the call site because ARCHIVE.md's contract is this function's to keep.
  *
- * Which is why a stranded file's row is also removed when one is already there — reopening
- * an item by editing its state in place leaves the old terminal row behind, and a rule that
- * only filters what it appends would keep publishing that stale row as the item's status
- * forever. Both directions are derived from the folder, so a state that goes terminal again
- * gets its row back on the next run. Rows whose slug has no file in `archive/` at all are
- * left untouched: nothing here knows why they are there. */
+ * A row already written for a file that later goes stranded is deliberately NOT removed.
+ * Removing it read as the tidier rule and is the worse one: an item archived the ordinary
+ * way has no board row left, so its ARCHIVE.md row is its last derived trace, and deleting
+ * that on a state edit left a live work-stream in no index at all. This function only ever
+ * appends. The stale row is a reporting problem, and `validateItem` reports it from the
+ * file, where the condition is actually visible. */
 export function reconcileArchiveRows(archiveText: string, archivedItems: ItemFile[]): string {
-  const strandedSlugs = archivedItems.filter((item) => targetFolder(item.state) !== "archive").map((i) => i.slug);
-  const retained = strandedSlugs.length
-    ? archiveText
-        .split("\n")
-        .filter((line) => !strandedSlugs.some((slug) => line.includes(`](archive/${slug}.md)`)))
-        .join("\n")
-    : archiveText;
   const missing = archivedItems.filter(
-    (item) => targetFolder(item.state) === "archive" && !retained.includes(`](archive/${item.slug}.md)`),
+    (item) => targetFolder(item.state) === "archive" && !archiveText.includes(`](archive/${item.slug}.md)`),
   );
-  if (!missing.length) return retained;
+  if (!missing.length) return archiveText;
   const rows = [...missing].sort((a, b) => b.updated.localeCompare(a.updated)).map(archiveRow);
-  const hasTable = retained.includes(ARCHIVE_TABLE_HEADER);
-  const trimmed = retained.replace(/\n+$/, "");
+  const hasTable = archiveText.includes(ARCHIVE_TABLE_HEADER);
+  const trimmed = archiveText.replace(/\n+$/, "");
   const prefix = hasTable ? trimmed : `${trimmed}\n\n${ARCHIVE_TABLE_HEADER}`;
   return `${prefix}\n${rows.join("\n")}\n`;
 }

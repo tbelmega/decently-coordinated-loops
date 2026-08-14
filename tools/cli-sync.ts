@@ -61,7 +61,11 @@ try {
     // `items` below feeds the regenerated board.
     const report = runPreflight(boardText, items, [...forDeliveryItems, ...archiveItems]);
     printPreflightReport(report);
-    printValidationReport(validateItems(allItems));
+    // Archive files are validated too, though sync never moves them: a file stranded there
+    // is the one misplacement no run repairs, and if it was archived the ordinary way there
+    // is no board row left to reveal it. Reporting it from the file is the only way it gets
+    // said at all.
+    printValidationReport(validateItems([...allItems, ...archiveItems]));
 
     let retainedOrphanRows: string[] = [];
     if (report.orphanRows.length) {

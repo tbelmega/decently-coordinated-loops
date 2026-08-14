@@ -3,6 +3,7 @@
 // item files, so typos ("review-merge" as a state, "done", "nobody") would
 // otherwise be bucketed silently. This turns any out-of-set value into a visible
 // anomaly — surfaced by the CLI and failing the check command. Pure: no IO.
+import { currentFolder, targetFolder } from "./archive.ts";
 import type { ItemFile } from "./types.ts";
 
 /** The one authoritative list of `state` values (the loops-board skill). */
@@ -123,6 +124,20 @@ export function validateItem(item: ItemFile): string[] {
   // items). Presence-only: the validator can't verify approval or reachability.
   if (item.state === "spec-filed" && !item.links.spec) {
     messages.push("state spec-filed requires a links.spec entry (the approved spec's location)");
+  }
+
+  // A file in archive/ whose state belongs elsewhere is stranded, and it is the one
+  // misplacement nothing repairs: sync's move planner is fed items/ and for-delivery/, so
+  // no run moves a file back out. Derived from the file alone, deliberately. Preflight
+  // catches the same condition, but only through a BOARD.md row, and an item archived the
+  // ordinary way has no row left - so reopening one by editing its state in place would
+  // otherwise be visible in no index, no report and no queue, with the file itself the
+  // only trace. Everything else the board projects can be recovered from the board; this
+  // cannot, so it is checked where the file is read.
+  if (currentFolder(item.path) === "archive" && targetFolder(item.state) !== "archive") {
+    messages.push(
+      `state "${item.state}" belongs in ${targetFolder(item.state)}/, but the file is in archive/, which sync never moves a file out of — move it back by hand`,
+    );
   }
 
   // A promoted-but-unlanded spec is only reachable through the pair; one without the
