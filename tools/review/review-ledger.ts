@@ -67,6 +67,11 @@ export interface ReviewDisposition {
   /** Owner attribution — required for accepted-as-limitation on P0/P1 findings and for
    * the accepted disposition that reverses a limitation. */
   owner?: boolean;
+  /** Completed-round count when this decision was recorded. An obligation result can
+   * only close the obligation from a round after its creating decision — a terminal
+   * result that pre-dates the decision proves nothing about it. Absent on legacy
+   * dispositions, where the finding's own round is the fallback lower bound. */
+  decidedAfterRound?: number;
 }
 
 export interface LedgerFinding extends Finding {
@@ -206,12 +211,20 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
   if (input.owner !== undefined && typeof input.owner !== "boolean") {
     throw new Error(`${path}.owner must be a boolean when present`);
   }
+  const decidedAfterRound = input.decidedAfterRound;
+  if (
+    decidedAfterRound !== undefined &&
+    (typeof decidedAfterRound !== "number" || !Number.isInteger(decidedAfterRound) || decidedAfterRound < 0)
+  ) {
+    throw new Error(`${path}.decidedAfterRound must be a non-negative integer when present`);
+  }
   const doc = optionalString(input, "doc", path);
   return {
     kind,
     reason: requiredString(input, "reason", path),
     ...(doc ? {doc} : {}),
     ...(input.owner === true ? {owner: true} : {}),
+    ...(typeof decidedAfterRound === "number" ? {decidedAfterRound} : {}),
   };
 }
 
@@ -263,22 +276,43 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
     const findings = parsedReview.findings.map((finding, findingIndex): LedgerFinding => {
       const findingInput = roundFindings[findingIndex];
       if (!isRecord(findingInput)) throw new Error(`${path}.findings[${findingIndex}] must be an object`);
-      const disposition = parseDisposition(findingInput.disposition, `${path}.findings[${findingIndex}].disposition`);
+      const findingPath = `${path}.findings[${findingIndex}]`;
+      const disposition = parseDisposition(findingInput.disposition, `${findingPath}.disposition`);
       if (disposition) {
-        assertDecisionInvariants(disposition, finding.priority, `${path}.findings[${findingIndex}].disposition`);
+        assertDecisionInvariants(disposition, finding.priority, `${findingPath}.disposition`);
       }
       if (findingInput.history !== undefined && !Array.isArray(findingInput.history)) {
-        throw new Error(`${path}.findings[${findingIndex}].history must be an array when present`);
+        throw new Error(`${findingPath}.history must be an array when present`);
       }
       const history = Array.isArray(findingInput.history)
         ? findingInput.history.map((entry, historyIndex) => {
-            const historyPath = `${path}.findings[${findingIndex}].history[${historyIndex}]`;
+            const historyPath = `${findingPath}.history[${historyIndex}]`;
             const parsed = parseDisposition(entry, historyPath);
             if (!parsed) throw new Error(`${historyPath} must be an object`);
             assertDecisionInvariants(parsed, finding.priority, historyPath);
             return parsed;
           })
         : undefined;
+      if (history?.length && !disposition) {
+        throw new Error(`${findingPath}.history requires a live disposition to have superseded it`);
+      }
+      // The recorder permits exactly two supersessions; a persisted chain claiming any
+      // other transition is malformed, not merely unusual.
+      const decisions = [...(history ?? []), ...(disposition ? [disposition] : [])];
+      for (let decisionIndex = 0; decisionIndex + 1 < decisions.length; decisionIndex += 1) {
+        const predecessor = decisions[decisionIndex];
+        const successor = decisions[decisionIndex + 1];
+        const permitted =
+          predecessor.kind === "deferred-to-human" ||
+          (predecessor.kind === "accepted-as-limitation" &&
+            successor.kind === "accepted" &&
+            successor.owner === true);
+        if (!permitted) {
+          throw new Error(
+            `${findingPath} has an unsupported disposition supersession: ${predecessor.kind} may only be superseded by ${predecessor.kind === "accepted-as-limitation" ? "an owner-attributed accepted disposition" : "nothing"}`,
+          );
+        }
+      }
       return {
         ...finding,
         id: requiredString(findingInput, "id", `${path}.findings[${findingIndex}]`),
@@ -469,12 +503,10 @@ const terminalStatusByType: Record<ReviewObligationType, "fixed" | "documented">
  * a documentation obligation (terminal: documented). Supersession of the review base
  * never drops these — the rounds carrying the decisions stay in the ledger. */
 export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
-  const terminalResults = new Set(
-    ledger.rounds.flatMap((round) =>
-      round.audit?.obligations
-        .filter((result) => result.status === "fixed" || result.status === "documented")
-        .map((result) => `${result.status}:${result.findingId}`) ?? [],
-    ),
+  const terminalResults = ledger.rounds.flatMap((round) =>
+    round.audit?.obligations
+      .filter((result) => result.status === "fixed" || result.status === "documented")
+      .map((result) => ({round: round.number, key: `${result.status}:${result.findingId}`})) ?? [],
   );
   return ledger.rounds.flatMap((round) =>
     round.findings.flatMap((finding): ReviewObligation[] => {
@@ -482,7 +514,16 @@ export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
       if (!decision || !obligationBearingKinds.includes(decision.kind)) return [];
       const type: ReviewObligationType = decision.kind === "accepted" ? "remediation" : "documentation";
       const id = currentObligationId(finding);
-      if (terminalResults.has(`${terminalStatusByType[type]}:${id}`)) return [];
+      // A result closes the obligation only from a round after its creating decision:
+      // a terminal result that pre-dates the decision (a legacy unsolicited result)
+      // proves nothing about it. Legacy decisions carry no round stamp; the finding's
+      // own round is the lower bound then, since no decision precedes its finding.
+      const decidedAfterRound = decision.decidedAfterRound ?? round.number;
+      const closed = terminalResults.some(
+        (result) =>
+          result.key === `${terminalStatusByType[type]}:${id}` && result.round > decidedAfterRound,
+      );
+      if (closed) return [];
       return [{
         findingId: id,
         type,
@@ -551,6 +592,7 @@ export function recordDisposition(
     reason,
     ...(doc ? {doc} : {}),
     ...(options.owner ? {owner: true} : {}),
+    decidedAfterRound: ledger.rounds.length,
   };
   let found = false;
   const rounds = ledger.rounds.map((round) => ({

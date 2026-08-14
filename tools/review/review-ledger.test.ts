@@ -126,7 +126,7 @@ describe("recordDisposition", () => {
 
   test("records a disposition, then rejects a duplicate and an unknown id", () => {
     const disposed = recordDisposition(seed, "R1-F1", "accepted", "will fix");
-    expect(disposed.rounds[0].findings[0].disposition).toEqual({ kind: "accepted", reason: "will fix" });
+    expect(disposed.rounds[0].findings[0].disposition).toEqual({ kind: "accepted", reason: "will fix", decidedAfterRound: 1 });
     expect(() => recordDisposition(disposed, "R1-F1", "rejected", "no")).toThrow(/already has a disposition/);
     expect(() => recordDisposition(seed, "R9-F9", "accepted", "x")).toThrow(/not found/);
   });
@@ -141,6 +141,7 @@ describe("recordDisposition", () => {
     expect(resolved.rounds[0].findings[0].disposition).toEqual({
       kind: "rejected",
       reason: "owner: not reproducible",
+      decidedAfterRound: 1,
     });
     expect(() => recordDisposition(resolved, "R1-F1", "accepted", "changed my mind")).toThrow(
       /already has a disposition/,
@@ -364,6 +365,7 @@ describe("recordDisposition — accepted-as-limitation", () => {
       kind: "accepted-as-limitation",
       reason: "cost exceeds the documented bar",
       doc: "docs/limits.md",
+      decidedAfterRound: 1,
     });
     expect(() =>
       recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix", {doc: "docs/limits.md"}),
@@ -403,9 +405,10 @@ describe("recordDisposition — accepted-as-limitation", () => {
       kind: "accepted",
       reason: "owner ruled: fix it",
       owner: true,
+      decidedAfterRound: 1,
     });
     expect(reversed.rounds[0].findings[0].history).toEqual([
-      {kind: "accepted-as-limitation", reason: "cost exceeds bar", doc: "docs/limits.md"},
+      {kind: "accepted-as-limitation", reason: "cost exceeds bar", doc: "docs/limits.md", decidedAfterRound: 1},
     ]);
   });
 
@@ -413,7 +416,7 @@ describe("recordDisposition — accepted-as-limitation", () => {
     const deferred = recordDisposition(seededLedger(p2Finding), "R1-F1", "deferred-to-human", "owner call");
     const resolved = recordDisposition(deferred, "R1-F1", "rejected", "owner: not reproducible");
     expect(resolved.rounds[0].findings[0].history).toEqual([
-      {kind: "deferred-to-human", reason: "owner call"},
+      {kind: "deferred-to-human", reason: "owner call", decidedAfterRound: 1},
     ]);
   });
 });
@@ -522,6 +525,66 @@ describe("openObligations", () => {
       audit: auditWith([{findingId: "R1-F1#2", status: "fixed", evidence: "boundary rewritten"}]),
     });
     expect(openObligations(confirmed)).toEqual([]);
+  });
+});
+
+describe("openObligations — result ordering", () => {
+  test("a terminal result recorded before its decision cannot close the obligation", () => {
+    // Legacy shape: the old validator accepted unsolicited results, so a round can
+    // carry a terminal result for a finding whose obligation a LATER decision creates.
+    let ledger = seededLedger(p2Finding);
+    ledger = {
+      ...ledger,
+      rounds: [{...ledger.rounds[0], audit: auditWith([{findingId: "R1-F1", status: "fixed", evidence: "unsolicited"}])}],
+    };
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    expect(openObligations(ledger)).toHaveLength(1);
+  });
+
+  test("stamps the deciding round on a new disposition so only later results close it", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    expect(ledger.rounds[0].findings[0].disposition?.decidedAfterRound).toBe(1);
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "clean", findings: []},
+      audit: auditWith([{findingId: "R1-F1", status: "fixed", evidence: "verified"}]),
+    });
+    expect(openObligations(ledger)).toEqual([]);
+  });
+});
+
+describe("parseReviewLedger — supersession sequence", () => {
+  test("rejects a persisted reversal that lacks owner attribution", () => {
+    const reversed = JSON.parse(
+      JSON.stringify(
+        recordDisposition(
+          recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "below the bar", {
+            doc: "docs/limits.md",
+          }),
+          "R1-F1",
+          "accepted",
+          "owner ruled: fix it",
+          {owner: true},
+        ),
+      ),
+    );
+    delete reversed.rounds[0].findings[0].disposition.owner;
+    expect(() => parseReviewLedger(reversed)).toThrow(/owner/);
+  });
+
+  test("rejects an unsupported history transition and history without a live decision", () => {
+    const rejectedThenAccepted = JSON.parse(
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+    );
+    rejectedThenAccepted.rounds[0].findings[0].history = [{kind: "rejected", reason: "not real"}];
+    expect(() => parseReviewLedger(rejectedThenAccepted)).toThrow(/supersession|superseded/);
+
+    const orphanHistory = JSON.parse(JSON.stringify(seededLedger(p2Finding)));
+    orphanHistory.rounds[0].findings[0].history = [{kind: "deferred-to-human", reason: "owner call"}];
+    expect(() => parseReviewLedger(orphanHistory)).toThrow(/history/);
   });
 });
 

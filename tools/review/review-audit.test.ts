@@ -236,6 +236,19 @@ describe("parseReviewPass", () => {
     ).toThrow(/R9-F9/);
   });
 
+  test("rejects duplicate obligation result ids within one pass", () => {
+    // A contradictory response (documented AND incomplete for the same obligation) must
+    // not let the terminal half retire the obligation.
+    const contradictory = passResult("diff") as Record<string, unknown>;
+    contradictory.obligations = [
+      {findingId: "R1-F2", status: "documented", evidence: "covers it"},
+      {findingId: "R1-F2", status: "incomplete", evidence: "misses the crash path"},
+    ];
+    expect(() =>
+      parseReviewPass(contradictory, "diff", manifest, [{findingId: "R1-F2", type: "documentation"}]),
+    ).toThrow(/duplicate/);
+  });
+
   test("rejects a terminal status recorded against the wrong obligation type", () => {
     const documentedRemediation = passResult("diff") as Record<string, unknown>;
     documentedRemediation.obligations = [{findingId: "R1-F1", status: "documented", evidence: "wrong"}];

@@ -211,6 +211,11 @@ export function parseReviewPass(
       throw new Error(`open obligation ${required.findingId} is missing a classification`);
     }
   }
+  if (new Set(rawObligations.map((obligation) => obligation.findingId)).size !== rawObligations.length) {
+    // A contradictory response (documented AND incomplete for one obligation) must not
+    // let the terminal half retire it.
+    throw new Error("obligations must not contain duplicate findingIds");
+  }
   const obligations = rawObligations.map((obligation): ReviewObligationResult => {
     const required = requiredById.get(obligation.findingId);
     // An unsolicited result could pre-close an obligation a later decision creates —
@@ -289,11 +294,17 @@ export function combineReviewPasses(
       });
     }
   }
+  const terminalStatuses: readonly ReviewObligationResult["status"][] = ["fixed", "documented"];
   const obligationsById = new Map<string, ReviewObligationResult>();
   for (const passResult of passResults) {
     for (const obligation of passResult.obligations) {
       const existing = obligationsById.get(obligation.findingId);
-      if (!existing || (existing.status === "fixed" && obligation.status !== "fixed")) {
+      // A non-terminal classification always beats a terminal one — a disagreement
+      // between passes must keep the obligation open, whatever its type.
+      if (
+        !existing ||
+        (terminalStatuses.includes(existing.status) && !terminalStatuses.includes(obligation.status))
+      ) {
         obligationsById.set(obligation.findingId, obligation);
       }
     }

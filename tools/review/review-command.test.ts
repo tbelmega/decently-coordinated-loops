@@ -1007,6 +1007,7 @@ describe("cli-review start", () => {
       kind: "accepted-as-limitation",
       reason: "below the documented bar",
       doc: "docs/limits.md",
+      decidedAfterRound: 1,
     });
 
     const withoutOwner = runDisposition(repository, item, "R1-F2", "accepted-as-limitation", "too costly", [
@@ -1196,9 +1197,10 @@ describe("cli-review start", () => {
       kind: "accepted",
       reason: "owner ruled: fix it",
       owner: true,
+      decidedAfterRound: 2,
     });
     expect(reversed.rounds[0].findings[0].history).toEqual([
-      {kind: "accepted-as-limitation", reason: "below the bar", doc: "docs/limits.md"},
+      {kind: "accepted-as-limitation", reason: "below the bar", doc: "docs/limits.md", decidedAfterRound: 1},
     ]);
 
     const unchangedHead = runStart(repository, dataRepo, item);
