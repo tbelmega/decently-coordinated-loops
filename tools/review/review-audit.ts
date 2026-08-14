@@ -24,6 +24,11 @@ export interface ReviewObligationResult {
 export interface AuditFinding extends Finding {
   origin: FindingOrigin;
   obligationId?: string;
+  /** Every obligation this one finding answers. One defect reported once per pass becomes
+   * several accepted findings and therefore several obligations, and a single follow-up
+   * finding has to be able to keep all of them actionable. `obligationId` stays the
+   * primary for existing readers; this is the full set including it. */
+  obligationIds?: string[];
 }
 
 export interface ReviewPassResult {
@@ -247,10 +252,22 @@ export function parseReviewPass(
     if (obligationId !== undefined && obligationId !== null && typeof obligationId !== "string") {
       throw new Error(`findings[${index}].obligationId must be a string when present`);
     }
+    const rawObligationIds = rawFinding.obligationIds;
+    if (rawObligationIds !== undefined && rawObligationIds !== null) {
+      if (
+        !Array.isArray(rawObligationIds) ||
+        rawObligationIds.some((value) => typeof value !== "string" || value.length === 0)
+      ) {
+        throw new Error(`findings[${index}].obligationIds must be an array of non-empty strings`);
+      }
+    }
+    const primary = typeof obligationId === "string" && obligationId.length > 0 ? [obligationId] : [];
+    const listed = Array.isArray(rawObligationIds) ? (rawObligationIds as string[]) : [];
+    const obligationIds = [...new Set([...primary, ...listed])];
     return {
       ...finding,
       origin: rawFinding.origin,
-      ...(typeof obligationId === "string" && obligationId.length > 0 ? {obligationId} : {}),
+      ...(obligationIds.length > 0 ? {obligationId: obligationIds[0], obligationIds} : {}),
     };
   });
   const coveredInstructionFiles = parseStringArray(input.coverage.instructionFiles, "coverage.instructionFiles");
@@ -283,6 +300,13 @@ export function combineReviewPasses(
       if (existing) {
         if (!existing.passes.includes(passResult.pass)) existing.passes.push(passResult.pass);
         if (existing.origin !== finding.origin) existing.origin = "unknown";
+        // Passes may thread the same finding to different subsets of the duplicate
+        // obligations; the union is what keeps every one of them answered.
+        const merged = [...new Set([...(existing.obligationIds ?? []), ...(finding.obligationIds ?? [])])];
+        if (merged.length > 0) {
+          existing.obligationIds = merged;
+          existing.obligationId = merged[0];
+        }
         continue;
       }
       const repeatedFrom = priorFindings.filter((prior) => prior.identity === identity).map((prior) => prior.id);

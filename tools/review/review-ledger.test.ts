@@ -57,6 +57,37 @@ describe("addReviewRound", () => {
     expect(ledger.rounds[1].findings[0].id).toBe("R2-F1");
   });
 
+  test("survives a ledger round-trip with every obligation a finding answered", () => {
+    // A finding may answer several duplicate obligations at once. If the decoder drops the
+    // set, the very next disposition or start rewrites the ledger with only the primary,
+    // so the audit record silently stops saying which siblings were kept actionable.
+    const ledger = addReviewRound(
+      createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"}),
+      {
+        headSha: "h1",
+        model: "m",
+        reviewedAt: "t1",
+        review: {
+          summary: "one root cause, three obligations",
+          findings: [{
+            priority: "P1",
+            title: "The shared root cause is still open",
+            evidence: "unchanged",
+            impact: "lost update",
+            direction: "make the write conditional",
+            confidence: "high",
+            origin: "remediation",
+            obligationId: "R1-F1",
+            obligationIds: ["R1-F1", "R1-F2", "R1-F3"],
+          }],
+        },
+      },
+    );
+    const parsed = parseReviewLedger(JSON.parse(JSON.stringify(ledger)));
+    expect(parsed.rounds[0].findings[0].obligationIds).toEqual(["R1-F1", "R1-F2", "R1-F3"]);
+    expect(renderReviewLedger(parsed)).toContain("R1-F1, R1-F2, R1-F3");
+  });
+
   test("persists structured audit evidence while legacy rounds remain readable", () => {
     const audit: ReviewRoundAudit = {
       kind: "full",

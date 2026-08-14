@@ -66,12 +66,12 @@ export function reviewPrompt(input: ReviewPromptInput): string {
       : []),
     ...(input.classifyObligations && input.obligations.some((obligation) => obligation.type === "remediation")
       ? [
-          "Accepted findings are remediation obligations. This pass must classify every remediation obligation as fixed, incomplete, or regressed with concrete evidence; each incomplete or regressed obligation must remain an actionable finding whose obligationId names it.",
+          "Accepted findings are remediation obligations. This pass must classify every remediation obligation as fixed, incomplete, or regressed with concrete evidence; each incomplete or regressed obligation must remain an actionable finding whose obligationId names it. When one defect produced several obligations, one finding may answer them all by listing every id in obligationIds - do not leave a sibling unnamed, and do not invent a separate finding per id.",
         ]
       : []),
     ...(input.classifyObligations && input.obligations.some((obligation) => obligation.type === "documentation")
       ? [
-          "For documentation obligations correctness is conceded — the finding is factually correct and the fix was declined against the component's documented assurance bar, so do not re-prove the defect. Verify instead that the DOCUMENTATION_ARTIFACT content honestly covers the finding's limitation, and classify each documentation obligation as documented, incomplete, or regressed; each incomplete or regressed one must remain an actionable finding whose obligationId names it. Challenge the disposition itself only if the finding's impact exceeds what the cited contract admits.",
+          "For documentation obligations correctness is conceded — the finding is factually correct and the fix was declined against the component's documented assurance bar, so do not re-prove the defect. Verify instead that the DOCUMENTATION_ARTIFACT content honestly covers the finding's limitation, and classify each documentation obligation as documented, incomplete, or regressed; each incomplete or regressed one must remain an actionable finding whose obligationId names it, or whose obligationIds list it among the siblings it answers. Challenge the disposition itself only if the finding's impact exceeds what the cited contract admits.",
         ]
       : []),
     ...(input.docArtifacts ?? []).map(

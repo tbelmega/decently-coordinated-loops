@@ -641,9 +641,26 @@ async function startReview(options: StartOptions): Promise<void> {
         const obligation = obligations.find((open) => open.findingId === result.findingId);
         const terminal = obligation?.type === "documentation" ? "documented" : "fixed";
         if (result.status === terminal) continue;
-        if (!combined.findings.some((finding) => finding.obligationId === result.findingId)) {
+        // A finding answers every obligation it names, not just its primary. One defect
+        // reported once per pass yields several obligations, and the reviewer's single
+        // follow-up must be able to keep all of them actionable at once.
+        const answered = combined.findings.some((finding) =>
+          (finding.obligationIds ?? (finding.obligationId ? [finding.obligationId] : [])).includes(
+            result.findingId,
+          ),
+        );
+        if (!answered) {
+          // Name the pass: with duplicates the operator otherwise cannot see which pass
+          // disagreed, and the reason string is all the ledger keeps of a failed attempt.
+          const source = passResults.find((passResult) =>
+            passResult.obligations.some(
+              (candidate) => candidate.findingId === result.findingId && candidate.status !== terminal,
+            ),
+          )?.pass;
           throw new Error(
-            `incomplete or regressed obligation ${result.findingId} must remain an actionable finding`,
+            `incomplete or regressed obligation ${result.findingId} must remain an actionable finding${
+              source ? ` (reported by the ${source} pass)` : ""
+            }`,
           );
         }
       }

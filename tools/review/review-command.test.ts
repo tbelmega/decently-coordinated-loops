@@ -674,6 +674,106 @@ describe("cli-review start", () => {
     expect(result.stderr).toContain("R1-F1 must remain an actionable finding");
   });
 
+  test("keeps sibling obligations answered by one finding that names them all", () => {
+    // Measured on real reviews, three times across two changes: one defect reported once
+    // per pass becomes several accepted findings, so the next round carries several
+    // obligations for it. The reviewer marks the whole set incomplete and attaches its
+    // single follow-up to one id; the siblings then failed the round and burned a full
+    // frontier-model run. Naming them all must be accepted.
+    const {repository, baseSha, headSha} = createReviewRepository();
+    const item = "duplicate-obligations";
+    const dataRepo = createReviewDataRepo(5);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), {recursive: true});
+    const finding = (title: string) => ({
+      priority: "P1" as const,
+      title,
+      evidence: "broken",
+      impact: "incorrect",
+      direction: "fix it",
+      confidence: "high" as const,
+    });
+    let ledger = addReviewRound(
+      createReviewLedger({item, branch: "feature/review-receipt", baseRef: baseSha, baseSha}),
+      {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: "2026-07-23T12:00:00Z",
+        review: {summary: "fix", findings: [finding("Defect as the diff pass saw it"), finding("Defect as the adversarial pass saw it")]},
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "R1-F2", "accepted", "same defect, will fix with R1-F1");
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    writeFileSync(`${repository}/change.txt`, "review me\nfix attempt\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Attempt fix"]);
+
+    const followUp = {
+      priority: "P1",
+      title: "The shared root cause is still open",
+      file: "change.txt",
+      line: 2,
+      evidence: "the conditional write is still missing",
+      impact: "lost update",
+      direction: "make the write conditional",
+      confidence: "high",
+      origin: "remediation",
+      obligationIds: ["R1-F1", "R1-F2"],
+    };
+    const result = runStart(repository, dataRepo, item, baseSha, {
+      FAKE_OBLIGATION_STATUS: "incomplete",
+      FAKE_FINDINGS_JSON: JSON.stringify([followUp]),
+    });
+
+    expect(result.status).toBe(0);
+    const recorded = readLedgerJson(repository, item);
+    expect(recorded.rounds).toHaveLength(2);
+    expect(recorded.rounds[1].findings[0].obligationIds).toEqual(["R1-F1", "R1-F2"]);
+
+    // The first write is not the test: any later command reloads and rewrites the whole
+    // ledger, and a decoder that drops the set would silently reduce the audit record to
+    // the primary id from then on.
+    expect(runDisposition(repository, item, "R2-F1", "accepted", "fix the root cause").status).toBe(0);
+    const afterRewrite = readLedgerJson(repository, item);
+    expect(afterRewrite.rounds[1].findings[0].obligationIds).toEqual(["R1-F1", "R1-F2"]);
+    expect(readFileSync(reviewEvidencePaths(repository, "feature/review-receipt", item).markdownPath, "utf8"))
+      .toContain("R1-F1, R1-F2");
+  });
+
+  test("names the pass whose classification left an obligation unanswered", () => {
+    const {repository, baseSha, headSha} = createReviewRepository();
+    const item = "unanswered-names-pass";
+    const dataRepo = createReviewDataRepo(5);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), {recursive: true});
+    let ledger = addReviewRound(
+      createReviewLedger({item, branch: "feature/review-receipt", baseRef: baseSha, baseSha}),
+      {
+        headSha,
+        model: "codex (default)",
+        reviewedAt: "2026-07-23T12:00:00Z",
+        review: {summary: "fix", findings: [{
+          priority: "P1" as const,
+          title: "Defect",
+          evidence: "broken",
+          impact: "incorrect",
+          direction: "fix it",
+          confidence: "high" as const,
+        }]},
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    writeFileSync(`${repository}/change.txt`, "review me\nfix attempt\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Attempt fix"]);
+
+    const result = runStart(repository, dataRepo, item, baseSha, {FAKE_OBLIGATION_STATUS: "incomplete"});
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("reported by the diff pass");
+  });
+
   test("records a remediation round whose coverage unions the fix-delta hunks", () => {
     const {repository, baseSha, headSha} = createReviewRepository();
     const item = "remediation-union-coverage";

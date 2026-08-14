@@ -40,6 +40,10 @@ export interface Finding {
   identity?: string;
   firstSeenRound?: number;
   obligationId?: string;
+  /** Every obligation this finding answers, primary first. Several accepted findings can
+   * describe one defect, and a single follow-up keeps all of them actionable; the audit
+   * record has to say which, so this is persisted rather than derived. */
+  obligationIds?: string[];
   repeatedFrom?: string[];
 }
 
@@ -381,6 +385,9 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       if (findingInput.repeatedFrom !== undefined && !isStringArray(findingInput.repeatedFrom)) {
         throw new Error(`${findingPath}.repeatedFrom must be an array of strings when present`);
       }
+      if (findingInput.obligationIds !== undefined && !isStringArray(findingInput.obligationIds)) {
+        throw new Error(`${findingPath}.obligationIds must be an array of strings when present`);
+      }
       return {
         ...finding,
         id: requiredString(findingInput, "id", findingPath),
@@ -393,6 +400,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
         ...(optionalString(findingInput, "obligationId", findingPath)
           ? {obligationId: String(findingInput.obligationId)}
           : {}),
+        ...(isStringArray(findingInput.obligationIds) ? {obligationIds: findingInput.obligationIds} : {}),
         ...(isStringArray(findingInput.repeatedFrom) ? {repeatedFrom: findingInput.repeatedFrom} : {}),
         ...(disposition ? { disposition } : {}),
         ...(history?.length ? {history} : {}),
@@ -832,7 +840,9 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         ...(finding.passes?.length ? [`- Passes: ${finding.passes.join(", ")}`] : []),
         ...(finding.repeatedFrom?.length ? [`- Repeated from: ${finding.repeatedFrom.join(", ")}`] : []),
         ...(finding.firstSeenRound ? [`- First seen round: ${finding.firstSeenRound}`] : []),
-        ...(finding.obligationId ? [`- Remediation obligation: ${finding.obligationId}`] : []),
+        ...(finding.obligationId
+          ? [`- Remediation obligation: ${(finding.obligationIds ?? [finding.obligationId]).join(", ")}`]
+          : []),
         `- Evidence: ${finding.evidence}`,
         `- Impact: ${finding.impact}`,
         `- Direction: ${finding.direction}`,

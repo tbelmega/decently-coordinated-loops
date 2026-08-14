@@ -240,6 +240,31 @@ describe("parseReviewPass", () => {
     ).toThrow(/R9-F9/);
   });
 
+  test("carries obligationIds so one finding can cover several duplicate obligations", () => {
+    // One defect reported once per pass becomes several accepted findings, so the next
+    // round carries several obligations for it. The reviewer's single follow-up finding
+    // must be able to name all of them; naming one and leaving the siblings unnamed
+    // discarded otherwise-substantive rounds in practice, repeatedly.
+    const input = passResult("diff") as {obligations: unknown[]; findings: Record<string, unknown>[]};
+    input.obligations = [
+      {findingId: "R1-F1", status: "incomplete", evidence: "still races"},
+      {findingId: "R1-F3", status: "incomplete", evidence: "still races"},
+    ];
+    input.findings[0].origin = "remediation";
+    input.findings[0].obligationIds = ["R1-F1", "R1-F3"];
+    const parsed = parseReviewPass(input, "diff", manifest, [
+      {findingId: "R1-F1", type: "remediation"},
+      {findingId: "R1-F3", type: "remediation"},
+    ]);
+    expect(parsed.findings[0].obligationIds).toEqual(["R1-F1", "R1-F3"]);
+  });
+
+  test("rejects an obligationIds entry that is not a non-empty string", () => {
+    const input = passResult("diff") as {findings: Record<string, unknown>[]};
+    input.findings[0].obligationIds = ["R1-F1", ""];
+    expect(() => parseReviewPass(input, "diff", manifest, [])).toThrow(/obligationIds/);
+  });
+
   test("rejects duplicate obligation result ids within one pass", () => {
     // A contradictory response (documented AND incomplete for the same obligation) must
     // not let the terminal half retire the obligation.

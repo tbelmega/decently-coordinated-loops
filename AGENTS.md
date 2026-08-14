@@ -37,3 +37,11 @@ the workflow, that's the skills under `skills/`.)
   test relies on it.
 - Keep skills tight. Mechanism rules belong in skills; owner-specific policy
   belongs in the seeded `HOUSE-RULES.md` extension points, not hardcoded.
+- **Branches in this repository are managed by hand, not by agents.** Commit on the
+  branch the worktree you were given is already on, and never create, switch, or
+  delete a branch here - that includes the per-item branches the `loops-pickup`
+  skill describes for other projects, which this repository does not use. Its
+  branches change rarely and never in parallel, so the repository owner does that
+  work manually; an agent that adds one leaves cleanup nobody asked for. The
+  immutable `base-sha`/`head-sha` range on the tracked item is what separates one
+  item's work from the next here.

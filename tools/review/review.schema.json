@@ -45,7 +45,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["priority", "title", "file", "line", "evidence", "impact", "direction", "confidence", "origin", "obligationId"],
+        "required": ["priority", "title", "file", "line", "evidence", "impact", "direction", "confidence", "origin", "obligationId", "obligationIds"],
         "properties": {
           "priority": { "enum": ["P0", "P1", "P2", "P3"] },
           "title": { "type": "string", "minLength": 1 },
@@ -56,7 +56,8 @@
           "direction": { "type": "string", "minLength": 1 },
           "confidence": { "enum": ["high", "medium", "low"] },
           "origin": { "enum": ["original", "remediation", "base-delta", "unknown"] },
-          "obligationId": { "type": ["string", "null"], "minLength": 1 }
+          "obligationId": { "type": ["string", "null"], "minLength": 1 },
+          "obligationIds": { "type": ["array", "null"], "items": { "type": "string", "minLength": 1 } }
         }
       }
     }
