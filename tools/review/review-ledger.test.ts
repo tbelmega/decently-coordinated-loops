@@ -616,14 +616,26 @@ describe("parseReviewLedger — decision ordering and result types", () => {
     expect(() => parseReviewLedger(ledger)).toThrow(/audit/);
   });
 
-  test("rejects persisted step-back evidence with a bad path or a wrong trigger pair", () => {
-    function threeRoundsWithStepBack(stepBack: {path: string; triggerRounds: [number, number]}): unknown {
-      let ledger = seededLedger(p2Finding);
-      ledger = recordDisposition(ledger, "R1-F1", "rejected", "not reproducible");
-      ledger = addReviewRound(ledger, {headSha: "h2", model: "m", reviewedAt: "t2", review: {summary: "r2", findings: []}});
-      ledger = addReviewRound(ledger, {headSha: "h3", model: "m", reviewedAt: "t3", review: {summary: "r3", findings: []}, stepBack});
-      return JSON.parse(JSON.stringify(ledger));
+  function threeRoundsWithStepBack(
+    stepBack: {path: string; triggerRounds: [number, number]},
+    dominated = true,
+  ): unknown {
+    const churn = {...p2Finding, origin: "remediation" as const};
+    let ledger = createReviewLedger({branch: "f", baseRef: "master", baseSha: "b"});
+    for (const roundNumber of [1, 2]) {
+      ledger = addReviewRound(ledger, {
+        headSha: `h${roundNumber}`,
+        model: "m",
+        reviewedAt: `t${roundNumber}`,
+        review: {summary: `r${roundNumber}`, findings: [dominated ? churn : p2Finding]},
+      });
+      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "not reproducible");
     }
+    ledger = addReviewRound(ledger, {headSha: "h3", model: "m", reviewedAt: "t3", review: {summary: "r3", findings: []}, stepBack});
+    return JSON.parse(JSON.stringify(ledger));
+  }
+
+  test("rejects persisted step-back evidence with a bad path or a wrong trigger pair", () => {
     expect(() =>
       parseReviewLedger(threeRoundsWithStepBack({path: "../outside.md", triggerRounds: [1, 2]})),
     ).toThrow(/repository-relative/);
@@ -632,6 +644,55 @@ describe("parseReviewLedger — decision ordering and result types", () => {
     ).toThrow(/trigger/);
     const valid = parseReviewLedger(threeRoundsWithStepBack({path: "docs/step-back.md", triggerRounds: [1, 2]}));
     expect(valid.rounds[2].stepBack).toEqual({path: "docs/step-back.md", triggerRounds: [1, 2]});
+  });
+
+  test("rejects a persisted step-back whose trigger pair is not remediation-dominated", () => {
+    expect(() =>
+      parseReviewLedger(threeRoundsWithStepBack({path: "docs/step-back.md", triggerRounds: [1, 2]}, false)),
+    ).toThrow(/dominated/);
+  });
+
+  test("requires the round stamp on decisions that cannot be legacy data", () => {
+    const limitationWithoutStamp = JSON.parse(
+      JSON.stringify(
+        recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "below the bar", {
+          doc: "docs/limits.md",
+        }),
+      ),
+    );
+    delete limitationWithoutStamp.rounds[0].findings[0].disposition.decidedAfterRound;
+    expect(() => parseReviewLedger(limitationWithoutStamp)).toThrow(/decidedAfterRound/);
+
+    const reversalWithoutStamp = JSON.parse(
+      JSON.stringify(
+        recordDisposition(
+          recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "below the bar", {
+            doc: "docs/limits.md",
+          }),
+          "R1-F1",
+          "accepted",
+          "owner ruled: fix it",
+          {owner: true},
+        ),
+      ),
+    );
+    delete reversalWithoutStamp.rounds[0].findings[0].disposition.decidedAfterRound;
+    expect(() => parseReviewLedger(reversalWithoutStamp)).toThrow(/decidedAfterRound/);
+  });
+
+  test("rejects a documented result that omits its obligation type", () => {
+    let ledger = seededLedger(p2Finding);
+    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+      doc: "docs/limits.md",
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "t2",
+      review: {summary: "clean", findings: []},
+      audit: auditWith([{findingId: "R1-F1", status: "documented", evidence: "covered"}]),
+    });
+    expect(() => parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toThrow(/audit/);
   });
 });
 
@@ -831,7 +892,7 @@ describe("supersedeLedgerBase and liveRounds", () => {
   });
 
   test("round-trips supersessions, decision history, step-back, doc, and owner through parse", () => {
-    let ledger = seededLedger(p2Finding);
+    let ledger = seededLedger({...p2Finding, origin: "remediation"});
     ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
@@ -840,7 +901,7 @@ describe("supersedeLedgerBase and liveRounds", () => {
       headSha: "h2",
       model: "m",
       reviewedAt: "t2",
-      review: {summary: "second", findings: []},
+      review: {summary: "second churn", findings: [{...p2Finding, title: "second churn", origin: "remediation"}]},
     });
     ledger = supersedeLedgerBase(ledger, {
       baseRef: "master",

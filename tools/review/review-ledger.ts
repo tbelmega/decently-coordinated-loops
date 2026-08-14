@@ -235,6 +235,11 @@ function assertDecisionInvariants(decision: ReviewDisposition, priority: Priorit
     if (!decision.doc) {
       throw new Error(`${path} is accepted-as-limitation and must carry a doc path`);
     }
+    // No legacy writer existed for this kind, so a missing round stamp is
+    // malformation — the legacy fallback must never apply to it.
+    if (decision.decidedAfterRound === undefined) {
+      throw new Error(`${path} is accepted-as-limitation and must carry decidedAfterRound`);
+    }
     if (decision.doc !== validateEvidencePath(decision.doc)) {
       throw new Error(`${path}.doc must be a normalized repository-relative path`);
     }
@@ -311,6 +316,18 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       // The recorder permits exactly two supersessions; a persisted chain claiming any
       // other transition is malformed, not merely unusual.
       const decisions = [...(history ?? []), ...(disposition ? [disposition] : [])];
+      // Supersession chains post-date the legacy era too: every member was recorded by
+      // a stamping recorder, so an omitted stamp anywhere in a chain is malformation
+      // that would otherwise re-open the legacy ordering fallback.
+      if (decisions.length > 1) {
+        for (const [decisionIndex, decision] of decisions.entries()) {
+          if (decision.decidedAfterRound === undefined) {
+            throw new Error(
+              `${findingPath} decision ${decisionIndex} belongs to a supersession chain and must carry decidedAfterRound`,
+            );
+          }
+        }
+      }
       for (const decision of decisions) {
         // No decision can be recorded before its finding's round exists or after more
         // rounds than the ledger holds — a forged stamp would let a pre-decision
@@ -407,6 +424,18 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
         };
       })
     : undefined;
+  // A step-back record claims its trigger pair armed the tripwire; the referenced
+  // rounds' own findings are in this ledger, so an untriggered claim is detectable
+  // malformation, not trusted history.
+  for (const round of rounds) {
+    if (!round.stepBack) continue;
+    const [older, newer] = round.stepBack.triggerRounds.map((number) => rounds[number - 1]);
+    if (!isRemediationDominated(older) || !isRemediationDominated(newer)) {
+      throw new Error(
+        `rounds[${round.number - 1}].stepBack references trigger rounds that are not both remediation-dominated`,
+      );
+    }
+  }
   if (input.supersessions !== undefined && !Array.isArray(input.supersessions)) {
     throw new Error("review ledger supersessions must be an array when present");
   }
@@ -518,11 +547,16 @@ export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): Revi
 //   5. Persisted decision state is parser-enforced, not only recorder-enforced: doc
 //      presence and shape, P0/P1 owner attribution, the permitted supersession chain,
 //      and each decision's round stamp (bounded by the finding's round and the round
-//      count, monotonic along the chain) hold for live decisions and history alike.
+//      count, monotonic along the chain, and MANDATORY for decisions no legacy writer
+//      could have produced - a limitation, or any member of a supersession chain)
+//      hold for live decisions and history alike. A persisted step-back record must
+//      reference the immediately preceding round pair and that pair must actually
+//      satisfy the tripwire predicate.
 //   6. Base supersession resets round mechanics only; decisions, obligations, and
 //      tripwire state carry forward by construction.
 //   7. Each persisted result carries its obligation type; a result whose status
-//      contradicts its stamped type is malformation and never closes anything.
+//      contradicts its stamped type is malformation, and a documented result must
+//      always carry its type (no legacy writer existed for that status).
 //
 // Trust boundary (accepted-as-limitation, 2026-08-14; also the step-back analysis for
 // the tripwire the containment spec's own review rounds 2 and 3 armed):
@@ -616,6 +650,11 @@ export type TripwireState = {armed: false} | {armed: true; rounds: [TripwireRoun
  * strictly more than half carry `origin: remediation`. The tripwire arms when the two
  * most recently completed rounds are both dominated. It reads the full round history —
  * base supersession resets round mechanics, not containment state. */
+function isRemediationDominated(round: Pick<ReviewRound, "findings">): boolean {
+  const remediationCount = round.findings.filter((finding) => finding.origin === "remediation").length;
+  return round.findings.length > 0 && remediationCount * 2 > round.findings.length;
+}
+
 export function remediationChurnTripwire(ledger: ReviewLedger): TripwireState {
   if (ledger.rounds.length < 2) return {armed: false};
   const [older, newer] = ledger.rounds.slice(-2).map((round): TripwireRound => ({
@@ -893,9 +932,10 @@ function isReviewObligationResult(input: unknown): input is ReviewObligationResu
     typeof input.evidence === "string" &&
     (input.type === undefined || input.type === "remediation" || input.type === "documentation") &&
     // A terminal status belongs to exactly one obligation type; a contradictory stamp
-    // is malformation, not data.
+    // is malformation, not data. `documented` post-dates the legacy era entirely, so
+    // it must always carry its type.
     !(input.status === "fixed" && input.type === "documentation") &&
-    !(input.status === "documented" && input.type === "remediation")
+    !(input.status === "documented" && input.type !== "documentation")
   );
 }
 
