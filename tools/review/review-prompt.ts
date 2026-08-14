@@ -59,6 +59,11 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     "coverage.instructionFiles must repeat every path in the manifest's instructionFiles, including files you judged irrelevant to this change. It records that you considered the repository's instructions, so any deviation from that exact set invalidates the round.",
     "Report every actionable correctness, security, data-loss, concurrency, compatibility, accessibility, or material maintainability defect; omit style preferences.",
     "Classify each finding origin as original, remediation, base-delta, or unknown.",
+    ...(!input.classifyObligations && input.obligations.length > 0
+      ? [
+          "Obligations are shown for context only in this pass. Do not classify them here — return an empty obligations array; a designated pass records the classifications.",
+        ]
+      : []),
     ...(input.classifyObligations && input.obligations.some((obligation) => obligation.type === "remediation")
       ? [
           "Accepted findings are remediation obligations. This pass must classify every remediation obligation as fixed, incomplete, or regressed with concrete evidence; each incomplete or regressed obligation must remain an actionable finding whose obligationId names it.",

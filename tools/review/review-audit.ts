@@ -216,20 +216,25 @@ export function parseReviewPass(
     // let the terminal half retire it.
     throw new Error("obligations must not contain duplicate findingIds");
   }
-  const obligations = rawObligations.map((obligation): ReviewObligationResult => {
-    const required = requiredById.get(obligation.findingId);
-    // An unsolicited result could pre-close an obligation a later decision creates —
-    // results may only exist for obligations that were open when this round ran.
-    if (!required) {
-      throw new Error(`obligation result ${obligation.findingId} was not required by this pass`);
-    }
-    if (!validStatusesByType[required.type].includes(obligation.status)) {
-      throw new Error(
-        `obligation ${obligation.findingId} is a ${required.type} obligation and cannot be classified ${obligation.status}`,
-      );
-    }
-    return {...obligation, type: required.type};
-  });
+  // No result may be PERSISTED for an obligation that was not open when this round
+  // ran — an unsolicited result could pre-close an obligation a later decision
+  // creates. A pass that was never asked to classify may still echo classifications
+  // (the prompt shows every obligation to every pass), so its results are discarded
+  // rather than fatal; on the classifying pass an unknown id stays an audit error.
+  const obligations = requiredObligations.length === 0
+    ? []
+    : rawObligations.map((obligation): ReviewObligationResult => {
+        const required = requiredById.get(obligation.findingId);
+        if (!required) {
+          throw new Error(`obligation result ${obligation.findingId} was not required by this pass`);
+        }
+        if (!validStatusesByType[required.type].includes(obligation.status)) {
+          throw new Error(
+            `obligation ${obligation.findingId} is a ${required.type} obligation and cannot be classified ${obligation.status}`,
+          );
+        }
+        return {...obligation, type: required.type};
+      });
   if (!Array.isArray(input.findings)) throw new Error("findings must be an array");
   const rawFindings = input.findings;
   const parsedReview = parseReview({summary: input.summary, findings: rawFindings});

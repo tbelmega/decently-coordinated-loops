@@ -219,13 +219,17 @@ describe("parseReviewPass", () => {
     ]);
   });
 
-  test("rejects an obligation result whose id was never required", () => {
-    // An unsolicited result could otherwise pre-close an obligation created by a later
-    // decision — results must post-date the decision that opened their obligation.
-    const unsolicited = passResult("diff") as Record<string, unknown>;
-    unsolicited.obligations = [{findingId: "R9-F9", status: "documented", evidence: "unsolicited"}];
-    expect(() => parseReviewPass(unsolicited, "diff", manifest, [])).toThrow(/R9-F9/);
+  test("keeps unsolicited obligation results out of the record without killing a compliant round", () => {
+    // The invariant is that no result is PERSISTED for an obligation that was not open
+    // when the round ran. A pass that was never asked to classify may still echo
+    // classifications (the prompt shows every obligation to every pass); discarding
+    // them preserves the invariant, while rejecting them killed a clean logical round
+    // on 2026-08-14 — the same reviewer-did-as-told class as the coverage notes above.
+    const echoed = passResult("diff") as Record<string, unknown>;
+    echoed.obligations = [{findingId: "R9-F9", status: "documented", evidence: "echoed"}];
+    expect(parseReviewPass(echoed, "diff", manifest, []).obligations).toEqual([]);
 
+    // The classifying pass stays strict: an unknown id there is an audit error.
     const alongsideRequired = passResult("diff") as Record<string, unknown>;
     alongsideRequired.obligations = [
       {findingId: "R1-F1", status: "fixed", evidence: "guard added"},
