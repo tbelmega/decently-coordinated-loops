@@ -246,9 +246,13 @@ function assertDecisionInvariants(decision: ReviewDisposition, priority: Priorit
   }
 }
 
-function parseStepBack(input: unknown, path: string): ReviewStepBack | undefined {
+function parseStepBack(input: unknown, path: string, roundNumber: number): ReviewStepBack | undefined {
   if (input === undefined) return undefined;
   if (!isRecord(input)) throw new Error(`${path} must be an object`);
+  const notePath = requiredString(input, "path", path);
+  if (notePath !== validateEvidencePath(notePath)) {
+    throw new Error(`${path}.path must be a normalized repository-relative path`);
+  }
   const triggerRounds = input.triggerRounds;
   if (
     !Array.isArray(triggerRounds) ||
@@ -257,8 +261,15 @@ function parseStepBack(input: unknown, path: string): ReviewStepBack | undefined
   ) {
     throw new Error(`${path}.triggerRounds must be two positive round numbers`);
   }
+  // The tripwire only ever arms from the two rounds immediately preceding the round
+  // the note opens, so any other persisted pair cannot be the recorded evidence.
+  if (roundNumber < 3 || triggerRounds[0] !== roundNumber - 2 || triggerRounds[1] !== roundNumber - 1) {
+    throw new Error(
+      `${path}.triggerRounds must be the two rounds immediately preceding round ${roundNumber}`,
+    );
+  }
   return {
-    path: requiredString(input, "path", path),
+    path: notePath,
     triggerRounds: [triggerRounds[0], triggerRounds[1]],
   };
 }
@@ -359,7 +370,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
     if (typeof number !== "number" || !Number.isInteger(number) || number !== roundIndex + 1) {
       throw new Error(`${path}.number must be ${roundIndex + 1}`);
     }
-    const stepBack = parseStepBack(roundInput.stepBack, `${path}.stepBack`);
+    const stepBack = parseStepBack(roundInput.stepBack, `${path}.stepBack`, roundIndex + 1);
     // A present audit must parse or the ledger fails closed: silently dropping it
     // would erase the round's persisted review evidence on the next rewrite and turn
     // a malformed terminal classification into a fresh attempt.
@@ -512,6 +523,24 @@ export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): Revi
 //      tripwire state carry forward by construction.
 //   7. Each persisted result carries its obligation type; a result whose status
 //      contradicts its stamped type is malformation and never closes anything.
+//
+// Trust boundary (accepted-as-limitation, 2026-08-14; also the step-back analysis for
+// the tripwire the containment spec's own review rounds 2 and 3 armed):
+// The persisted ledger is trusted machine state. The operating contract forbids
+// hand-editing it, and every write goes through this module's recorder functions. The
+// parser therefore fails closed on MALFORMATION - shape violations, contradictory
+// status/type stamps, out-of-window or non-monotonic decision stamps, unsupported
+// supersession chains, invalid evidence paths, impossible step-back trigger pairs -
+// but it does NOT authenticate history against a well-formed forgery. An editor able
+// to produce semantically consistent JSON can equally delete findings, rewrite
+// reasons, or drop whole rounds, and no self-contained mutable file can prove its own
+// past. Catching an in-window re-stamp of decidedAfterRound (spec-review findings
+// R3-F1/F2/F3/F5) would require an append-only, externally anchored decision journal,
+// a redesign whose cost exceeds this component's assurance bar. Decision: remove that
+// invariant family from the parser's obligations by this documented boundary rather
+// than continue patching guards; this covers the in-window residue of remediation
+// obligations R2-F3 and R2-F4, whose window and monotonicity validation is
+// implemented above.
 const obligationBearingKinds: readonly DispositionKind[] = ["accepted", "accepted-as-limitation"];
 
 /** The obligation id a finding's CURRENT decision owns. The first obligation-bearing
