@@ -56,9 +56,18 @@ function archiveRow(item: ItemFile): string {
  * first. Because it reconciles against the archive/ folder rather than a one-shot
  * "just moved" batch, a sync that crashed after moving a file but before indexing it
  * is repaired on the next run — the move and the index become recoverable as one
- * derived operation. No-op (returns `archiveText` unchanged) when nothing is missing. */
+ * derived operation. No-op (returns `archiveText` unchanged) when nothing is missing.
+ *
+ * Only files whose state actually belongs in `archive/` are indexed. Sitting in the folder
+ * is not the same as being terminal: an item hand-moved there while still live is stranded,
+ * and preflight keeps its board row and asks the owner to move it back. Indexing it would
+ * record live work as finished in the one file whose entire contract is terminal work, and
+ * the two derived indexes would then contradict each other. The rule lives here rather than
+ * at the call site because ARCHIVE.md's contract is this function's to keep. */
 export function reconcileArchiveRows(archiveText: string, archivedItems: ItemFile[]): string {
-  const missing = archivedItems.filter((item) => !archiveText.includes(`](archive/${item.slug}.md)`));
+  const missing = archivedItems.filter(
+    (item) => targetFolder(item.state) === "archive" && !archiveText.includes(`](archive/${item.slug}.md)`),
+  );
   if (!missing.length) return archiveText;
   const rows = [...missing].sort((a, b) => b.updated.localeCompare(a.updated)).map(archiveRow);
   const hasTable = archiveText.includes(ARCHIVE_TABLE_HEADER);

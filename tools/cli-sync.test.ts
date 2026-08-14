@@ -167,6 +167,11 @@ describe("cli-sync rows whose item has moved to a terminal folder", () => {
       expect(outbox).toContain("archive/moved-on.md");
       expect(outbox).toContain("Do not create a second item file");
       expect(outbox).not.toContain("**The ask:** create an item file");
+
+      // Review R6-F1. Reconciling ARCHIVE.md on every run reaches these files too, and
+      // indexing one would file live work as finished: the same item would be a retained
+      // work-stream on BOARD.md and a completed row in ARCHIVE.md at once.
+      expect(readFileSync(join(root, "ARCHIVE.md"), "utf8")).not.toContain("archive/moved-on.md");
     });
   }
 });

@@ -105,21 +105,31 @@ Terminal work-streams.
 | --- | --- | --- |
 `;
 
+  // Every fixture below carries a terminal state, because that is what an archived item
+  // is. The items/ fixtures these are spread from are all active, so an inherited state
+  // would describe a file stranded in archive/, which is the one thing this must not index.
   test("is a no-op when there are no archived items", () => {
     expect(reconcileArchiveRows(ARCHIVE_MD, [])).toBe(ARCHIVE_MD);
   });
 
   test("appends a row per un-indexed archived item, linking to archive/<slug>.md", () => {
     const items = loadItemsDir(FIXTURES);
-    const item = { ...items[0], slug: "some-slug", title: "Some Title", project: "atlas", updated: "2026-07-10" };
+    const item = {
+      ...items[0],
+      slug: "some-slug",
+      title: "Some Title",
+      project: "atlas",
+      state: "accepted",
+      updated: "2026-07-10",
+    };
     const result = reconcileArchiveRows(ARCHIVE_MD, [item]);
     expect(result).toContain("| [Some Title](archive/some-slug.md) | atlas | 2026-07-10 |");
   });
 
   test("sorts a multi-item batch most-recently-finished first", () => {
     const items = loadItemsDir(FIXTURES);
-    const older = { ...items[0], slug: "older", title: "Older", updated: "2026-07-01" };
-    const newer = { ...items[0], slug: "newer", title: "Newer", updated: "2026-07-08" };
+    const older = { ...items[0], slug: "older", title: "Older", state: "accepted", updated: "2026-07-01" };
+    const newer = { ...items[0], slug: "newer", title: "Newer", state: "accepted", updated: "2026-07-08" };
     const result = reconcileArchiveRows(ARCHIVE_MD, [older, newer]);
     expect(result.indexOf("Newer")).toBeLessThan(result.indexOf("Older"));
   });
@@ -127,7 +137,7 @@ Terminal work-streams.
   test("appends after existing rows without disturbing them", () => {
     const withExisting = `${ARCHIVE_MD}| [Old row](archive/old-row.md) | atlas | 2026-06-01 |\n`;
     const items = loadItemsDir(FIXTURES);
-    const item = { ...items[0], slug: "fresh", title: "Fresh", updated: "2026-07-10" };
+    const item = { ...items[0], slug: "fresh", title: "Fresh", state: "accepted", updated: "2026-07-10" };
     const result = reconcileArchiveRows(withExisting, [item]);
     expect(result).toContain("Old row");
     expect(result).toContain("Fresh");
@@ -136,7 +146,7 @@ Terminal work-streams.
 
   test("is idempotent: an already-indexed slug is not re-appended", () => {
     const items = loadItemsDir(FIXTURES);
-    const item = { ...items[0], slug: "kept", title: "Kept", updated: "2026-07-10" };
+    const item = { ...items[0], slug: "kept", title: "Kept", state: "accepted", updated: "2026-07-10" };
     const once = reconcileArchiveRows(ARCHIVE_MD, [item]);
     const twice = reconcileArchiveRows(once, [item]);
     expect(twice).toBe(once);
@@ -145,13 +155,34 @@ Terminal work-streams.
 
   test("adds only the missing row when reconciling the full archive set (crash recovery)", () => {
     const items = loadItemsDir(FIXTURES);
-    const indexed = { ...items[0], slug: "indexed", title: "Indexed", updated: "2026-07-05" };
+    const indexed = { ...items[0], slug: "indexed", title: "Indexed", state: "accepted", updated: "2026-07-05" };
     const withOne = reconcileArchiveRows(ARCHIVE_MD, [indexed]);
     // A later run finds the folder holds both the indexed item and one whose row a
     // prior crash never wrote; only the missing row is added.
-    const orphaned = { ...items[0], slug: "orphaned", title: "Orphaned", updated: "2026-07-06" };
+    const orphaned = { ...items[0], slug: "orphaned", title: "Orphaned", state: "dropped", updated: "2026-07-06" };
     const result = reconcileArchiveRows(withOne, [indexed, orphaned]);
     expect(result.match(/archive\/indexed\.md/g)?.length).toBe(1);
     expect(result.match(/archive\/orphaned\.md/g)?.length).toBe(1);
+  });
+
+  // Review R6-F1. Sitting in archive/ is not being terminal. A file hand-moved there with
+  // a live state is stranded: preflight keeps its board row and asks the owner to move it
+  // back, so indexing it here would record the same work-stream as both live and finished
+  // in the two derived indexes. Every non-terminal state, not just the active ones.
+  for (const state of ["idea", "in-progress", "blocked", "tested", "delivered", "merged"]) {
+    test(`does not index a ${state} file stranded in archive/`, () => {
+      const items = loadItemsDir(FIXTURES);
+      const item = { ...items[0], slug: "stranded", title: "Stranded", state, updated: "2026-07-10" };
+      expect(reconcileArchiveRows(ARCHIVE_MD, [item])).toBe(ARCHIVE_MD);
+    });
+  }
+
+  test("indexes the terminal files in a batch that also holds a stranded one", () => {
+    const items = loadItemsDir(FIXTURES);
+    const done = { ...items[0], slug: "done", title: "Done", state: "accepted", updated: "2026-07-10" };
+    const stranded = { ...items[0], slug: "stranded", title: "Stranded", state: "in-progress", updated: "2026-07-11" };
+    const result = reconcileArchiveRows(ARCHIVE_MD, [done, stranded]);
+    expect(result).toContain("archive/done.md");
+    expect(result).not.toContain("archive/stranded.md");
   });
 });
