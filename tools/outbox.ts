@@ -217,8 +217,11 @@ function openSection(text: string): { head: string; open: string; tail: string }
 
 /** Append one orphan-row entry to OUTBOX.md's `## Open` section, in the shape the
  * loops-queues entry contract defines: `### <id> — <type> · <project> · <title>` and a
- * prose body. No `- item:` line — an orphan row is by definition a row whose item file
- * is missing. Pure string transform; the caller does the file read/write.
+ * prose body. No `- item:` line: the row is on the board precisely because no active
+ * item file answers for it. Pure string transform; the caller does the file read/write.
+ *
+ * Two asks, chosen by whether the row is stranded (`OrphanRow.stranded`): write the
+ * missing item file, or move the one already sitting in `archive/`.
  *
  * Idempotent by orphan path: if an entry for this row is already present, the text is
  * returned unchanged. Sync writes the outbox before it regenerates the board, so a
@@ -287,13 +290,34 @@ function orphanEntryText(outboxText: string, orphan: OrphanRow): string {
   const existingIds = [...outboxText.matchAll(/^### (\d+) —/gm)].map((match) => parseInt(match[1], 10));
   const nextId = (existingIds.length ? Math.max(...existingIds) : 0) + 1;
 
+  const rowFields = `Its row said: project=${orphan.project}, state=${orphan.state}, next-actor=${orphan.nextActor},
+awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, updated=${orphan.updated}.`;
+
+  // Two different situations, and telling them apart is the whole point of the ask. A
+  // stranded item's file exists, so "create an item file for it" would be wrong twice
+  // over: it describes the wrong repair, and acting on it puts a second file under the
+  // same slug, which the duplicate-slug guard then refuses to sync past.
+  if (orphan.stranded) {
+    return `
+### ${nextId} — question · ${headingToken(orphan.project)} · BOARD.md row whose item is stranded in archive/
+${orphanMarker(orphan.path)}
+
+Source: [${orphan.title}](${orphan.path}). Its item file exists at \`${orphan.stranded.itemPath}\`, but state
+\`${orphan.state}\` belongs in \`${orphan.stranded.belongsIn}/\` and sync never moves files out of \`archive/\`.
+${rowFields}
+
+**The ask:** move \`${orphan.stranded.itemPath}\` to \`${orphan.stranded.belongsIn}/\`, or give it a state that belongs in \`archive/\`. Do not create a second item file; the slug is taken and sync refuses to run while two files share one.
+
+> A:
+`;
+  }
+
   return `
 ### ${nextId} — question · ${headingToken(orphan.project)} · orphan BOARD.md row with no item file
 ${orphanMarker(orphan.path)}
 
 Source: [${orphan.title}](${orphan.path}), dropped from BOARD.md because no item file matched it.
-Its row said: project=${orphan.project}, state=${orphan.state}, next-actor=${orphan.nextActor},
-awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, updated=${orphan.updated}.
+${rowFields}
 
 **The ask:** create an item file for it (per the loops-board skill), or confirm it can be discarded.
 

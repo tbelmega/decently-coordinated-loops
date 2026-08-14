@@ -4,12 +4,20 @@ import type { DanglingDep } from "./readiness.ts";
 
 /** Human-readable preflight summary, shared by the sync and check CLIs. */
 export function printPreflightReport(report: PreflightReport): void {
-  console.log(`Preflight: ${report.orphanRows.length} orphan row(s), ${report.missingRows.length} missing row(s) (auto-added on regen), ${report.mismatches.length} field mismatch(es).`);
+  console.log(`Preflight: ${report.orphanRows.length} orphan row(s), ${report.terminalRows.length} row(s) whose item has moved on (dropped on regen), ${report.missingRows.length} missing row(s) (auto-added on regen), ${report.mismatches.length} field mismatch(es).`);
 
   if (report.orphanRows.length) {
-    console.log("\nOrphan rows (no item file — filed in OUTBOX.md, kept on the board until a later sync sees the entry):");
+    console.log("\nOrphan rows (filed in OUTBOX.md, kept on the board until a later sync sees the entry):");
     for (const row of report.orphanRows) {
-      console.log(`  - ${row.path} (${row.title})`);
+      const cause = row.stranded ? `stranded at ${row.stranded.itemPath}, belongs in ${row.stranded.belongsIn}/` : "no item file";
+      console.log(`  - ${row.path} (${row.title}) - ${cause}`);
+    }
+  }
+
+  if (report.terminalRows.length) {
+    console.log("\nRows whose item has moved to for-delivery/ or archive/ (stale, not orphaned, dropped on regen):");
+    for (const row of report.terminalRows) {
+      console.log(`  - ${row.path} -> ${row.itemPath}`);
     }
   }
 

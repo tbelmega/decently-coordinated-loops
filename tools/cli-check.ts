@@ -21,7 +21,9 @@ const items = loadItemsDir(join(ROOT, "items"));
 const forDeliveryItems = loadForDeliveryDir(join(ROOT, "for-delivery"));
 const archiveItems = loadArchiveDir(join(ROOT, "archive"));
 
-const report = runPreflight(boardText, items);
+// Terminal items are passed for row identity only: a row whose item has moved to
+// for-delivery/ or archive/ is stale, not orphaned, and must not be reported as one.
+const report = runPreflight(boardText, items, [...forDeliveryItems, ...archiveItems]);
 printPreflightReport(report);
 
 const anomalies = validateItems([...items, ...forDeliveryItems, ...archiveItems]);
@@ -55,8 +57,15 @@ if (stamped) {
   }
 }
 
+// terminalRows counts. The row and the folders disagree about where an item is, and this
+// gate runs on the repo as it stands, before any sync repairs it: until then the board
+// links `items/<slug>.md` for a file that is somewhere else, and for a reopened item that
+// broken link is the only trace of a live work-stream. These rows failed this gate before
+// they were told apart from orphans, and staying silent about them would make correct
+// classification a weakening of the integrity check. `bun run sync` clears them.
 if (
   report.orphanRows.length ||
+  report.terminalRows.length ||
   report.mismatches.length ||
   anomalies.length ||
   duplicateSlugs.length ||

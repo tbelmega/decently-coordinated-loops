@@ -56,7 +56,10 @@ try {
       throw new SyncAborted("Refusing to sync: resolve the duplicate slug(s) above before re-running.");
     }
 
-    const report = runPreflight(boardText, items);
+    // Terminal items resolve row identity, nothing more: a row whose item has moved to
+    // for-delivery/ or archive/ must not be routed to the owner as an orphan, and only
+    // `items` below feeds the regenerated board.
+    const report = runPreflight(boardText, items, [...forDeliveryItems, ...archiveItems]);
     printPreflightReport(report);
     printValidationReport(validateItems(allItems));
 
@@ -94,13 +97,23 @@ try {
     // crashed after moving a file but before indexing it, the missing row is added
     // here on the next run — the move and the index are recoverable as one derived
     // operation. Reload the folder so freshly-moved files are included.
-    if (moves.some((m) => m.to === "archive")) {
-      const archived = loadArchiveDir(join(ROOT, "archive"));
-      const archiveText = readFileSync(ARCHIVE_MD_PATH, "utf8");
-      writeFileSync(ARCHIVE_MD_PATH, reconcileArchiveRows(archiveText, archived));
-    }
+    // Unconditionally, not only when this run planned an archive move. The reconciliation
+    // is derived and idempotent — it returns the text unchanged when nothing is missing —
+    // so gating it bought nothing and cost the one case that needs it most: an item
+    // hand-moved into archive/ is invisible to planMoves, so the guard was false exactly
+    // when its ARCHIVE.md row was missing, leaving the item in neither derived index.
+    const archived = loadArchiveDir(join(ROOT, "archive"));
+    const archiveText = readFileSync(ARCHIVE_MD_PATH, "utf8");
+    const reconciledArchive = reconcileArchiveRows(archiveText, archived);
+    if (reconciledArchive !== archiveText) writeFileSync(ARCHIVE_MD_PATH, reconciledArchive);
 
-    const active = items.filter((i) => !moves.some((m) => m.item.slug === i.slug));
+    // Read items/ back rather than deriving the render set from the pre-move load. Both
+    // directions matter: an item this run moved INTO items/ (a for-delivery/ file whose
+    // state went active again) must get its row immediately rather than waiting for some
+    // later sync, and a move that did NOT reach its destination must not be rendered as
+    // though it had. performMoves logs and continues on an anomaly, so a file raced away
+    // between load and move would otherwise appear as a board row linking to nothing.
+    const active = moves.length ? loadItemsDir(ITEMS_DIR) : items;
     const board = renderBoardMd(active, config);
     writeFileSync(
       BOARD_PATH,

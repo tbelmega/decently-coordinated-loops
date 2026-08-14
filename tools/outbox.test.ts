@@ -394,6 +394,24 @@ describe("orphan entry contract", () => {
     expect(body.length).toBeLessThanOrEqual(6);
   });
 
+  test("keeps the stranded-item body within the same six-line contract", () => {
+    // Review R5-F2. The stranded variant has more to say (where the file is, where it
+    // belongs, and not to create a second one), which is exactly how an entry drifts out
+    // of the compact shape the owner answers from a phone.
+    const stranded = {
+      ...orphan,
+      stranded: { itemPath: "archive/does-not-exist.md", belongsIn: "for-delivery" as const },
+    };
+    const entry = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, stranded).split("### ")[1];
+    const body = entry
+      .split("\n")
+      .slice(1)
+      .filter((line) => line.trim() !== "" && !line.startsWith("> A:"));
+    expect(body.length).toBeLessThanOrEqual(6);
+    expect(entry).toContain("archive/does-not-exist.md");
+    expect(entry).toContain("for-delivery/");
+  });
+
   test("dedups on a marker no prose can produce by accident", () => {
     // The old key was the entry's own prose, so an unrelated note repeating it read as
     // "already recorded" — and sync then dropped the board row that was its only copy.
