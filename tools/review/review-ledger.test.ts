@@ -680,6 +680,20 @@ describe("parseReviewLedger — decision ordering and result types", () => {
     expect(() => parseReviewLedger(reversalWithoutStamp)).toThrow(/decidedAfterRound/);
   });
 
+  test("rejects present-but-invalid finding provenance instead of dropping it", () => {
+    // A corrupted origin would silently disarm the tripwire; the same silent-drop
+    // pattern covered passes, firstSeenRound, and repeatedFrom.
+    function withField(field: string, value: unknown): unknown {
+      const ledger = JSON.parse(JSON.stringify(seededLedger(p2Finding)));
+      ledger.rounds[0].findings[0][field] = value;
+      return ledger;
+    }
+    expect(() => parseReviewLedger(withField("origin", "corrupt"))).toThrow(/origin/);
+    expect(() => parseReviewLedger(withField("passes", ["nonsense"]))).toThrow(/passes/);
+    expect(() => parseReviewLedger(withField("firstSeenRound", "one"))).toThrow(/firstSeenRound/);
+    expect(() => parseReviewLedger(withField("repeatedFrom", [42]))).toThrow(/repeatedFrom/);
+  });
+
   test("rejects a documented result that omits its obligation type", () => {
     let ledger = seededLedger(p2Finding);
     ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {

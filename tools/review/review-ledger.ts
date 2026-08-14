@@ -362,20 +362,35 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
           );
         }
       }
+      // Provenance fields fail closed when present but invalid — a silently dropped
+      // origin would disarm the remediation-churn tripwire. Only omission is legacy.
+      if (findingInput.origin !== undefined && !isFindingOrigin(findingInput.origin)) {
+        throw new Error(`${findingPath}.origin is invalid`);
+      }
+      if (findingInput.passes !== undefined && !isReviewAuditPassArray(findingInput.passes)) {
+        throw new Error(`${findingPath}.passes is invalid`);
+      }
+      if (
+        findingInput.firstSeenRound !== undefined &&
+        (typeof findingInput.firstSeenRound !== "number" ||
+          !Number.isInteger(findingInput.firstSeenRound) ||
+          findingInput.firstSeenRound < 1)
+      ) {
+        throw new Error(`${findingPath}.firstSeenRound must be a positive integer when present`);
+      }
+      if (findingInput.repeatedFrom !== undefined && !isStringArray(findingInput.repeatedFrom)) {
+        throw new Error(`${findingPath}.repeatedFrom must be an array of strings when present`);
+      }
       return {
         ...finding,
-        id: requiredString(findingInput, "id", `${path}.findings[${findingIndex}]`),
+        id: requiredString(findingInput, "id", findingPath),
         ...(isFindingOrigin(findingInput.origin) ? {origin: findingInput.origin} : {}),
         ...(isReviewAuditPassArray(findingInput.passes) ? {passes: findingInput.passes} : {}),
-        ...(optionalString(findingInput, "identity", `${path}.findings[${findingIndex}]`)
+        ...(optionalString(findingInput, "identity", findingPath)
           ? {identity: String(findingInput.identity)}
           : {}),
-        ...(typeof findingInput.firstSeenRound === "number" &&
-        Number.isInteger(findingInput.firstSeenRound) &&
-        findingInput.firstSeenRound > 0
-          ? {firstSeenRound: findingInput.firstSeenRound}
-          : {}),
-        ...(optionalString(findingInput, "obligationId", `${path}.findings[${findingIndex}]`)
+        ...(typeof findingInput.firstSeenRound === "number" ? {firstSeenRound: findingInput.firstSeenRound} : {}),
+        ...(optionalString(findingInput, "obligationId", findingPath)
           ? {obligationId: String(findingInput.obligationId)}
           : {}),
         ...(isStringArray(findingInput.repeatedFrom) ? {repeatedFrom: findingInput.repeatedFrom} : {}),
