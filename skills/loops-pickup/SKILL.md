@@ -317,6 +317,11 @@ refinement questions, or things noticed while working — gets an outbox entry p
 loops-queues contract (one decision per entry, options offered, max 3 new entries
 per unattended session).
 
+Unattended work is no exception to end-of-turn surfacing (loops-queues): raise the
+entries you filed this turn with the owner as well, once the item and board state is
+committed and pushed. Nobody answering is the expected outcome here, and costs
+nothing - the entries simply stay open.
+
 ## No implementation item eligible? Do refinement work
 
 Refinement turns vague items into implementable ones. It only writes to the data

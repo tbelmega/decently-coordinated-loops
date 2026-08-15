@@ -93,6 +93,41 @@ deleted; never renumber to close a gap, since answered entries are cited by ID.
   ...), log the routing on the item, then delete the entry. An answered entry that
   is also routed must not linger.
 
+**End-of-turn surfacing.** Filing is unconditional and unchanged: write the entry,
+keep working, never wait for an answer. But an entry that only reaches `OUTBOX.md` is
+a question the owner has to go and find, so at the end of every turn in which you
+appended entries - however long the turn ran - raise exactly those entries with him
+directly, as the turn's last action before the closing message, so that message and
+its completion receipt already reflect whatever came back:
+
+- **Ask, don't merely report.** Use the harness's structured ask-the-user tool where
+  it has one, otherwise a numbered list in the closing message. One prompt per entry,
+  carrying the options the entry itself offers plus a final **"skip - answer via the
+  outbox later"**. Where the harness's prompt takes a limited number of questions at
+  once, ask the highest-leverage ones that fit and name the rest.
+- **Never condition this on whether you think anyone is watching.** A turn end may be
+  a prompt the owner is waiting on, or one of a dozen parallel sessions he is not
+  looking at while sitting at that very computer, and from the inside the two are
+  indistinguishable. So ask either way, and treat no answer as an ordinary outcome
+  rather than a failure: every durable update is committed and pushed *before* you
+  ask, so an unseen, skipped, or abandoned prompt costs nothing and leaves
+  `OUTBOX.md` doing its job - the ledger that points the owner at what needs him.
+- **An answer given here is an answer.** Route it into its source, log the routing on
+  the item, and delete the entry - the same processing a `> A:` line gets, and its ID
+  stays retired like any routed entry's. An entry left unanswered stays exactly as
+  filed, and its item keeps the `next-actor`/`awaiting` it already had.
+- **`decision` notices are raised too**, as "leave it" or "reverse it": a retroactive
+  ruling is worth least when it arrives late, and a reversal is cheapest while the
+  work is still fresh. Either ruling is an answer and retracts the entry, recorded on
+  the item as ruled; "reverse it" also reopens the decision there.
+
+Surfacing covers the asks *you* wrote. An entry a tool filed on your behalf - `bun run
+sync` routing an orphan board row - is not yours to retract: that routing needs a later
+sync run to observe the entry in `## Open`, and deleting it early strands the row.
+
+Surfacing is a delivery mechanism, not a licence to ask more. What deserves an entry
+at all is unchanged, including resolving first everything you can resolve yourself.
+
 ## Interview mode
 
 When the owner says "interview me" (optionally with a time budget): pull the board
