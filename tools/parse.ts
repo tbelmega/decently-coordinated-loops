@@ -88,6 +88,7 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     state: String(fm.state ?? ""),
     assignee,
     legacyOwner: hasAssignee && hasLegacyOwner ? (typeof fm.owner === "string" ? fm.owner : "") : undefined,
+    assignmentKey,
     execution,
     frontmatterErrors: frontmatterErrors.length > 0 ? frontmatterErrors : undefined,
     autonomy: String(fm.autonomy ?? "-"),

@@ -31,6 +31,10 @@ export interface ItemFile {
   assignee: string;
   /** Present only when frontmatter carries both `assignee` and legacy `owner`. */
   legacyOwner?: string;
+  /** Which key the assignment was read from, or undefined when the item carries neither.
+   *  Identifies the schema generation an item was last written under: `owner` predates the
+   *  assignee/execution split, so rules introduced with `execution` do not bind it. */
+  assignmentKey?: "assignee" | "owner";
   /** Last-recorded location of live work; descriptive, not a liveness signal. */
   execution?: ExecutionLocation;
   /** YAML-boundary violations retained for the schema validator. */

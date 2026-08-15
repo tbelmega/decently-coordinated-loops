@@ -131,15 +131,72 @@ updated: 2026-08-09
     ]);
   });
 
+  // The valid-path cases pair the worktree with a host: a well-formed path on its own is
+  // now its own violation (see "rejects a worktree recorded without a host"), so leaving
+  // the host out here would assert a combination the schema no longer accepts. The
+  // malformed cases stay host-less deliberately - the path check reports first, so they
+  // still yield exactly one message.
   test("requires a cross-platform absolute worktree path", () => {
     for (const worktree of ["/srv/work/project", "C:\\work\\project", "C:/work/project", "\\\\server\\share\\project"]) {
-      expect(validateItem(item({ execution: { worktree } }))).toEqual([]);
+      expect(validateItem(item({ execution: { host: "worker-one", worktree } }))).toEqual([]);
     }
     for (const worktree of ["relative/path", "project", "C:project"]) {
       expect(validateItem(item({ execution: { worktree } }))).toEqual([
         "execution.worktree must be an absolute path",
       ]);
     }
+  });
+
+  test("rejects a worktree recorded without a host, on any schema generation", () => {
+    for (const assignmentKey of ["assignee", "owner", undefined] as const) {
+      expect(validateItem(item({ execution: { worktree: "/srv/work/project" }, assignmentKey }))).toEqual([
+        "execution.worktree requires execution.host (a path alone is not an identity across hosts)",
+      ]);
+    }
+  });
+
+  test("requires a host on a worked item that records a branch", () => {
+    for (const state of ["in-progress", "implemented", "blocked"]) {
+      expect(
+        validateItem(
+          item({
+            state,
+            nextActor: "owner",
+            awaiting: state === "blocked" ? "unblock" : "review-merge",
+            links: { branch: "agents/slot-one" },
+            assignmentKey: "assignee",
+          }),
+        ),
+      ).toEqual([
+        `state ${state} with links.branch requires execution.host (which machine that checkout is on)`,
+      ]);
+    }
+  });
+
+  test("requires no host where the item names no checkout, or the work is past it", () => {
+    expect(validateItem(item({ state: "in-progress", assignmentKey: "assignee" }))).toEqual([]);
+    for (const state of ["idea", "spec-filed", "merged", "tested", "delivered", "accepted", "dropped"]) {
+      const links = { branch: "agents/slot-one", ...(state === "spec-filed" ? { spec: "docs/specs/x.md" } : {}) };
+      expect(
+        validateItem(item({ state, nextActor: "owner", awaiting: undefined, links, assignmentKey: "assignee" })),
+      ).toEqual([]);
+    }
+  });
+
+  test("exempts an item still on the pre-split legacy owner key", () => {
+    expect(validateItem(item({ links: { branch: "agents/slot-one" }, assignmentKey: "owner" }))).toEqual([]);
+  });
+
+  test("accepts a worked item that records branch and host together", () => {
+    expect(
+      validateItem(
+        item({
+          links: { branch: "agents/slot-one" },
+          execution: { host: "worker-one", worktree: "/srv/work/project" },
+          assignmentKey: "assignee",
+        }),
+      ),
+    ).toEqual([]);
   });
 
   test("accepts every new canonical state", () => {

@@ -73,6 +73,25 @@ Body.
     });
   });
 
+  test("records which assignment key the item was written with", () => {
+    const base = `---
+title: "Keyed item"
+project: alpha
+state: in-progress
+KEY
+autonomy: supervised
+next-actor: agent
+next-step: "Build it"
+updated: 2026-08-09
+---
+`;
+    const parsedWith = (line: string) => parseItemFileText("items/keyed-item.md", base.replace("KEY", line));
+    expect(parsedWith("assignee: codex/default").assignmentKey).toBe("assignee");
+    expect(parsedWith("owner: codex/default").assignmentKey).toBe("owner");
+    expect(parsedWith("assignee: codex/default\nowner: claude-code/primary").assignmentKey).toBe("assignee");
+    expect(parsedWith('fit: "mechanical"').assignmentKey).toBeUndefined();
+  });
+
   test("parses absent and partial execution locators", () => {
     const absent = `---
 title: "No location"

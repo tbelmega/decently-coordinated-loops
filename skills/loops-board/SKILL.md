@@ -117,9 +117,9 @@ depends-on: [item-slug, ...]   # items whose LANDED output this one needs; omit 
   none. Mandatory for descriptive items (below)
 next-step: The single concrete next action. Mandatory — never leave stale.
 updated: YYYY-MM-DD
-execution:                    # optional last-recorded location; not liveness or a lock
-  host: <opaque host name>    # either child may be temporarily absent
-  worktree: <absolute Git worktree path on that host>
+execution:                    # last-recorded location; not liveness or a lock. Required
+  host: <opaque host name>    # once the item names a branch and work is in flight
+  worktree: <absolute Git worktree path on that host>   # never without host
 links:
   spec: docs/specs/...        # omit keys that don't apply
   spec-branch: <pushed agent branch carrying an approved, not-yet-landed spec>
@@ -242,6 +242,18 @@ item `owner:` as a fallback, but new and substantively updated items write only
 `assignee:`; carrying both keys is a schema error. `execution` is descriptive
 last-recorded location. It does not prove that the host or process is alive, and Git
 push atomicity remains the claim lock.
+
+**Record the machine, and record it in `execution.host`.** A branch or worktree name
+means nothing to a reader who does not already know which machine it is on, and a slot
+name can exist on several. So `bun run check` fails an item in `in-progress`,
+`implemented` or `blocked` that records `links.branch` without `execution.host`, and
+fails any item recording `execution.worktree` without it - a path is not an identity
+where every machine runs the same layout. Items still on the pre-split `owner:` key are
+exempt until something rewrites them under the current schema. Do not work around this by
+putting the host in the assignee string: that field is a durable lane, and a lane that
+moves machines would carry a lie. Where you cannot state the host truthfully, leave it
+out; its readers fail closed on absence and act on a recorded value, so a guess is worse
+than nothing.
 
 ## Project registry
 

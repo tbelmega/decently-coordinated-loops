@@ -30,6 +30,11 @@ export const CANONICAL_AUTONOMY = new Set(["auto", "supervised", "-"]);
  * about surfacing the ignored intent, not about closing a bypass. */
 export const CANONICAL_SPEC = new Set(["waived"]);
 
+/** The states at which an item's work sits in a checkout somewhere: it has started and
+ *  has not yet reached the integration branch. Where the item also names a branch, the
+ *  execution locator has to say which machine that checkout is on. */
+const WORKED_STATES = new Set(["in-progress", "implemented", "blocked"]);
+
 export const CANONICAL_AWAITING = new Set([
   "unblock",
   "review-merge",
@@ -86,8 +91,34 @@ export function validateItem(item: ItemFile): string[] {
         messages.push("execution.worktree must be a non-empty string");
       } else if (worktree !== undefined && !isCrossPlatformAbsolutePath(worktree)) {
         messages.push("execution.worktree must be an absolute path");
+      } else if (worktree !== undefined && host === undefined) {
+        // A worktree path identifies a checkout only together with the machine it is on.
+        // Fleets commonly run one directory layout everywhere, so the same absolute path
+        // exists on several hosts and a path match across two of them is a coincidence
+        // rather than an identity. Reported only for an otherwise well-formed path, so a
+        // malformed one still yields exactly one message.
+        messages.push("execution.worktree requires execution.host (a path alone is not an identity across hosts)");
       }
     }
+  }
+
+  // An item being worked has a checkout somewhere, and `links.branch` is the item saying
+  // so. Without `execution.host` the reference is unresolvable to anyone who was not in
+  // the session that wrote it, and the locator's readers (a rename gate, an owner opening
+  // the board) have nowhere to look. Bound to the states where work is in flight: past
+  // `merged` the change is on the integration branch and the checkout stops mattering.
+  // Items still on the pre-split `owner:` key predate `execution` entirely and are
+  // exempt - the exemption retires itself, because the loops-board contract has any
+  // substantively updated item write `assignee:`.
+  if (
+    item.assignmentKey !== "owner" &&
+    WORKED_STATES.has(item.state) &&
+    item.links.branch &&
+    item.execution?.host === undefined
+  ) {
+    messages.push(
+      `state ${item.state} with links.branch requires execution.host (which machine that checkout is on)`,
+    );
   }
 
   for (const { key, get } of REQUIRED_FIELDS) {

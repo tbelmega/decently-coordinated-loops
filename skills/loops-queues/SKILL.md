@@ -68,6 +68,11 @@ deleted; never renumber to close a gap, since answered entries are cited by ID.
 - Every question only the owner can answer that you write into an item file gets
   mirrored here — the item file holds the context, the outbox is where the owner
   finds it.
+- **Name the machine.** An entry that mentions a checkout, worktree, branch or local
+  path says which machine it is on, and so does any board item that mentions one. A
+  slot name can exist on several hosts and names none of them, and the reader is
+  rarely the session that wrote it. On items the field for this is `execution.host`,
+  which `bun run check` requires once the item names a branch (loops-board).
 
 **Types.** The vocabulary is closed: `question`, `proposal`, `approval`, `decision`.
 
