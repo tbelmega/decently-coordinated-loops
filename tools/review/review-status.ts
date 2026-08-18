@@ -86,10 +86,11 @@ export function evaluateReviewStatus(
         reason: "latest review has a finding deferred to the owner",
       };
     }
-    // A round whose findings are ALL policy-waived is terminal: the waiver is
-    // pre-authorized by the owner's classes config, so no confirming round is owed.
-    // Authorization binds against the RESOLVED classes here, not the record — absent
-    // or narrowed config blocks the waiver (fail closed toward full review).
+    // A round whose findings are ALL non-blocking is terminal: a policy waiver is
+    // pre-authorized by the owner's classes config, and a tracked-elsewhere finding is
+    // conceded correct with its fix landing outside this repository's range — neither
+    // owes a confirming round. Waiver authorization binds against the RESOLVED classes
+    // here, not the record — absent or narrowed config blocks it (fail closed).
     const waived = latestRound.findings.filter((finding) => finding.disposition?.kind === "waived-by-policy");
     for (const finding of waived) {
       const refusal = waiverRefusalReason(
@@ -106,7 +107,11 @@ export function evaluateReviewStatus(
         };
       }
     }
-    if (waived.length < latestRound.findings.length) {
+    const nonBlocking = latestRound.findings.filter(
+      (finding) =>
+        finding.disposition?.kind === "waived-by-policy" || finding.disposition?.kind === "tracked-elsewhere",
+    );
+    if (nonBlocking.length < latestRound.findings.length) {
       const noun = latestRound.findings.length === 1 ? "finding" : "findings";
       return {
         kind: "blocked",

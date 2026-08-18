@@ -561,6 +561,65 @@ describe("recordDisposition — waived-by-policy", () => {
   });
 });
 
+describe("recordDisposition — tracked-elsewhere", () => {
+  function ledgerWithFinding(): ReviewLedger {
+    return addReviewRound(createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }), {
+      headSha: "current",
+      model: "codex-default",
+      reviewedAt: "2026-07-19T12:00:00Z",
+      review,
+    });
+  }
+
+  test("records the pointer, creates no obligation, and round-trips the parser", () => {
+    const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Counterpart lands separately", {
+      tracks: "other-repo-item-slug",
+    });
+    expect(ledger.rounds[0].findings[0].disposition).toEqual({
+      kind: "tracked-elsewhere",
+      reason: "Counterpart lands separately",
+      tracks: "other-repo-item-slug",
+      decidedAfterRound: 1,
+    });
+    expect(openObligations(ledger)).toEqual([]);
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
+    // The concession is carried to later rounds so the finding is not re-raised.
+    expect(priorDispositionNotes(ledger)[0]).toContain("tracked-elsewhere");
+  });
+
+  test("refuses a missing pointer and a pointer on any other kind", () => {
+    expect(() =>
+      recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Counterpart lands separately"),
+    ).toThrow("requires a tracks pointer");
+    expect(() =>
+      recordDisposition(ledgerWithFinding(), "R1-F1", "rejected", "Not a defect", { tracks: "somewhere" }),
+    ).toThrow("only valid on a tracked-elsewhere disposition");
+  });
+
+  test("parser rejects a persisted record missing its pointer or stamp", () => {
+    const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Counterpart lands separately", {
+      tracks: "other-repo-item-slug",
+    });
+    const serialized = JSON.parse(JSON.stringify(ledger));
+
+    const withoutTracks = structuredClone(serialized);
+    delete withoutTracks.rounds[0].findings[0].disposition.tracks;
+    expect(() => parseReviewLedger(withoutTracks)).toThrow("must carry a tracks pointer");
+
+    const withoutStamp = structuredClone(serialized);
+    delete withoutStamp.rounds[0].findings[0].disposition.decidedAfterRound;
+    expect(() => parseReviewLedger(withoutStamp)).toThrow("must carry decidedAfterRound");
+
+    const tracksOnRejected = structuredClone(serialized);
+    tracksOnRejected.rounds[0].findings[0].disposition = {
+      kind: "rejected",
+      reason: "Not a defect",
+      tracks: "somewhere",
+    };
+    expect(() => parseReviewLedger(tracksOnRejected)).toThrow("only valid on a tracked-elsewhere disposition");
+  });
+});
+
 describe("openObligations", () => {
   test("types remediation and documentation obligations and carries the doc path", () => {
     let ledger = seededLedger(p2Finding);

@@ -22,6 +22,7 @@ export const dispositionKinds = [
   "deferred-to-human",
   "accepted-as-limitation",
   "waived-by-policy",
+  "tracked-elsewhere",
 ] as const;
 
 export type Priority = (typeof priorities)[number];
@@ -74,6 +75,11 @@ export interface ReviewDisposition {
    * re-validated against the RESOLVED config at every consuming gate, so a narrowed
    * class blocks a previously recorded waiver rather than the record certifying it. */
   class?: string;
+  /** Where the fix lands (tracked-elsewhere only): a board item slug, or a
+   * `repo#branch`/path pointer. The finding is conceded correct; its fix cannot land
+   * inside this repository's reviewed range because the counterpart lands separately.
+   * No pointer, no disposition. */
+  tracks?: string;
   /** Owner attribution — required for accepted-as-limitation on P0/P1 findings and for
    * the accepted disposition that reverses a limitation. */
   owner?: boolean;
@@ -233,11 +239,13 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
   }
   const doc = optionalString(input, "doc", path);
   const waivedClass = optionalString(input, "class", path);
+  const tracks = optionalString(input, "tracks", path);
   return {
     kind,
     reason: requiredString(input, "reason", path),
     ...(doc ? {doc} : {}),
     ...(waivedClass ? {class: waivedClass} : {}),
+    ...(tracks ? {tracks} : {}),
     ...(input.owner === true ? {owner: true} : {}),
     ...(typeof decidedAfterRound === "number" ? {decidedAfterRound} : {}),
   };
@@ -285,6 +293,17 @@ function assertDecisionInvariants(
     }
   } else if (decision.class) {
     throw new Error(`${path}.class is only valid on a waived-by-policy disposition`);
+  }
+  if (decision.kind === "tracked-elsewhere") {
+    if (!decision.tracks) {
+      throw new Error(`${path} is tracked-elsewhere and must carry a tracks pointer naming where the fix lands`);
+    }
+    // No legacy writer existed for this kind.
+    if (decision.decidedAfterRound === undefined) {
+      throw new Error(`${path} is tracked-elsewhere and must carry decidedAfterRound`);
+    }
+  } else if (decision.tracks) {
+    throw new Error(`${path}.tracks is only valid on a tracked-elsewhere disposition`);
   }
 }
 
@@ -730,6 +749,8 @@ export interface RecordDispositionOptions {
   owner?: boolean;
   /** The class name authorizing a waived-by-policy disposition. */
   waivedClass?: string;
+  /** The pointer to where the fix lands (tracked-elsewhere only). */
+  tracks?: string;
   /** The RESOLVED review classes (loops.json, after per-project merge). Required for
    * waived-by-policy: recording a waiver without the config context fails closed. */
   classes?: ReviewClassConfig[];
@@ -759,11 +780,18 @@ export function recordDisposition(
   if (kind === "waived-by-policy" && !options.waivedClass) {
     throw new Error("waived-by-policy requires the authorizing class name");
   }
+  if (options.tracks !== undefined && kind !== "tracked-elsewhere") {
+    throw new Error("a tracks pointer is only valid on a tracked-elsewhere disposition");
+  }
+  if (kind === "tracked-elsewhere" && !options.tracks?.trim()) {
+    throw new Error("tracked-elsewhere requires a tracks pointer naming where the fix lands");
+  }
   const next: ReviewDisposition = {
     kind,
     reason,
     ...(doc ? {doc} : {}),
     ...(kind === "waived-by-policy" && options.waivedClass ? {class: options.waivedClass} : {}),
+    ...(kind === "tracked-elsewhere" && options.tracks ? {tracks: options.tracks} : {}),
     ...(options.owner ? {owner: true} : {}),
     decidedAfterRound: ledger.rounds.length,
   };
@@ -837,7 +865,8 @@ function renderDisposition(disposition: ReviewDisposition): string {
   const attribution = disposition.owner ? " (owner-attributed)" : "";
   const doc = disposition.doc ? ` (documented at: ${disposition.doc})` : "";
   const waivedClass = disposition.class ? ` (class: ${disposition.class})` : "";
-  return `**${disposition.kind}**${attribution}${waivedClass} — ${disposition.reason}${doc}`;
+  const tracks = disposition.tracks ? ` (tracked at: ${disposition.tracks})` : "";
+  return `**${disposition.kind}**${attribution}${waivedClass}${tracks} — ${disposition.reason}${doc}`;
 }
 
 export function renderReviewLedger(ledger: ReviewLedger): string {

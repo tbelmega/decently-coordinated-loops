@@ -889,6 +889,8 @@ interface DispositionOptions {
   owner?: boolean;
   /** Authorizing class name for waived-by-policy (`--class`). */
   waivedClass?: string;
+  /** Pointer to where the fix lands, for tracked-elsewhere (`--tracks`). */
+  tracks?: string;
   dataRepo?: string;
 }
 
@@ -920,6 +922,7 @@ function parseDispositionOptions(args: string[]): DispositionOptions {
     reason,
     ...(values.get("--doc") ? {doc: values.get("--doc")} : {}),
     ...(values.get("--class") ? {waivedClass: values.get("--class")} : {}),
+    ...(values.get("--tracks") ? {tracks: values.get("--tracks")} : {}),
     ...(values.get("--data-repo") ? {dataRepo: values.get("--data-repo")} : {}),
     ...(owner ? {owner: true} : {}),
   };
@@ -945,6 +948,7 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
     const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason, {
       ...(options.doc ? {doc: options.doc} : {}),
       ...(options.waivedClass ? {waivedClass: options.waivedClass} : {}),
+      ...(options.tracks ? {tracks: options.tracks} : {}),
       ...(classes ? {classes} : {}),
       ...(options.owner ? {owner: true} : {}),
     });

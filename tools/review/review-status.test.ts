@@ -148,6 +148,36 @@ describe("evaluateReviewStatus", () => {
     });
   });
 
+  test("passes a round mixing a valid waiver with a tracked-elsewhere concession", () => {
+    const classes = [{ name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] }];
+    let ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "current",
+        model: "codex-default",
+        reviewedAt: "2026-07-19T12:00:00Z",
+        review: {
+          summary: "one nit, one cross-repo gap",
+          findings: [{ ...finding, priority: "P3", file: "OUTBOX.md" }, finding],
+        },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "waived-by-policy", "Prose nit", {
+      waivedClass: "coordination-prose",
+      classes,
+    });
+    ledger = recordDisposition(ledger, "R1-F2", "tracked-elsewhere", "Fix lands with the data-repo half", {
+      tracks: "companion-item-slug",
+    });
+
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md", classes)).toMatchObject({
+      kind: "passed",
+      rounds: 1,
+    });
+    // tracked-elsewhere needs no classes config; only the waiver does.
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md")).toMatchObject({ kind: "blocked" });
+  });
+
   test("keeps blocking a mixed round whose other finding is not waived", () => {
     const classes = [{ name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] }];
     let ledger = addReviewRound(
