@@ -865,6 +865,28 @@ describe("cli-review start", () => {
     ]);
     expect(repointedWaiver.status).not.toBe(0);
     expect(repointedWaiver.stderr).toContain("now points at");
+
+    // An authority naming a project but no checkout cannot rule a repoint out, so it
+    // refuses rather than skips - otherwise a ledger in the older shape would be the
+    // way around the check.
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const stored = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    delete stored.authority.projectRepo;
+    writeFileSync(paths.jsonPath, `${JSON.stringify(stored)}\n`);
+    writeConfig({
+      target: {
+        repo: elsewhere,
+        review: { classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2"] }] },
+      },
+    });
+    const uncheckable = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      "--class",
+      "coordination-prose",
+      "--data-repo",
+      dataRepo,
+    ]);
+    expect(uncheckable.status).not.toBe(0);
+    expect(uncheckable.stderr).toContain("without the checkout it pointed at");
   });
 
   test("resolves the exempt short-circuit from the recorded authority, not a fresh match", () => {

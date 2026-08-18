@@ -170,8 +170,19 @@ function governingPolicy(
     }
     // A registered name is not an identity. If the entry has been repointed at another
     // checkout, its policy is now somebody else's and must not govern this review.
+    //
+    // A recorded project always came from matching that project's `repo` against the
+    // reviewed checkout, so an authority naming a project without one cannot be checked
+    // and is refused rather than waved through. Skipping the check when the field is
+    // absent would make a ledger in the older shape the way around it.
+    if (!authority.projectRepo) {
+      return {
+        refusal:
+          `this review's authority records project ${authority.project} without the checkout it pointed at, so a repointed project cannot be ruled out`,
+      };
+    }
     const entryRepo = entry.repo ? canonicalPath(entry.repo, home) : undefined;
-    if (authority.projectRepo && entryRepo !== authority.projectRepo) {
+    if (entryRepo !== authority.projectRepo) {
       return {
         refusal:
           `project ${authority.project} now points at ${entryRepo ?? "no repo"}, not the ${authority.projectRepo} this review started on`,

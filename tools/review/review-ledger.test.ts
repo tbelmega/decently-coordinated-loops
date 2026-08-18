@@ -680,6 +680,22 @@ describe("recordDisposition — tracked-elsewhere", () => {
   });
 });
 
+describe("review authority", () => {
+  test("parses a project-plus-checkout authority and refuses a checkout without a project", () => {
+    const ledger = createReviewLedger({
+      branch: "feature",
+      baseRef: "master",
+      baseSha: "base",
+      authority: {dataRepo: "/data", project: "target", projectRepo: "/work/target"},
+    });
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
+
+    const orphaned = JSON.parse(JSON.stringify(ledger));
+    delete orphaned.authority.project;
+    expect(() => parseReviewLedger(orphaned)).toThrow("projectRepo without a project");
+  });
+});
+
 describe("carryForwardDispositions", () => {
   function twoRoundLedger(firstDisposition?: () => (ledger: ReviewLedger) => ReviewLedger): ReviewLedger {
     let ledger = addReviewRound(createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }), {
