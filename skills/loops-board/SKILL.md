@@ -84,9 +84,12 @@ project, or one that declares no `lifecycle`, keeps the `deploy` tail: the fallb
 manual advance, where guessing the other way would archive verified work behind the owner's
 back.
 
-Collapsing a project's tail needs no migration step. The next `bun run sync` after the
-config change moves items already parked in `for-delivery/` to `archive/` under the ordinary
-move machinery, and names each one in its report.
+Collapsing a project's tail needs no migration step for the files. The next `bun run sync`
+after the config change moves items already parked in `for-delivery/` to `archive/` under the
+ordinary move machinery, and names each one in its report. Their *frontmatter* does need one
+edit each: parked items carry `next-actor: owner` / `awaiting: deliver` from the old tail, and
+sync moves files without rewriting item state. `bun run check` names every such item, so
+normalize them in the same change that declares the new tail.
 
 Recording `merged` is a single move that also sets `next-actor: agent`,
 `autonomy: auto`, and `next-step: "Verify per the project verify gate, then flip to
@@ -242,7 +245,11 @@ and survives the item's archival.
    changes you caused or observed; append to logs, never rewrite them.
 5. `tested`/`delivered` items move to `for-delivery/`, `accepted`/`dropped` to
    `archive/` (+ `ARCHIVE.md` row) — `bun run sync` performs the moves; just set the
-   state.
+   state. Where the project declares `lifecycle: "no-deploy"` (see States), `tested` is
+   terminal instead: it moves to `archive/` (+ row), and the flip to `tested` also writes
+   `next-actor: agent`, no `awaiting`, and a terminal `next-step` — that project has no
+   delivery for the owner to perform, so leaving `awaiting: deliver` on it would archive an
+   obligation nothing can discharge. `bun run check` reports any item that still does.
 6. Commit after updating (imperative subject, e.g. `Move feature-x to implemented`).
    Push if the remote is reachable.
 

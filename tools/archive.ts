@@ -4,10 +4,13 @@ import type { ItemFile } from "./types.ts";
 
 /** States collected in `for-delivery/`: agent-verified, awaiting the owner's
  * delivery/acceptance. Out of the active board, not yet terminal (the loops-board
- * skill). */
+ * skill). `tested` is here only under the `deploy` tail; where a project's lifecycle ends
+ * at `tested`, `targetFolder` routes it to `archive/` instead. */
 export const FOR_DELIVERY_STATES = new Set(["tested", "delivered"]);
 
-/** States that move an item out of the board entirely, into `archive/`. */
+/** States that move an item out of the board entirely, into `archive/`, under every project
+ * lifecycle. A `no-deploy` project archives `tested` as well; that one is per-project, so it
+ * lives in `targetFolder` rather than in this set. */
 export const TERMINAL_STATES = new Set(["accepted", "dropped"]);
 
 export type Folder = "items" | "for-delivery" | "archive";

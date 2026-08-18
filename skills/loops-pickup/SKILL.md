@@ -277,7 +277,10 @@ come from the project's `PROJECTS.md` verify-gate entry):
    the next verification pickup re-checks. Items with no environment-dependent
    checks complete immediately.
 3. Only when all applicable checks pass, flip `merged → tested` (the next
-   `bun run sync` moves the file). You never deploy.
+   `bun run sync` moves the file). You never deploy. Where the project declares
+   `lifecycle: "no-deploy"` (loops-board → States), `tested` is terminal: write
+   `next-actor: agent`, no `awaiting`, and a terminal `next-step`, and sync archives it
+   rather than parking it for a delivery that project has no event for.
 
 **Evidence + honest failure.** Flipping to `tested` requires evidence in the item's
 `## Log`: a one-line gate summary (what ran, counts) and what was functionally

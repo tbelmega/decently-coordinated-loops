@@ -261,6 +261,24 @@ Fixture item.
     expect(result.stdout).toContain("verified: moved (for-delivery -> archive)");
   });
 
+  test("migrates a legacy owner/deliver tested item and names its stale metadata", () => {
+    // R1-F1's migration input: items parked under the deploy tail carry
+    // `next-actor: owner` + `awaiting: deliver`. The move still happens - the file is where
+    // the project's tail ends - and the run says out loud that the frontmatter still assigns
+    // the owner a delivery that project has no event for, so the rollout can normalize it.
+    const root = dataRepoWithTestedItem("no-deploy", "for-delivery");
+    const legacy = readFileSync(join(root, "for-delivery", "verified.md"), "utf8")
+      .replace("next-actor: agent", "next-actor: owner\nawaiting: deliver");
+    writeFileSync(join(root, "for-delivery", "verified.md"), legacy);
+
+    const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(root, "archive", "verified.md"))).toBe(true);
+    expect(result.stdout).toContain("verified: moved (for-delivery -> archive)");
+    expect(result.stdout).toContain("state tested is terminal for a no-deploy project");
+  });
+
   test("asks nothing and reports nothing about a no-deploy tested item already in archive/", () => {
     // The crash-recovery shape: the move landed, the board write did not. The row is stale,
     // the file is where that project's tail ends, so this run drops the row and indexes it -

@@ -58,6 +58,47 @@ describe("validateItem archive placement per project lifecycle", () => {
   });
 });
 
+describe("validateItem terminal metadata under a no-deploy tail", () => {
+  test("reports a tested item that still routes work to the owner", () => {
+    // R1-F1. `tested` is terminal there, so `awaiting: deliver` records an obligation the
+    // project has no event to discharge - and archiving it would carve that into the
+    // terminal record. Reported, not rewritten: item files are written by agents.
+    const messages = validateItem(
+      item({ state: "tested", nextActor: "owner", awaiting: "deliver" }),
+      "no-deploy",
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("state tested is terminal for a no-deploy project");
+    expect(messages[0]).toContain("next-actor: owner");
+    expect(messages[0]).toContain("awaiting: deliver");
+  });
+
+  test("reports an agent-owned tested item that still carries an awaiting bucket", () => {
+    const messages = validateItem(item({ state: "tested", nextActor: "agent", awaiting: "deliver" }), "no-deploy");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("state tested is terminal for a no-deploy project");
+  });
+
+  test("accepts the terminal shape: agent-owned, no awaiting", () => {
+    expect(validateItem(item({ state: "tested", nextActor: "agent" }), "no-deploy")).toEqual([]);
+  });
+
+  test("says nothing about a deploy project's tested item awaiting delivery", () => {
+    expect(validateItem(item({ state: "tested", nextActor: "owner", awaiting: "deliver" }), "deploy")).toEqual([]);
+  });
+
+  test("says nothing about a no-deploy item that has not reached tested", () => {
+    for (const state of ["merged", "implemented", "blocked"]) {
+      expect(validateItem(item({ state, nextActor: "owner", awaiting: "unblock" }), "no-deploy")).toEqual([]);
+    }
+  });
+
+  test("says nothing about a hand-set delivered item under a no-deploy tail", () => {
+    // The owner may still use the longer states by hand; only `tested` is terminal here.
+    expect(validateItem(item({ state: "delivered", nextActor: "owner", awaiting: "accept" }), "no-deploy")).toEqual([]);
+  });
+});
+
 describe("validateItems resolves each item's lifecycle from its project", () => {
   test("one project's archived tested item is fine while another's is stranded", () => {
     const anomalies = validateItems(

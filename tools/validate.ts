@@ -164,6 +164,18 @@ export function validateItem(item: ItemFile, lifecycle: ProjectLifecycle = DEFAU
     messages.push("state spec-filed requires a links.spec entry (the approved spec's location)");
   }
 
+  // Under a no-deploy tail `tested` is terminal, so an item that still routes work to the
+  // owner there records an obligation the project has no event to discharge - and archiving
+  // it would carve that into the terminal record. Reported rather than rewritten: item files
+  // are written by agents, never by sync, so collapsing a project's tail surfaces the
+  // already-parked items whose metadata needs normalizing instead of silently editing them.
+  if (lifecycle === "no-deploy" && item.state === "tested" && (item.nextActor === "owner" || item.awaiting)) {
+    const found = [`next-actor: ${item.nextActor}`, ...(item.awaiting ? [`awaiting: ${item.awaiting}`] : [])];
+    messages.push(
+      `state tested is terminal for a no-deploy project, so it takes next-actor: agent with no awaiting (found ${found.join(", ")})`,
+    );
+  }
+
   // A file in archive/ whose state belongs elsewhere is stranded, and it is the one
   // misplacement nothing repairs: sync's move planner is fed items/ and for-delivery/, so
   // no run moves a file back out. Derived from the file alone, deliberately. Preflight
