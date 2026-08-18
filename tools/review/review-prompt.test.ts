@@ -145,6 +145,23 @@ describe("reviewPrompt", () => {
     expect(prompt("diff")).not.toContain("never to a spec document");
   });
 
+  test("flags an added spec reference in a changed skill rule file", () => {
+    const editingSkill = reviewPrompt({
+      pass: "diff",
+      manifest: {
+        ...manifest,
+        files: [{path: "skills/loops-pickup/SKILL.md", hunks: ["-1,1 +1,2"]}],
+        instructionFiles: ["AGENTS.md", "skills/loops-pickup/SKILL.md"],
+      },
+      contextDocuments: [],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: false,
+    });
+    expect(editingSkill).toContain("This change edits instruction files (skills/loops-pickup/SKILL.md).");
+    expect(editingSkill).toContain("Report as a defect any reference this diff adds from an instruction file to a spec");
+  });
+
   test("flags an instruction file that a metadataPath configuration routed out of files", () => {
     // parseReviewDiff puts every configured metadataPath into metadataFiles. An
     // instruction file mistakenly configured as landing metadata must not thereby

@@ -283,13 +283,13 @@ rewrites instruction files, declare them in the item's front matter:
 
 ```yaml
 review:
-  rewrites: [AGENTS.md, docs/AGENTS.md]
+  rewrites: [AGENTS.md, skills/loops-pickup/SKILL.md]
 ```
 
-Declarable paths are the instruction files the CLI discovers: `AGENTS.md` and
-`CLAUDE.md` at any depth, plus `.cursor/rules/*.mdc`. Skill and runbook files are rule
-files by the convention below, but they are not in that set, so they can be neither
-declared nor mechanically checked - a `rewrites` entry naming one aborts the round.
+Declarable paths are the rule files the CLI discovers: `AGENTS.md` and `CLAUDE.md` at
+any depth, `skills/<name>/SKILL.md`, and `.cursor/rules/*.mdc`. A skill is in the set
+because it is executed prose - its text tells an agent what to do next - so it is both
+authority the reviewer reads and subject an item may declare.
 
 For the declared files the reviewer treats the diff's new text as the proposed rule under
 review: it audits internal coherence, contradictions with rules not under revision, and
@@ -321,11 +321,10 @@ delete, or supersede, so a rule file citing one carries a dangling authority by
 construction ("where this section and the spec disagree, the spec wins" is the worst
 case, but any reference is a violation). When a spec lands, write whatever the rule file
 needs from it into the rule file as current text. The reviewer reports a spec reference
-that a diff adds to an instruction file as a defect; for skills, runbooks, and other
-rule files outside instruction-file discovery the rule is convention, carried by review
-judgment rather than by the prompt. The rule binds rule files only: an item citing its
-spec through `links.spec`, and a spec or research doc citing another spec, are
-legitimate.
+that a diff adds to a discovered rule file as a defect; for rule files outside that set,
+runbooks among them, the rule is convention carried by review judgment. The rule binds
+rule files only: an item citing its spec through `links.spec`, and a spec or research
+doc citing another spec, are legitimate.
 
 **Condensation.** Once a spec is condensed into living text, the living text is the
 authority and the spec stays a historical record.
@@ -363,8 +362,10 @@ bun "$DCL_HOME/tools/review/cli-review.ts" status --item <item-slug> --data-repo
 
 Pass the same `--data-repo` you passed to `start` (or export `LOOPS_DATA_REPO`). This
 gate re-resolves the class configuration to authorize any `waived-by-policy`
-disposition, and with no data repo resolvable it has no classes and every waiver
-blocks.
+disposition, and the ledger records which data repo that must be: the first round binds
+the review to its policy authority, and `disposition` and `status` refuse a waiver
+resolved from any other repo, or from none. A waiver is the one disposition an agent
+grants itself out of configuration, so the configuration has to be the owner's.
 
 Use the item-scoped form for every tracked item; `status` without `--item` remains
 available for an owner-requested review that has no board item. It validates the

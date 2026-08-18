@@ -621,7 +621,12 @@ describe("recordDisposition — tracked-elsewhere", () => {
   });
 
   test("accepts each documented pointer shape", () => {
-    for (const tracks of ["other-repo-item-slug", "home-ops#meta", "docs/specs/2026-08-18-thing.md"]) {
+    for (const tracks of [
+      "other-repo-item-slug",
+      "home-ops#meta",
+      "home-ops#feature/review-receipt",
+      "docs/specs/2026-08-18-thing.md",
+    ]) {
       const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", {
         tracks,
       });
@@ -633,7 +638,23 @@ describe("recordDisposition — tracked-elsewhere", () => {
   test("refuses prose and malformed pointers at record and at parse time", () => {
     // The pointer is the only record of where a conceded finding's fix lands, so a
     // value that names no location must not be able to close the finding.
-    for (const tracks of ["not a pointer", "#branch", "repo#", "Some Repo#main", "../escape.md", "/abs/path.md"]) {
+    for (const tracks of [
+      "not a pointer",
+      "#branch",
+      "repo#",
+      "Some Repo#main",
+      "../escape.md",
+      "/abs/path.md",
+      // The branch half is shape-checked too: a pointer whose branch could never name
+      // a ref is a placeholder, not a destination.
+      "repo#***",
+      "repo#../not-a-branch",
+      "repo#.hidden",
+      "repo#main.lock",
+      "repo#main/",
+      "repo#a//b",
+      "repo#head@{0}",
+    ]) {
       expect(() =>
         recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", { tracks }),
       ).toThrow();

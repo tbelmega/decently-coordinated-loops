@@ -76,9 +76,11 @@ Run from the data-repo root:
 | `bun run landed [--apply]` | Detect which items' work has landed on the integration branch — via the forge API (`github` adapter) or pure git patch-id comparison (`git` adapter). Recorded `base-sha..head-sha` ranges keep stacked items independent as their branch advances. `--apply` records the landings. |
 
 If the bundled local reviewer is active, run it once from the target project at the
-final handoff of a tracked item. `cli-review.ts status --item <item-slug>` verifies that a terminal review round
-covers the current HEAD and prints the one-line
-evidence agents place in their completion receipt.
+final handoff of a tracked item. `cli-review.ts status --item <item-slug> --data-repo <data-repo>`
+verifies that a terminal review round covers the current HEAD and prints the one-line
+evidence agents place in their completion receipt. Pass the same data repo you passed to
+`start`: the gate re-resolves the review policy from it to authorize any class waiver, and
+a waiver authorized by any other one is refused.
 
 `BOARD.md` is a derived projection: never hand-resolve its merge conflicts — take
 either side and re-run `bun run sync`.

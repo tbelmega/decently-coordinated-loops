@@ -41,6 +41,16 @@ this file before any unattended work.
   never by file extension), and `review.confirmation: "scoped"` to narrow a qualifying
   confirmation round to the fix delta. Every key can be overridden per project under
   `projects.<name>.review`.
+- An item whose diff rewrites this repository's rule files (AGENTS.md, CLAUDE.md,
+  `skills/*/SKILL.md`, `.cursor/rules/*`) declares exactly those paths in its
+  front-matter `review.rewrites` and must carry `links.spec`, so the reviewer reads the
+  new text as the proposed rule instead of judging it against the rule it replaces; the
+  procedure is in the loops-review skill.
+- An agent that concludes the review *mechanism* rather than its own change is what
+  keeps a round from going clean escalates instead of grinding to the round cap: a
+  written diagnosis, a tracked item for the suspected defect, and the work left
+  `blocked` for the owner to rule on - the exit is never an unreviewed landing. The
+  loops-review skill carries the protocol.
 - TODO: keep the bundled reviewer, or define your own mechanism here.
 
 ## Merge policy

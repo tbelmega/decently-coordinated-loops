@@ -150,6 +150,12 @@ export interface ReviewSupersession {
 export interface ReviewLedger {
   version: 1;
   item?: string;
+  /** Canonical root of the data repository whose policy governs this review, recorded at
+   * the first round. Waiver authorization is bound to it: `disposition` and `status` may
+   * only resolve change classes from THIS repository, so a caller cannot point either
+   * command at an unrelated loops.json that happens to waive the finding in front of it.
+   * Absent on a ledger opened without a data repo, and a waiver on such a ledger blocks. */
+  dataRepo?: string;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -168,6 +174,7 @@ export interface ReviewFailure {
 
 export interface CreateLedgerInput {
   item?: string;
+  dataRepo?: string;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -242,6 +249,27 @@ export function validateEvidencePath(path: string): string {
  * actionable finding and no record of where its fix lands. A shape check cannot prove
  * the target exists - it is another repository's business, which is the whole point of
  * the kind - but it does reject prose, which is the failure this guards. */
+/** The branch half of a `repo#branch` pointer, checked against the shape rules
+ * `git check-ref-format` enforces. Not a claim that the branch exists - it is in another
+ * repository by construction - only that the string could name one, which is what
+ * separates a pointer from a placeholder like `***`. */
+function isRefNameShaped(branch: string): boolean {
+  return (
+    branch.length > 0 &&
+    !/[\s~^:?*[\\]/.test(branch) &&
+    !branch.includes("..") &&
+    !branch.includes("@{") &&
+    !branch.includes("//") &&
+    branch !== "@" &&
+    !branch.startsWith("/") &&
+    !branch.endsWith("/") &&
+    !branch.startsWith(".") &&
+    !branch.endsWith(".") &&
+    !branch.endsWith(".lock") &&
+    !branch.split("/").some((segment) => segment.startsWith("."))
+  );
+}
+
 export function validateTracksPointer(pointer: string): string {
   const trimmed = pointer.trim();
   const slug = /^[a-z0-9]+(?:[-.][a-z0-9]+)*$/;
@@ -254,7 +282,7 @@ export function validateTracksPointer(pointer: string): string {
   if (trimmed.includes("#")) {
     const [repository, ...rest] = trimmed.split("#");
     const branch = rest.join("#");
-    if (rest.length !== 1 || !slug.test(repository) || branch.length === 0) invalid();
+    if (rest.length !== 1 || !slug.test(repository) || !isRefNameShaped(branch)) invalid();
     return trimmed;
   }
   if (trimmed.includes("/")) return validateEvidencePath(trimmed);
@@ -603,6 +631,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
   return {
     version: 1,
     ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
+    ...(optionalString(input, "dataRepo", "review ledger") ? { dataRepo: String(input.dataRepo) } : {}),
     branch: requiredString(input, "branch", "review ledger"),
     baseRef: requiredString(input, "baseRef", "review ledger"),
     baseSha: requiredString(input, "baseSha", "review ledger"),
@@ -987,6 +1016,9 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     `- Branch: \`${ledger.branch}\``,
     `- Base ref: \`${ledger.baseRef}\``,
     `- Base SHA: \`${ledger.baseSha}\``,
+    // The authority any policy waiver in this ledger is bound to, on the human surface
+    // so the owner can see which loops.json authorized it without reading the JSON.
+    ...(ledger.dataRepo ? [`- Policy authority: \`${ledger.dataRepo}\``] : []),
   ];
   if (ledger.supersessions?.length) {
     lines.push("", "## Base supersessions");

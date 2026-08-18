@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -708,7 +708,7 @@ describe("cli-review start", () => {
       "coordination-prose",
     ]);
     expect(unauthorized.status).not.toBe(0);
-    expect(unauthorized.stderr).toContain("no review classes");
+    expect(unauthorized.stderr).toContain("waiver is not authorized: no data repo resolved");
 
     const waived = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
@@ -746,6 +746,37 @@ describe("cli-review start", () => {
     });
     expect(rejected.status).not.toBe(0);
     expect(rejected.stderr).toContain("status accepts only");
+
+    // A second data repo whose global classes waive the very same path and priority.
+    // Both gates must refuse it: the waiver's authority is the repo the ledger recorded,
+    // not whichever loops.json the caller names afterwards.
+    const foreignRepo = mkdtempSync(`${tmpdir()}/loops-review-foreign-`);
+    writeFileSync(
+      `${foreignRepo}/loops.json`,
+      `${JSON.stringify({
+        review: {
+          reviewer: "codex",
+          maxRounds: 5,
+          classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2", "P3"] }],
+        },
+      })}\n`,
+    );
+    expect(readLedgerJson(repository, item).dataRepo).toBe(realpathSync.native(dataRepo));
+    const foreignStatus = spawnSync(
+      "bun",
+      ["run", CLI, "status", "--item", item, "--data-repo", foreignRepo],
+      { cwd: repository, encoding: "utf8" },
+    );
+    expect(foreignStatus.status).not.toBe(0);
+    expect(foreignStatus.stdout).toContain("not authorized");
+    const foreignWaiver = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      "--class",
+      "coordination-prose",
+      "--data-repo",
+      foreignRepo,
+    ]);
+    expect(foreignWaiver.status).not.toBe(0);
+    expect(foreignWaiver.stderr).toContain("is not this review's policy authority");
   });
 
   test("runs a governance round with the declared change surface recorded in the ledger", () => {
@@ -781,6 +812,42 @@ describe("cli-review start", () => {
     expect(readFileSync(paths.markdownPath, "utf8")).toContain(
       "Instruction files under revision (declared change surface): AGENTS.md",
     );
+  });
+
+  test("discovers skill rule files and lets an item declare a skill rewrite", () => {
+    const repository = mkdtempSync(`${tmpdir()}/loops-review-skill-governance-`);
+    git(repository, ["init", "-q", "-b", "master"]);
+    git(repository, ["config", "user.email", "test@example.com"]);
+    git(repository, ["config", "user.name", "Test"]);
+    mkdirSync(`${repository}/skills/loops-pickup`, {recursive: true});
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n");
+    writeFileSync(`${repository}/skills/loops-pickup/SKILL.md`, "# Pickup\n\nOld step.\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Add rules and a skill"]);
+    git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+    writeFileSync(`${repository}/skills/loops-pickup/SKILL.md`, "# Pickup\n\nNew step.\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Rewrite the skill"]);
+    const item = "skill-rewrite-review";
+    const dataRepo = createReviewDataRepo(5);
+    mkdirSync(`${dataRepo}/items`, {recursive: true});
+    mkdirSync(`${dataRepo}/docs/specs`, {recursive: true});
+    writeFileSync(`${dataRepo}/docs/specs/rewrite.md`, "# Approved spec\n");
+    writeFileSync(
+      `${dataRepo}/items/${item}.md`,
+      `---\ntitle: Review test\nproject: test\nstate: in-progress\nowner: test\nautonomy: autonomous\n` +
+        `next-actor: agent\nnext-step: Review\nupdated: 2026-08-18\nreview:\n  rewrites: [skills/loops-pickup/SKILL.md]\n` +
+        `links:\n  spec: docs/specs/rewrite.md\n---\n`,
+    );
+
+    const result = runStart(repository, dataRepo, item);
+
+    expect(result.status).toBe(0);
+    const manifest = readLedgerJson(repository, item).rounds[0].audit.manifest;
+    // A skill is authority the reviewer reads AND subject the item may declare; the two
+    // questions share one discovered set.
+    expect(manifest.instructionFiles).toEqual(["AGENTS.md", "skills/loops-pickup/SKILL.md"]);
+    expect(manifest.instructionFilesUnderRevision).toEqual(["skills/loops-pickup/SKILL.md"]);
   });
 
   test("fails a rewrites declaration closed on every invalid leg", () => {

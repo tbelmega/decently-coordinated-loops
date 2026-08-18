@@ -117,6 +117,35 @@ function git(args: string[]): string {
  * resolution). Not a git checkout, or no match: undefined - the global review policy,
  * which also keeps the data repo itself on the default. Never derived from the item slug:
  * the slug's project prefix is a naming convention, not an identity. */
+/** Tilde-expanded, resolved, symlink-free form of a path. Falls back to the lexical
+ * form when the path does not exist, because a missing path must still compare
+ * deterministically rather than throw. */
+function canonicalPath(path: string, home = process.env.HOME ?? homedir()): string {
+  const expanded = resolve(expandHome(path, home));
+  try {
+    return realpathSync.native(expanded);
+  } catch {
+    return expanded;
+  }
+}
+
+/** The policy authority a waiver in this ledger is bound to, or the reason it cannot be
+ * used. Waivers are the one disposition an agent grants itself from configuration, so
+ * the configuration has to be the owner's: without this check any caller could pass a
+ * `--data-repo` whose classes happen to waive the finding in front of them and walk the
+ * review to `passed`. The binding is recorded at the first round and never inferred. */
+function waiverAuthorityRefusal(ledger: ReviewLedger, resolvedDataRepo: string | undefined): string | null {
+  if (!ledger.dataRepo) {
+    return "this review ledger records no policy authority, so no class waiver can be authorized against it";
+  }
+  if (!resolvedDataRepo) return "no data repo resolved (--data-repo or $LOOPS_DATA_REPO)";
+  const resolved = canonicalPath(resolvedDataRepo);
+  if (resolved !== ledger.dataRepo) {
+    return `data repo ${resolved} is not this review's policy authority ${ledger.dataRepo}`;
+  }
+  return null;
+}
+
 function reviewedProjectName(config: LoopsConfig, home: string): string | undefined {
   const roots = spawnSync(
     "git",
@@ -127,15 +156,7 @@ function reviewedProjectName(config: LoopsConfig, home: string): string | undefi
   const [worktreeRoot, commonDir] = roots.stdout.toString().trim().split("\n");
   if (!worktreeRoot) return undefined;
   const mainCheckoutRoot = commonDir ? commonDir.replace(/\/\.git\/?$/, "") : worktreeRoot;
-  const canonicalize = (path: string): string => {
-    const expanded = resolve(expandHome(path, home));
-    try {
-      return realpathSync.native(expanded);
-    } catch {
-      return expanded; // path doesn't exist — fall back to the lexical form
-    }
-  };
-  return matchProject(config.projects, [worktreeRoot, mainCheckoutRoot], canonicalize) ?? undefined;
+  return matchProject(config.projects, [worktreeRoot, mainCheckoutRoot], (path) => canonicalPath(path, home)) ?? undefined;
 }
 
 /** The review policy governing the CURRENT checkout: the data repo's loops.json (from
@@ -326,6 +347,15 @@ function gitPatchIds(repository: string, baseSha: string, headSha: string): stri
   return patchIds.sort();
 }
 
+/** The repository's rule files: what the reviewer must read as authority, what an item
+ * may declare under `review.rewrites`, and what the no-spec-reference instruction covers.
+ * The three questions share one set deliberately - a file that is authority in one and
+ * invisible in another is exactly the gap that let a governance rewrite of a skill be
+ * judged against the rule it was rewriting.
+ *
+ * `skills/<name>/SKILL.md` is in the set because a skill is executed prose: its text
+ * tells an agent what to do next, which is the same test the change classes apply. The
+ * cost is real and deliberate - every round's coverage must repeat every path here. */
 function discoverInstructionFiles(repository: string): string[] {
   return git(["-C", repository, "ls-files"])
     .split("\n")
@@ -334,6 +364,7 @@ function discoverInstructionFiles(repository: string): string[] {
       path.endsWith("/AGENTS.md") ||
       path === "CLAUDE.md" ||
       path.endsWith("/CLAUDE.md") ||
+      /(?:^|\/)skills\/[^/]+\/SKILL\.md$/.test(path) ||
       path.startsWith(".cursor/rules/") && path.endsWith(".mdc"),
     )
     .sort();
@@ -585,6 +616,7 @@ async function startReview(options: StartOptions): Promise<void> {
         baseSha = resolvedBaseSha;
         ledger = createReviewLedger({
           item: options.item,
+          ...(options.dataRepo ? {dataRepo: canonicalPath(options.dataRepo)} : {}),
           branch,
           baseRef: options.baseRef,
           baseSha,
@@ -592,6 +624,19 @@ async function startReview(options: StartOptions): Promise<void> {
         });
       } else {
         throw error;
+      }
+    }
+
+    // The policy authority is recorded once and never silently re-pointed: a ledger that
+    // already names one must keep it, or the binding a waiver rests on could be moved
+    // under it by a later run. Backfilled when absent (a ledger opened without one).
+    const resolvedDataRepo = options.dataRepo ? canonicalPath(options.dataRepo) : undefined;
+    if (resolvedDataRepo) {
+      if (!ledger.dataRepo) ledger = {...ledger, dataRepo: resolvedDataRepo};
+      else if (ledger.dataRepo !== resolvedDataRepo) {
+        throw new Error(
+          `review policy authority is ${ledger.dataRepo}, not the supplied ${resolvedDataRepo}`,
+        );
       }
     }
 
@@ -989,9 +1034,15 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
     if (existingLedger.item !== options.item) throw new Error("review item does not match the existing ledger");
     // Resolved lazily and only for a waiver: every other disposition kind must keep
     // working without a data repo, and a waiver without one must fail closed, not pass.
-    const classes = options.kind === "waived-by-policy"
-      ? resolveReviewPolicy(options.dataRepo).review?.classes
-      : undefined;
+    // The supplied repo must be the authority this ledger recorded, so a waiver cannot
+    // be authorized by a loops.json the caller chose after the fact.
+    let classes: ReviewClassConfig[] | undefined;
+    if (options.kind === "waived-by-policy") {
+      const policy = resolveReviewPolicy(options.dataRepo);
+      const refusal = waiverAuthorityRefusal(existingLedger, policy.dataRepo);
+      if (refusal) throw new Error(`waiver is not authorized: ${refusal}`);
+      classes = policy.review?.classes;
+    }
     const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason, {
       ...(options.doc ? {doc: options.doc} : {}),
       ...(options.waivedClass ? {waivedClass: options.waivedClass} : {}),
@@ -1043,8 +1094,13 @@ function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
       throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
     }
     // Waiver authorization binds at this gate against the currently resolved classes
-    // (--data-repo, else $LOOPS_DATA_REPO); no resolvable data repo blocks (fail closed).
-    const classes = resolveReviewPolicy(dataRepo).review?.classes;
+    // (--data-repo, else $LOOPS_DATA_REPO), and only when that repo is the authority the
+    // ledger recorded. Any other repo, or none, yields no classes and every waiver
+    // blocks - the same fail-closed direction as an absent config.
+    const policy = resolveReviewPolicy(dataRepo);
+    const classes = waiverAuthorityRefusal(ledger, policy.dataRepo) === null
+      ? policy.review?.classes
+      : undefined;
     const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes);
     const latestRound = ledger.rounds.at(-1);
     if (
