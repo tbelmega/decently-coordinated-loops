@@ -43,7 +43,11 @@ item. Set the optional positive integer `review.maxRounds` to override DCL's def
 cap of 3. Each logical round defaults to validated `diff`, `integration`, and
 `adversarial` passes; `review.auditPasses` may select a non-empty subset. Optional
 `review.metadataPaths` exact paths or `directory/**` patterns identify landing-only
-bookkeeping that may be committed after a clean review. The current-HEAD gate is:
+bookkeeping that may be committed after a clean review. Optional `review.classes` waive
+or exempt record-keeping surfaces, and `review.confirmation: "scoped"` narrows a
+qualifying confirmation round to the fix delta; both are described in the `loops-review`
+skill. Any of these keys can be overridden per project under `projects.<name>.review`.
+The current-HEAD gate is:
 
 ```bash
 bun "{{DCL_HOME}}/tools/review/cli-review.ts" status

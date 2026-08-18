@@ -25,7 +25,13 @@ without waiting for the owner to invoke this skill.
   "model": "<optional model id>",
   "maxRounds": 5,
   "auditPasses": ["diff", "integration", "adversarial"],
-  "metadataPaths": ["docs/landing-state.md"]
+  "metadataPaths": ["docs/landing-state.md"],
+  "confirmation": "full",
+  "classes": [
+    {"name": "bookkeeping", "match": [".reviews/**", "BOARD.md"], "policy": "exempt"},
+    {"name": "coordination-prose", "match": ["OUTBOX.md"], "waivablePriorities": ["P2", "P3"],
+     "guidance": "Report only factual errors, broken references, and contradictions with reviewed behavior; no wording improvements."}
+  ]
 }
 ```
 
@@ -38,7 +44,46 @@ missing it.
 for all three. `metadataPaths` optionally lists safe repo-relative exact paths or
 recursive `directory/**` patterns whose post-review changes only record landing
 metadata. Omit it when the project has no such files.
+`classes` and `confirmation` are the two cost dials, described under **Change classes**
+and **Confirmation rounds** below; omit both to get the strictest behavior.
 The reviewer CLI must be installed and the repo must be trusted git.
+
+Every key in this block can be overridden per registered project under
+`projects.<name>.review`, merged over the global block field by field (list-valued keys
+replace wholesale, so a project that overrides `classes` states its complete set). The
+project is resolved by matching the reviewed checkout against `projects.*.repo`, never
+from the item slug, so a low-stakes project runs a cheaper policy while the default
+stays where it is.
+
+## Change classes
+
+`review.classes` is optional. Absent, every finding blocks until it is dispositioned and
+every changed file is reviewed - the strictest behavior, and the one you get without
+config. A class declares exactly one of two policies for the paths it matches:
+
+- `waivablePriorities`: a finding anchored to a matched file may be dispositioned
+  `waived-by-policy` at those priorities, with no confirming round.
+- `policy: "exempt"`: a range whose every reviewable file matches only exempt classes
+  records a zero-finding exempt round without invoking the reviewer at all. A mixed
+  range runs normally, with the finding-level waivers still available.
+
+`guidance` is optional steering for the reviewer on matched paths. It reduces cost only;
+the waiver threshold is the enforcement, so a reviewer that ignores the guidance still
+converges.
+
+**Classes are drawn by function, never by extension.** The test for a path: *would an
+error in it change what a person or machine does next?* If yes it is executable surface
+and takes full review - code, scripts, machine-read config, and any document whose text
+gets executed, which includes runbooks, specs, skills, and procedures. Only
+record-keeping output is waivable or exempt: review evidence, derived boards, logs.
+`**/*.md` and `docs/**` are the non-examples to refuse. The 2026-08-17 cost report found
+the fleet's highest-value round on a pure-markdown backup spec, and the one P0 an
+extension-keyed class would have waived lived in a runbook.
+
+Waivers bind against the *resolved* config at every gate, not against the record: a class
+later narrowed or removed blocks its own past waivers rather than grandfathering them.
+Priority is the independent reviewer's call; you only apply the waiver the owner's config
+already authorizes.
 
 ## The loop
 
@@ -71,8 +116,8 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
      --status accepted --reason "<technical reason>"
    ```
 
-   Status is `accepted`, `rejected`, `already-addressed`, `accepted-as-limitation`, or
-   `deferred-to-human`.
+   Status is `accepted`, `rejected`, `already-addressed`, `accepted-as-limitation`,
+   `waived-by-policy`, `tracked-elsewhere`, or `deferred-to-human`.
 
    **`accepted-as-limitation`** concedes the finding is factually correct and declines
    the fix because its cost or added complexity exceeds the component's documented
@@ -90,6 +135,35 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    reason citing the ruling). Both decisions stay in the ledger, the documentation
    obligation is retired, and a fresh remediation obligation is created that the
    earlier `documented` result cannot satisfy.
+
+   **`waived-by-policy`** applies a waiver the owner's `review.classes` config already
+   authorizes. It requires `--class <name>` naming the authorizing class, and the CLI
+   refuses it when the finding has no file anchor, when the named class does not match
+   that file, or when the finding's priority is not waivable there; a file matching
+   several classes is waivable only if every match waives that priority. It creates no
+   obligation and needs no confirming round. It is not a judgment that the finding is
+   wrong - it is a statement that this surface is not worth a round at this priority.
+
+   **`tracked-elsewhere`** concedes a finding is factually correct and states that its
+   fix cannot land inside this repository's reviewed range because the counterpart lands
+   separately. It requires `--tracks <pointer>`: a board item slug, or a `repo#branch` or
+   path pointer naming where the fix lands. No pointer, no disposition. It is distinct
+   from `rejected` (which disputes the finding) and from `accepted-as-limitation` (which
+   documents something as a permanent limitation - here the fix exists, elsewhere). It is
+   non-blocking, creates no obligation, and is carried into the reviewer's prior notes so
+   later rounds do not re-raise it. The companion pattern, when the two repositories can
+   land in either order, is a runtime precondition: the procedure checks for its
+   cross-repo counterpart and holds when it is absent, rather than assuming it.
+
+   **Auto-carry.** At round ingestion, a finding whose identity exactly repeats a prior
+   finding whose latest disposition is terminal and non-remediation (`rejected`,
+   `accepted-as-limitation`, `waived-by-policy`, `tracked-elsewhere`) inherits that
+   disposition automatically, marked `carriedFrom: <prior finding id>`. A carried
+   disposition creates no new obligation - the original decision's obligation, where one
+   exists, still governs - and counts in the terminal predicate as its own kind.
+   `accepted` never carries, because a re-raised accepted defect is a regression signal,
+   and `deferred-to-human` never carries, because only the owner closes it. To overrule a
+   carry, write a fresh disposition; both decisions stay in the finding's history.
 4. **Implement** the accepted findings, re-run the project's checks, commit.
 
    **Coupled-fix protocol.** Before implementing, when two or more accepted findings in
@@ -115,7 +189,10 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    remediation, the persisted doc file for documentation - and scan the delta for new
    defects. Prior non-accepted dispositions remain context so the reviewer does not
    blindly re-raise them.
-6. **Stop with `PASSED`** only on a clean round covering the current HEAD. Rejected
+6. **Stop with `PASSED`** on a round covering the current HEAD that owes nothing: a
+   clean round, or a round every one of whose findings carries a non-blocking
+   disposition (`waived-by-policy` or `tracked-elsewhere`), with no obligation still
+   open. Rejected
    and accepted-as-limitation findings get one clean confirmation round; the
    limitation's confirmation verifies the named doc file, and correctness is conceded,
    so no pass re-proves the defect - though a later round may still challenge the
@@ -181,11 +258,93 @@ decision-bearing is dropped. All earlier findings must be dispositioned and none
 remain deferred. The CLI refuses review when the new base is not an ancestor of
 current `HEAD`.
 
+**Confirmation rounds.** `review.confirmation` is `"full"` by default: a confirmation
+round re-runs every configured pass over the whole reviewed range. `"scoped"` narrows a
+round that qualifies - the previous round fully dispositioned, nothing open but
+remediation obligations, and a fix delta to look at - to the obligation-classifying pass
+over that fix delta alone, skipping integration and adversarial. Such a round records
+`scope: "remediation-range"`, and its manifest is the narrowed range, so the ledger never
+claims coverage the round did not obtain. Opt in knowing both halves of the trade: full
+confirmation rounds have caught regressions the fix itself caused outside the fix, and
+that is exactly what a scoped round stops looking for.
+
 **Landing metadata.** Finish code review before committing files configured by
 `review.metadataPaths`. A later commit that changes only those paths keeps a clean
 review terminal; `status` verifies that the reviewed HEAD is an ancestor and that
 every intervening path matches the persisted patterns. Any other path still makes
 the review stale. This is for bookkeeping such as landing pointers, not implementation.
+
+## Governance mode: changing the rules the reviewer enforces
+
+Instruction files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`) go to the reviewer as
+a mandatory compliance checklist. A change that rewrites one is therefore judged against
+its own prior text, and every intended rule change reads as a deviation. When your diff
+rewrites instruction files, declare them in the item's front matter:
+
+```yaml
+review:
+  rewrites: [AGENTS.md, skills/loops-pickup/SKILL.md]
+```
+
+For the declared files the reviewer treats the diff's new text as the proposed rule under
+review: it audits internal coherence, contradictions with rules not under revision, and
+the correctness of embedded commands, and it does not report deviation from those files'
+prior text as a defect. Every instruction file you did not declare stays authority.
+
+`start` fails closed on the declaration. Each path must be a discovered instruction file
+of the repository, must actually change in the reviewed range, and the item must carry
+`links.spec` - a governance rewrite with no owner-approved spec gets no exemption. Any
+violation aborts the round with a named error instead of silently narrowing or silently
+granting authority. The declaration is persisted in every round's manifest and rendered
+in the `.md` ledger, so the owner sees exactly which authority was suspended for which
+range. Declare the files you are actually rewriting and nothing else.
+
+## Specs, rule files, and change records
+
+The linked spec is the acceptance oracle **for the reviewed range only**: it answers "did
+this change implement it". It grants the diff no authority over unchanged text, and once
+the item lands the repository's living documents outrank it.
+
+**Change records expire.** A spec, a research doc, or a review ledger records what was
+decided on a date. None of them is a standing rulebook, and a later intentional change
+that contradicts one is not a defect by that fact alone.
+
+**Rule files never reference specs.** AGENTS.md, CLAUDE.md, skills, and `.cursor/rules/*`
+state the current rule or delegate to another rule file - never to a spec, neither as
+authority nor as background. Specs are historical artifacts the owner may archive,
+delete, or supersede, so a rule file citing one carries a dangling authority by
+construction ("where this section and the spec disagree, the spec wins" is the worst
+case, but any reference is a violation). When a spec lands, write whatever the rule file
+needs from it into the rule file as current text. The reviewer reports a spec reference
+that a diff adds to an instruction file as a defect. The rule binds rule files only: an
+item citing its spec through `links.spec`, and a spec or research doc citing another
+spec, are legitimate.
+
+**Condensation.** Once a spec is condensed into living text, the living text is the
+authority and the spec stays a historical record.
+
+## When you suspect the mechanism itself
+
+Sometimes the reason a round will not go clean is the harness rather than the change: the
+reviewer misframes what class of change this is, and will keep rejecting it however you
+fix it. Grinding rounds toward the cap is the wrong answer, and `deferred-to-human` is
+per-finding. Stop requesting rounds and escalate early instead. Three things are
+required, and they are what keep this from becoming a way around review:
+
+1. **The exit is the owner.** Set the item `blocked` / `next-actor: owner` /
+   `awaiting: decide`. Review status stays not-passed and nothing lands. All you gain is
+   the end of the round burn, so suspicion can never substitute for review.
+2. **A written diagnosis**, in the step-back-note pattern: name the suspected harness
+   behavior concretely, and the rounds and findings that evidence it. "The reviewer is
+   being difficult" does not qualify.
+3. **Trackable work**: file a board item on the suspected mechanism defect plus an outbox
+   entry, so it becomes either a harness fix or an owner ruling that the suspicion was
+   wrong and the loop resumes.
+
+Check first whether the suspicion already has a first-class expression: a class waiver
+(`review.classes`), a declared governance rewrite (`review.rewrites`), or
+`tracked-elsewhere` for a fix that lands in another repository. This hatch is the
+residual for mechanism defects none of those meet.
 
 ## Completion status
 

@@ -32,10 +32,15 @@ this file before any unattended work.
   it automatically for the final handoff of attended and unattended tracked items per
   the loops-review skill after all internal tasks and final verification are complete.
   A logical round defaults to validated diff, integration, and adversarial passes.
-  The terminal signal is a clean review covering the current HEAD, or a descendant
-  whose intervening commits touch only configured `review.metadataPaths`. Optionally
-  set the positive integer `review.maxRounds` (public default 3), a non-empty
-  `review.auditPasses` subset, or safe repo-relative landing metadata patterns.
+  The terminal signal is a review round covering the current HEAD that owes nothing -
+  clean, or every finding carrying a non-blocking disposition - or a descendant whose
+  intervening commits touch only configured `review.metadataPaths`. Optionally set the
+  positive integer `review.maxRounds` (public default 3), a non-empty
+  `review.auditPasses` subset, safe repo-relative landing metadata patterns,
+  `review.classes` that waive or exempt record-keeping surfaces (drawn by function,
+  never by file extension), and `review.confirmation: "scoped"` to narrow a qualifying
+  confirmation round to the fix delta. Every key can be overridden per project under
+  `projects.<name>.review`.
 - TODO: keep the bundled reviewer, or define your own mechanism here.
 
 ## Merge policy
