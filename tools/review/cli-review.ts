@@ -21,6 +21,7 @@ import {
   type ReviewAuditPass,
   type ReviewClassConfig,
   type ReviewConfig,
+  type ReviewConfirmation,
 } from "../config.ts";
 import { isExemptOnly, matchingClasses } from "./review-classes.ts";
 import { resolveDataRepo } from "./data-repo.ts";
@@ -87,6 +88,8 @@ interface StartOptions {
   metadataPaths: string[];
   /** Resolved change classes (global block merged with the reviewed project's). */
   classes?: ReviewClassConfig[];
+  /** Resolved confirmation-round scope; undefined behaves as "full". */
+  confirmation?: ReviewConfirmation;
   dataRepo?: string;
 }
 
@@ -156,6 +159,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   auditPasses: ReviewAuditPass[];
   metadataPaths: string[];
   classes?: ReviewClassConfig[];
+  confirmation?: ReviewConfirmation;
   dataRepo?: string;
 } {
   const { review, dataRepo } = resolveReviewPolicy(flags.dataRepo);
@@ -176,6 +180,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     auditPasses: review?.auditPasses ?? [...reviewAuditPasses],
     metadataPaths: review?.metadataPaths ?? [],
     ...(review?.classes ? { classes: review.classes } : {}),
+    ...(review?.confirmation ? { confirmation: review.confirmation } : {}),
     dataRepo,
   };
 }
@@ -218,6 +223,7 @@ function parseStartOptions(args: string[]): StartOptions {
     auditPasses: configured.auditPasses,
     metadataPaths: configured.metadataPaths,
     ...(configured.classes ? {classes: configured.classes} : {}),
+    ...(configured.confirmation ? {confirmation: configured.confirmation} : {}),
     dataRepo: configured.dataRepo,
   };
 }
@@ -739,11 +745,44 @@ async function startReview(options: StartOptions): Promise<void> {
         );
         return;
       }
-      const passes = auditKind === "base-delta" && obligations.length === 0
+      const configuredPasses = auditKind === "base-delta" && obligations.length === 0
         ? options.auditPasses.filter((pass) => pass !== "diff")
         : options.auditPasses;
-      if (passes.length === 0) throw new Error("base-delta audit requires integration or adversarial pass");
-      const obligationPass = passes.includes("diff") ? "diff" : passes[0];
+      if (configuredPasses.length === 0) throw new Error("base-delta audit requires integration or adversarial pass");
+      const obligationPass = configuredPasses.includes("diff") ? "diff" : configuredPasses[0];
+      // Scoped confirmation, opt-in via review.confirmation. A round that owes nothing
+      // but remediation, whose predecessor is fully dispositioned, may audit the fix
+      // delta alone with the obligation-classifying pass. Every leg is load-bearing: an
+      // undispositioned predecessor finding or a documentation obligation still needs
+      // the full range, and with no fix delta there is nothing narrower to review. What
+      // it buys is the round's cost; what it gives up is the fix-induced regression
+      // outside the fix, which is why the default stays "full" and the audit record
+      // marks the narrowed round.
+      const scopedRange =
+        options.confirmation === "scoped" &&
+        auditKind === "remediation" &&
+        obligations.length > 0 &&
+        obligations.every((obligation) => obligation.type === "remediation") &&
+        (ledger.rounds.at(-1)?.findings ?? []).every((finding) => finding.disposition !== undefined)
+          ? remediationRange
+          : undefined;
+      const passes = scopedRange ? [obligationPass] : configuredPasses;
+      // The reviewer sees, and the ledger records, exactly the range that was audited:
+      // a manifest still spanning base..head would demand coverage of files this round
+      // never asked about, and would overstate what the round proves.
+      const reviewedManifest = scopedRange
+        ? createManifest(
+            repository,
+            scopedRange.baseSha,
+            headSha,
+            options.metadataPaths,
+            context.references,
+            currentPatchIds,
+            baseDeltaRange,
+            scopedRange,
+            context.rewrites,
+          )
+        : manifest;
       const docArtifacts = obligations
         .filter((obligation) => obligation.type === "documentation" && obligation.doc)
         .map((obligation) => ({
@@ -758,7 +797,7 @@ async function startReview(options: StartOptions): Promise<void> {
         .map((entry) => ({
           name: entry.name,
           guidance: entry.guidance as string,
-          files: manifest.files
+          files: reviewedManifest.files
             .map((file) => file.path)
             .filter((path) => matchingClasses(path, [entry]).length > 0),
         }))
@@ -767,7 +806,7 @@ async function startReview(options: StartOptions): Promise<void> {
       for (const pass of passes) {
         const prompt = reviewPrompt({
           pass,
-          manifest,
+          manifest: reviewedManifest,
           contextDocuments: context.documents,
           priorNotes: priorDispositionNotes(ledger),
           obligations,
@@ -791,7 +830,7 @@ async function startReview(options: StartOptions): Promise<void> {
         passResults.push(parseReviewPass(
           raw,
           pass,
-          manifest,
+          reviewedManifest,
           pass === obligationPass
             ? obligations.map((obligation) => ({findingId: obligation.findingId, type: obligation.type}))
             : [],
@@ -852,7 +891,8 @@ async function startReview(options: StartOptions): Promise<void> {
         review: {summary: combined.summary, findings: combined.findings},
         audit: {
           kind: auditKind,
-          manifest,
+          ...(scopedRange ? {scope: "remediation-range" as const} : {}),
+          manifest: reviewedManifest,
           passes: passResults.map((result) => ({
             pass: result.pass,
             summary: result.summary,

@@ -1764,3 +1764,151 @@ describe("cli-review start", () => {
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(false);
   });
 });
+
+describe("cli-review scoped confirmation", () => {
+  /** Data repo whose review policy opts into scoped confirmation rounds. */
+  function createScopedDataRepo(confirmation: string): string {
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({review: {reviewer: "codex", maxRounds: 5, confirmation}})}\n`,
+    );
+    return dataRepo;
+  }
+
+  /** A branch whose reviewed range spans two files, with a first round that accepted a
+   * finding and a fix commit touching only one of them, so a scoped round's narrower
+   * range is visible in the manifest rather than merely asserted. */
+  function createConfirmationRepository(): {
+    repository: string;
+    baseSha: string;
+    firstHeadSha: string;
+    item: string;
+  } {
+    const {repository, baseSha} = createReviewRepository();
+    writeFileSync(`${repository}/other.txt`, "untouched by the fix\n");
+    git(repository, ["add", "other.txt"]);
+    git(repository, ["commit", "-q", "-m", "Add a second reviewed file"]);
+    return {repository, baseSha, firstHeadSha: git(repository, ["rev-parse", "HEAD"]), item: "scoped-confirmation"};
+  }
+
+  /** Round 1 with one accepted finding, then the fix commit that answers it. */
+  function acceptAndFix(repository: string, item: string, baseSha: string, firstHeadSha: string): void {
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), {recursive: true});
+    let ledger = addReviewRound(
+      createReviewLedger({item, branch: "feature/review-receipt", baseRef: baseSha, baseSha}),
+      {
+        headSha: firstHeadSha,
+        model: "codex (default)",
+        reviewedAt: "2026-08-18T12:00:00Z",
+        review: {
+          summary: "one defect",
+          findings: [
+            {
+              priority: "P1",
+              title: "Defect",
+              file: "change.txt",
+              evidence: "broken",
+              impact: "incorrect",
+              direction: "fix it",
+              confidence: "high",
+            },
+          ],
+        },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    writeFileSync(`${repository}/change.txt`, "review me\nfix applied\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Apply fix"]);
+  }
+
+  test("runs the obligation pass alone over the remediation range when the round qualifies", () => {
+    const {repository, baseSha, firstHeadSha, item} = createConfirmationRepository();
+    const dataRepo = createScopedDataRepo("scoped");
+    acceptAndFix(repository, item, baseSha, firstHeadSha);
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+
+    const result = runStart(repository, dataRepo, item, baseSha, {FAKE_CODEX_LOG: log});
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["diff"]);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds).toHaveLength(2);
+    const audit = ledger.rounds[1].audit;
+    expect(audit.kind).toBe("remediation");
+    expect(audit.scope).toBe("remediation-range");
+    // The recorded manifest is the range the reviewer actually saw: the fix delta, not
+    // base..HEAD; otherwise the ledger would claim coverage nobody asked for.
+    expect(audit.manifest.baseSha).toBe(firstHeadSha);
+    expect(audit.manifest.files.map((file: {path: string}) => file.path)).toEqual(["change.txt"]);
+  });
+
+  test("keeps the full range and every pass when the policy leaves confirmation at full", () => {
+    const {repository, baseSha, firstHeadSha, item} = createConfirmationRepository();
+    const dataRepo = createScopedDataRepo("full");
+    acceptAndFix(repository, item, baseSha, firstHeadSha);
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+
+    const result = runStart(repository, dataRepo, item, baseSha, {
+      FAKE_CODEX_LOG: log,
+      FAKE_UNION_REMEDIATION: "1",
+    });
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["diff", "integration", "adversarial"]);
+    const ledger = readLedgerJson(repository, item);
+    const audit = ledger.rounds[1].audit;
+    expect(audit.scope).toBeUndefined();
+    expect(audit.manifest.baseSha).toBe(baseSha);
+    expect(audit.manifest.files.map((file: {path: string}) => file.path).sort()).toEqual(["change.txt", "other.txt"]);
+  });
+
+  test("does not narrow a round that owes no remediation", () => {
+    const {repository, baseSha, item} = createConfirmationRepository();
+    const dataRepo = createScopedDataRepo("scoped");
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+
+    const result = runStart(repository, dataRepo, item, baseSha, {FAKE_CODEX_LOG: log});
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["diff", "integration", "adversarial"]);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds[0].audit.kind).toBe("full");
+    expect(ledger.rounds[0].audit.scope).toBeUndefined();
+    expect(ledger.rounds[0].audit.manifest.baseSha).toBe(baseSha);
+  });
+
+  test("does not narrow a round that still owes a documentation obligation", () => {
+    const {repository, baseSha, item} = createConfirmationRepository();
+    const dataRepo = createScopedDataRepo("scoped");
+    expect(
+      runStart(repository, dataRepo, item, baseSha, {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+        "--doc",
+        "docs/limits.md",
+      ]).status,
+    ).toBe(0);
+    mkdirSync(`${repository}/docs`, {recursive: true});
+    writeFileSync(`${repository}/docs/limits.md`, "The lock is an optimisation; loss is tolerated.\n");
+    git(repository, ["add", "docs/limits.md"]);
+    git(repository, ["commit", "-q", "-m", "Document the limitation"]);
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+
+    const result = runStart(repository, dataRepo, item, baseSha, {FAKE_CODEX_LOG: log});
+
+    expect(result.status).toBe(0);
+    // A documentation obligation is verified against the whole reviewed range, not the
+    // fix delta; the artifact it names need not be in any remediation commit.
+    expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["diff", "integration", "adversarial"]);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds[1].audit.scope).toBeUndefined();
+    expect(ledger.rounds[1].audit.manifest.baseSha).toBe(baseSha);
+  });
+});

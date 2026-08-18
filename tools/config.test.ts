@@ -314,6 +314,62 @@ describe("loadConfig review classes", () => {
   });
 });
 
+describe("loadConfig review confirmation", () => {
+  function loadWithConfirmation(confirmation: unknown): LoopsConfig {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, "loops.json"), JSON.stringify({ review: { reviewer: "codex", confirmation } }));
+      return loadConfig(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("accepts the closed set and leaves an absent key undefined", () => {
+    expect(loadWithConfirmation("full").review.confirmation).toBe("full");
+    expect(loadWithConfirmation("scoped").review.confirmation).toBe("scoped");
+    expect(loadWithConfirmation(undefined).review.confirmation).toBeUndefined();
+  });
+
+  test("rejects a value outside the closed set", () => {
+    // Thrown rather than defaulted: a typo silently falling back to "full" would look
+    // exactly like a project that never asked for scoped rounds.
+    expect(() => loadWithConfirmation("remediation")).toThrow("review.confirmation must be one of full, scoped");
+    expect(() => loadWithConfirmation(true)).toThrow("review.confirmation must be one of full, scoped");
+  });
+
+  test("names the project when the invalid value is in a project override", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(
+        join(root, "loops.json"),
+        JSON.stringify({ projects: { atlas: { review: { confirmation: "narrow" } } } }),
+      );
+      expect(() => loadConfig(root)).toThrow("projects.atlas.review.confirmation must be one of full, scoped");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a project override wins over the global confirmation scope", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(
+        join(root, "loops.json"),
+        JSON.stringify({
+          review: { reviewer: "codex", confirmation: "full" },
+          projects: { atlas: { review: { confirmation: "scoped" } } },
+        }),
+      );
+      const config = loadConfig(root);
+      expect(resolveReviewConfig(config, "atlas").confirmation).toBe("scoped");
+      expect(resolveReviewConfig(config, "other").confirmation).toBe("full");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("loadConfig project review blocks", () => {
   test("rejects an invalid project review block with an error naming the project", () => {
     const root = tempRoot();

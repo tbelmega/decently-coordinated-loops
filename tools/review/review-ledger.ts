@@ -126,6 +126,12 @@ export interface ReviewRoundAudit {
    * without invoking a reviewer (zero findings, zero passes, manifest kept as the
    * explicit file-list evidence). */
   kind: "full" | "remediation" | "base-delta" | "exempt";
+  /** "remediation-range": the round ran under scoped confirmation
+   * (`review.confirmation: "scoped"`), so the reviewer saw the remediation range alone
+   * and only the obligation-classifying pass. Absent means the round covered the whole
+   * `manifest.baseSha..headSha` range with every configured pass. Recorded because the
+   * narrower round is exactly the one whose clean result proves less. */
+  scope?: "remediation-range";
   manifest: ReviewManifest;
   passes: {pass: ReviewAuditPass; summary: string; coverage: ReviewCoverage}[];
   obligations: ReviewObligationResult[];
@@ -1010,6 +1016,9 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         "### Audit evidence",
         "",
         `- Kind: ${round.audit.kind}`,
+        ...(round.audit.scope === "remediation-range"
+          ? ["- Scope: remediation range only (scoped confirmation); the range outside the fix was not re-reviewed this round"]
+          : []),
         `- Passes: ${round.audit.passes.map((pass) => pass.pass).join(", ")}`,
         `- Coverage: complete for ${round.audit.manifest.files.length} reviewable files, ${round.audit.manifest.files.reduce((count, file) => count + file.hunks.length, 0)} hunks, and ${round.audit.manifest.instructionFiles.length} instruction files`,
         ...(round.audit.manifest.instructionFilesUnderRevision?.length
@@ -1140,6 +1149,7 @@ function isReviewRoundAudit(input: unknown): input is ReviewRoundAudit {
   return (
     isRecord(input) &&
     (input.kind === "full" || input.kind === "remediation" || input.kind === "base-delta" || input.kind === "exempt") &&
+    (input.scope === undefined || input.scope === "remediation-range") &&
     isReviewManifest(input.manifest) &&
     Array.isArray(input.passes) &&
     input.passes.every(

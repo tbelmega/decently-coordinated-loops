@@ -33,6 +33,19 @@ export type ReviewAuditPass = (typeof reviewAuditPasses)[number];
 export const reviewPriorities = ["P0", "P1", "P2", "P3"] as const;
 export type ReviewPriority = (typeof reviewPriorities)[number];
 
+/** How a confirmation round is scoped once the previous round is fully dispositioned and
+ * only remediation obligations remain open. "full" runs every configured audit pass over
+ * the whole reviewed range - today's behavior, and the one that has caught fix-induced
+ * regressions outside the fix. "scoped" runs the obligation-classifying diff pass over the
+ * remediation range alone and skips integration and adversarial. Opt-in precisely because
+ * the saving and the blind spot are the same thing. */
+export const reviewConfirmations = ["full", "scoped"] as const;
+export type ReviewConfirmation = (typeof reviewConfirmations)[number];
+
+/** What an undeclared project confirms with: full rounds, so adding the key is the only
+ * way to narrow a confirmation round. */
+export const DEFAULT_REVIEW_CONFIRMATION: ReviewConfirmation = "full";
+
 /** A review change class: paths matched by function (record-keeping vs executed), never
  * by extension — a doc whose text gets executed is executable surface. A class either
  * waives reviewer findings up to the listed priorities (the waiver is recorded per
@@ -73,6 +86,8 @@ export interface ReviewConfig {
   /** Change classes authorizing finding-level waivers and review-exempt ranges. Absent:
    * every finding blocks until dispositioned, exactly the pre-class behavior. */
   classes?: ReviewClassConfig[];
+  /** Confirmation-round scope. Omit for `DEFAULT_REVIEW_CONFIRMATION`. */
+  confirmation?: ReviewConfirmation;
 }
 
 function validateProjects(projects: Record<string, ProjectConfig>): Record<string, ProjectConfig> {
@@ -109,6 +124,7 @@ export function resolveReviewConfig(config: LoopsConfig, project?: string): Revi
   if (override.auditPasses !== undefined) merged.auditPasses = override.auditPasses;
   if (override.metadataPaths !== undefined) merged.metadataPaths = override.metadataPaths;
   if (override.classes !== undefined) merged.classes = override.classes;
+  if (override.confirmation !== undefined) merged.confirmation = override.confirmation;
   return merged;
 }
 
@@ -249,6 +265,9 @@ function validateReviewConfig(review: ReviewConfig, label = "review"): ReviewCon
       ))
   ) {
     throw new Error(`${label}.metadataPaths must be a non-empty array of safe repo-relative patterns`);
+  }
+  if (review.confirmation !== undefined && !reviewConfirmations.includes(review.confirmation)) {
+    throw new Error(`${label}.confirmation must be one of ${reviewConfirmations.join(", ")}`);
   }
   if (review.classes !== undefined) validateReviewClasses(review.classes, `${label}.classes`);
   return review;
