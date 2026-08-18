@@ -80,6 +80,11 @@ export interface ReviewDisposition {
    * inside this repository's reviewed range because the counterpart lands separately.
    * No pointer, no disposition. */
   tracks?: string;
+  /** The prior finding id whose terminal decision this one repeats. Set only by the
+   * automatic carry for an exact identity repeat of a terminally dispositioned
+   * finding; a carried decision creates no new obligation (the original decision's
+   * obligation still governs) and may be superseded by any fresh disposition. */
+  carriedFrom?: string;
   /** Owner attribution — required for accepted-as-limitation on P0/P1 findings and for
    * the accepted disposition that reverses a limitation. */
   owner?: boolean;
@@ -240,16 +245,28 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
   const doc = optionalString(input, "doc", path);
   const waivedClass = optionalString(input, "class", path);
   const tracks = optionalString(input, "tracks", path);
+  const carriedFrom = optionalString(input, "carriedFrom", path);
   return {
     kind,
     reason: requiredString(input, "reason", path),
     ...(doc ? {doc} : {}),
     ...(waivedClass ? {class: waivedClass} : {}),
     ...(tracks ? {tracks} : {}),
+    ...(carriedFrom ? {carriedFrom} : {}),
     ...(input.owner === true ? {owner: true} : {}),
     ...(typeof decidedAfterRound === "number" ? {decidedAfterRound} : {}),
   };
 }
+
+/** The kinds an exact identity repeat may automatically carry forward: terminal and
+ * non-remediation. `accepted` never carries (a re-raised accepted defect is a
+ * regression signal) and `deferred-to-human` never carries (only the owner closes it). */
+export const carryableDispositionKinds: readonly DispositionKind[] = [
+  "rejected",
+  "accepted-as-limitation",
+  "waived-by-policy",
+  "tracked-elsewhere",
+];
 
 /** Invariant 5: a persisted decision honors the recording rules even when the ledger
  * arrived from disk — a malformed ledger must fail closed, not certify silently. */
@@ -304,6 +321,11 @@ function assertDecisionInvariants(
     }
   } else if (decision.tracks) {
     throw new Error(`${path}.tracks is only valid on a tracked-elsewhere disposition`);
+  }
+  if (decision.carriedFrom !== undefined && !carryableDispositionKinds.includes(decision.kind)) {
+    throw new Error(
+      `${path}.carriedFrom is only valid on a carried terminal disposition (${carryableDispositionKinds.join(", ")})`,
+    );
   }
 }
 
@@ -409,6 +431,10 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
         }
         const permitted =
           predecessor.kind === "deferred-to-human" ||
+          // An automatically carried decision is an override target by design: the
+          // fresh hand-written disposition supersedes it, both sides staying in the
+          // audit record.
+          predecessor.carriedFrom !== undefined ||
           (predecessor.kind === "accepted-as-limitation" &&
             successor.kind === "accepted" &&
             successor.owner === true);
@@ -687,6 +713,9 @@ export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
     round.findings.flatMap((finding): ReviewObligation[] => {
       const decision = finding.disposition;
       if (!decision || !obligationBearingKinds.includes(decision.kind)) return [];
+      // A carried decision creates no new obligation: the original decision on the
+      // finding it repeats still owns the obligation (and its terminal result).
+      if (decision.carriedFrom) return [];
       const type: ReviewObligationType = decision.kind === "accepted" ? "remediation" : "documentation";
       const id = currentObligationId(finding);
       // A result closes the obligation only from a round after its creating decision:
@@ -826,6 +855,7 @@ export function recordDisposition(
       // which creates a fresh obligation the retired decision's results cannot satisfy.
       const supersedable =
         finding.disposition.kind === "deferred-to-human" ||
+        finding.disposition.carriedFrom !== undefined ||
         (finding.disposition.kind === "accepted-as-limitation" && kind === "accepted" && options.owner === true);
       if (!supersedable) {
         if (finding.disposition.kind === "accepted-as-limitation") {
@@ -844,6 +874,44 @@ export function recordDisposition(
   }));
   if (!found) throw new Error(`finding ${findingId} not found`);
   return { ...ledger, rounds };
+}
+
+/** Applies disposition auto-carry to the LATEST round: a finding that exactly repeats
+ * (same audit identity, via repeatedFrom) a prior finding whose live decision is
+ * terminal and non-remediation gets that decision applied automatically, marked
+ * `carriedFrom`. The carried copy creates no new obligation, counts in the terminal
+ * predicate as its kind, and may be overridden by any fresh disposition. Carrying only
+ * happens when the MOST RECENT prior occurrence's decision is carryable — a repeat of
+ * an accepted or deferred finding stays undispositioned and blocks as today. */
+export function carryForwardDispositions(ledger: ReviewLedger): ReviewLedger {
+  const latest = ledger.rounds.at(-1);
+  if (!latest) return ledger;
+  const priorFindingsById = new Map<string, LedgerFinding>();
+  for (const round of ledger.rounds.slice(0, -1)) {
+    for (const finding of round.findings) priorFindingsById.set(finding.id, finding);
+  }
+  let carriedAny = false;
+  const findings = latest.findings.map((finding) => {
+    if (finding.disposition || !finding.repeatedFrom?.length) return finding;
+    const mostRecentPriorId = finding.repeatedFrom.at(-1) as string;
+    const prior = priorFindingsById.get(mostRecentPriorId);
+    const decision = prior?.disposition;
+    if (!prior || !decision || !carryableDispositionKinds.includes(decision.kind)) return finding;
+    carriedAny = true;
+    return {
+      ...finding,
+      disposition: {
+        ...decision,
+        carriedFrom: prior.id,
+        decidedAfterRound: ledger.rounds.length,
+      },
+    };
+  });
+  if (!carriedAny) return ledger;
+  return {
+    ...ledger,
+    rounds: [...ledger.rounds.slice(0, -1), {...latest, findings}],
+  };
 }
 
 /** Prompt notes about previously dispositioned findings. Each round runs a fresh

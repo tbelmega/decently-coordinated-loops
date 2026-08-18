@@ -28,6 +28,7 @@ import { parseItemFileText } from "../parse.ts";
 import { expandHome, matchProject } from "../registration.ts";
 import {
   addReviewRound,
+  carryForwardDispositions,
   createReviewLedger,
   liveRounds,
   openObligations,
@@ -862,6 +863,7 @@ async function startReview(options: StartOptions): Promise<void> {
         },
         ...(stepBack ? {stepBack} : {}),
       });
+      ledger = carryForwardDispositions(ledger);
       await writeLedger(ledger, paths);
       process.stdout.write(`Review round ${ledger.rounds.length} written to ${paths.markdownPath}\n`);
     } catch (error: unknown) {

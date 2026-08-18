@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   addReviewRound,
+  carryForwardDispositions,
   createReviewLedger,
   liveRounds,
   openObligations,
@@ -617,6 +618,56 @@ describe("recordDisposition — tracked-elsewhere", () => {
       tracks: "somewhere",
     };
     expect(() => parseReviewLedger(tracksOnRejected)).toThrow("only valid on a tracked-elsewhere disposition");
+  });
+});
+
+describe("carryForwardDispositions", () => {
+  function twoRoundLedger(firstDisposition?: () => (ledger: ReviewLedger) => ReviewLedger): ReviewLedger {
+    let ledger = addReviewRound(createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }), {
+      headSha: "head-one",
+      model: "codex-default",
+      reviewedAt: "2026-07-19T12:00:00Z",
+      review,
+    });
+    if (firstDisposition) ledger = firstDisposition()(ledger);
+    return addReviewRound(ledger, {
+      headSha: "head-two",
+      model: "codex-default",
+      reviewedAt: "2026-07-19T13:00:00Z",
+      review: { summary: "repeat", findings: [{ ...finding, repeatedFrom: ["R1-F1"] } as Finding] },
+    });
+  }
+
+  test("carries a terminal non-remediation decision onto an exact repeat", () => {
+    const ledger = carryForwardDispositions(
+      twoRoundLedger(() => (l) => recordDisposition(l, "R1-F1", "rejected", "Not a defect")),
+    );
+    expect(ledger.rounds[1].findings[0].disposition).toEqual({
+      kind: "rejected",
+      reason: "Not a defect",
+      carriedFrom: "R1-F1",
+      decidedAfterRound: 2,
+    });
+    expect(openObligations(ledger)).toEqual([]);
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
+    // Override: a fresh disposition supersedes the carried one via history.
+    const overridden = recordDisposition(ledger, "R2-F1", "accepted", "New round convinced me");
+    expect(overridden.rounds[1].findings[0].disposition?.kind).toBe("accepted");
+    expect(overridden.rounds[1].findings[0].history?.[0].carriedFrom).toBe("R1-F1");
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(overridden)))).toEqual(overridden);
+  });
+
+  test("never carries accepted or deferred decisions, or onto non-repeats", () => {
+    const acceptedPrior = carryForwardDispositions(
+      twoRoundLedger(() => (l) => recordDisposition(l, "R1-F1", "accepted", "Real defect")),
+    );
+    expect(acceptedPrior.rounds[1].findings[0].disposition).toBeUndefined();
+    const deferredPrior = carryForwardDispositions(
+      twoRoundLedger(() => (l) => recordDisposition(l, "R1-F1", "deferred-to-human", "Owner call")),
+    );
+    expect(deferredPrior.rounds[1].findings[0].disposition).toBeUndefined();
+    const undispositioned = carryForwardDispositions(twoRoundLedger());
+    expect(undispositioned.rounds[1].findings[0].disposition).toBeUndefined();
   });
 });
 
