@@ -60,6 +60,10 @@ export function reviewPrompt(input: ReviewPromptInput): string {
       : {}),
   };
   const metadataPaths = input.manifest.metadataFiles.map((file) => file.path);
+  const changedInstructionFiles = input.manifest.files
+    .map((file) => file.path)
+    .filter((path) => input.manifest.instructionFiles.includes(path));
+  const hasSpecContext = input.contextDocuments.some((document) => document.label === "spec");
   return [
     `AUDIT_PASS=${input.pass}`,
     `AUDIT_INPUT=${JSON.stringify(auditInput)}`,
@@ -95,6 +99,14 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     ...(metadataPaths.length > 0
       ? [`These paths are landing metadata excluded from terminal code coverage: ${metadataPaths.join(", ")}. Inspect them only for contradictions that affect the reviewed behavior.`]
       : []),
+    // Enforcement of the no-spec-reference rule, emitted only when the range can
+    // violate it: specs are dated change records the owner may archive or supersede,
+    // so an instruction file citing one carries a dangling authority by construction.
+    ...(changedInstructionFiles.length > 0
+      ? [
+          `This change edits instruction files (${changedInstructionFiles.join(", ")}). Instruction files must state the current rule or delegate to another instruction file, never to a spec document — specs are historical change records with no standing authority. Report as a defect any reference this diff adds from an instruction file to a spec (for example under docs/specs/), including precedence claims such as "the spec wins".`,
+        ]
+      : []),
     ...(input.classGuidance ?? []).map(
       (entry) =>
         `Change class "${entry.name}" covers these changed files: ${entry.files.join(", ")}. ${entry.guidance}`,
@@ -105,6 +117,14 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     ...input.contextDocuments.map(
       (document) => `WORKSTREAM_CONTEXT ${document.label} (${document.path}):\n${document.content}`,
     ),
+    // Scope the spec's authority to this landing: during the round it is the oracle
+    // ("did the change implement it"), but it must not become a standing rulebook
+    // that turns every later intentional edit into a defect.
+    ...(hasSpecContext
+      ? [
+          "The WORKSTREAM_CONTEXT spec is the acceptance oracle for this reviewed range only: verify the change implements it. It grants the diff no authority over unchanged text, and once this item lands the repository's living documents outrank it — do not treat the spec as a standing rulebook beyond this range.",
+        ]
+      : []),
     ...(input.priorNotes.length > 0
       ? [
           "Earlier non-accepted findings are supplied to prevent blind re-raising; challenge one only with new factual evidence:",

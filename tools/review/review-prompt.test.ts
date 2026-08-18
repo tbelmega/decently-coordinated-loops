@@ -103,6 +103,48 @@ describe("reviewPrompt", () => {
     expect(value).toContain("coverage.instructionFiles must repeat every path");
   });
 
+  test("scopes spec authority to the reviewed range when a spec is in context", () => {
+    const withSpec = reviewPrompt({
+      pass: "diff",
+      manifest,
+      contextDocuments: [{label: "spec", path: "/data/docs/specs/x.md", content: "# Spec"}],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: false,
+    });
+    expect(withSpec).toContain("acceptance oracle for this reviewed range only");
+    expect(withSpec).toContain("do not treat the spec as a standing rulebook");
+    const withoutSpec = reviewPrompt({
+      pass: "diff",
+      manifest,
+      contextDocuments: [{label: "item", path: "/data/items/work.md", content: "context"}],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: false,
+    });
+    expect(withoutSpec).not.toContain("acceptance oracle");
+  });
+
+  test("flags added spec references as defects only when instruction files are in the diff", () => {
+    const editingRules = reviewPrompt({
+      pass: "diff",
+      manifest: {
+        ...manifest,
+        files: [{path: "AGENTS.md", hunks: ["-1,1 +1,2"]}],
+        instructionFiles: ["AGENTS.md"],
+      },
+      contextDocuments: [],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: false,
+    });
+    expect(editingRules).toContain("This change edits instruction files (AGENTS.md).");
+    expect(editingRules).toContain("never to a spec document");
+    expect(editingRules).toContain("Report as a defect any reference this diff adds from an instruction file to a spec");
+    // A range not touching instruction files carries no such line.
+    expect(prompt("diff")).not.toContain("never to a spec document");
+  });
+
   test("renders one guidance line per change class with its matched files", () => {
     const value = reviewPrompt({
       pass: "diff",
