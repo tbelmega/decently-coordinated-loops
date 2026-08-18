@@ -281,11 +281,14 @@ export function validateEvidencePath(path: string): string {
  * field: a destination this cannot spell can be given as a path or a board-item slug.
  * See docs/design/review-policy-authority.md. */
 function isRefNameShaped(branch: string): boolean {
-  const component = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
-  const components = branch.split("/");
+  // Separators only BETWEEN alphanumeric runs. That shape forbids a leading dot, a
+  // trailing dot and consecutive dots by construction rather than by three more
+  // blacklist entries - which is the mistake the first attempt at this whitelist made,
+  // by writing a character class permissive enough to accept `foo.` and `foo..bar`.
+  const component = /^[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*$/;
   return (
     branch.length > 0 &&
-    components.every((part) => component.test(part) && !part.endsWith(".lock"))
+    branch.split("/").every((part) => component.test(part) && !part.endsWith(".lock"))
   );
 }
 
@@ -1190,6 +1193,19 @@ function isReviewCoverage(input: unknown): input is ReviewCoverage {
   );
 }
 
+/** The persisted governance authorization: it is rendered to the owner as the authority
+ * that was suspended for a range, so a list naming a non-instruction file or repeating
+ * one is a false record. Each round validates its own fresh declaration; this keeps a
+ * hand-edited or truncated ledger from reading as one that was validated. */
+function isUnderRevisionSubset(underRevision: unknown, instructionFiles: readonly string[]): boolean {
+  if (underRevision === undefined) return true;
+  if (!isStringArray(underRevision)) return false;
+  return (
+    new Set(underRevision).size === underRevision.length &&
+    underRevision.every((path) => instructionFiles.includes(path))
+  );
+}
+
 function isReviewManifest(input: unknown): input is ReviewManifest {
   return (
     isRecord(input) &&
@@ -1205,7 +1221,7 @@ function isReviewManifest(input: unknown): input is ReviewManifest {
     (input.baseDeltaFiles === undefined ||
       (Array.isArray(input.baseDeltaFiles) && input.baseDeltaFiles.every(isReviewFileCoverage))) &&
     isStringArray(input.instructionFiles) &&
-    (input.instructionFilesUnderRevision === undefined || isStringArray(input.instructionFilesUnderRevision)) &&
+    isUnderRevisionSubset(input.instructionFilesUnderRevision, input.instructionFiles) &&
     Array.isArray(input.contextReferences) &&
     input.contextReferences.every(
       (reference) =>

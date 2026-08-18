@@ -384,6 +384,22 @@ describe("loadConfig project review blocks", () => {
     }
   });
 
+  test("rejects a project review block that is not an object", () => {
+    // A string, number or array exposes no checked field, so an unguarded validator
+    // passes it and the project silently resolves to the broader global policy.
+    // An explicit null is rejected with the rest: it is a malformed override, and
+    // reading it as "no override" is the same silent fallthrough by another route.
+    for (const review of ["typo", 7, [], null, true]) {
+      const root = tempRoot();
+      try {
+        writeFileSync(join(root, "loops.json"), JSON.stringify({ projects: { atlas: { review } } }));
+        expect(() => loadConfig(root)).toThrow("projects.atlas.review must be an object");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("accepts a valid project review override", () => {
     const root = tempRoot();
     try {

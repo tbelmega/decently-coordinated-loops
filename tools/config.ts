@@ -231,6 +231,13 @@ function validateReviewClasses(classes: unknown, label: string): void {
 /** `label` names the block in errors: the global "review", or "projects.<name>.review" -
  * an instance carries a dozen projects, and a bare message leaves the owner hunting. */
 function validateReviewConfig(review: ReviewConfig, label = "review"): ReviewConfig {
+  // Guarded before any field is read: a string, number or array exposes no checked
+  // field, so it would validate clean and then resolve to the GLOBAL policy - a
+  // misconfigured project silently getting the broader one, which is the wrong
+  // direction for this file to fail in.
+  if (typeof review !== "object" || review === null || Array.isArray(review)) {
+    throw new Error(`${label} must be an object`);
+  }
   if (
     review.maxRounds !== undefined &&
     (typeof review.maxRounds !== "number" || !Number.isInteger(review.maxRounds) || review.maxRounds < 1)

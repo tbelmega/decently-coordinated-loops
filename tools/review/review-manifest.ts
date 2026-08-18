@@ -60,6 +60,21 @@ export function parseReviewDiff(diffText: string, metadataPaths: string[]): Revi
   };
 }
 
+/** The declared change surface is validated at `start` against the discovered files, but
+ * the manifest is what persists and what the owner reads, so the same two invariants -
+ * unique, and a subset of the instruction files - are enforced where it is built. A
+ * caller that gets this wrong should fail here rather than write a false authorization. */
+function underRevisionSubset(underRevision: string[], instructionFiles: string[]): string[] {
+  const unique = [...new Set(underRevision)].sort();
+  const missing = unique.filter((path) => !instructionFiles.includes(path));
+  if (missing.length > 0) {
+    throw new Error(
+      `instructionFilesUnderRevision names ${missing.join(", ")}, which are not instruction files of this manifest`,
+    );
+  }
+  return unique;
+}
+
 export function buildReviewManifest(input: {
   baseSha: string;
   headSha: string;
@@ -85,7 +100,12 @@ export function buildReviewManifest(input: {
     baseDeltaFiles,
     instructionFiles: [...input.instructionFiles].sort(),
     ...(input.instructionFilesUnderRevision?.length
-      ? {instructionFilesUnderRevision: [...input.instructionFilesUnderRevision].sort()}
+      ? {
+          instructionFilesUnderRevision: underRevisionSubset(
+            input.instructionFilesUnderRevision,
+            input.instructionFiles,
+          ),
+        }
       : {}),
     contextReferences: [...input.contextReferences],
     patchIds: [...input.patchIds].sort(),

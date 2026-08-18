@@ -93,3 +93,34 @@ describe("buildReviewManifest", () => {
     ).toBeUndefined();
   });
 });
+
+describe("instructionFilesUnderRevision", () => {
+  test("refuses a declared surface that is not a subset of the instruction files", () => {
+    expect(() =>
+      buildReviewManifest({
+        baseSha: "a",
+        headSha: "b",
+        diffText: "",
+        metadataPaths: [],
+        instructionFiles: ["AGENTS.md"],
+        instructionFilesUnderRevision: ["AGENTS.md", "docs/notes.md"],
+        contextReferences: [],
+        patchIds: [],
+      }),
+    ).toThrow("which are not instruction files of this manifest");
+  });
+
+  test("deduplicates and sorts a valid declared surface", () => {
+    const manifest = buildReviewManifest({
+      baseSha: "a",
+      headSha: "b",
+      diffText: "",
+      metadataPaths: [],
+      instructionFiles: ["AGENTS.md", "CLAUDE.md"],
+      instructionFilesUnderRevision: ["CLAUDE.md", "AGENTS.md", "CLAUDE.md"],
+      contextReferences: [],
+      patchIds: [],
+    });
+    expect(manifest.instructionFilesUnderRevision).toEqual(["AGENTS.md", "CLAUDE.md"]);
+  });
+});

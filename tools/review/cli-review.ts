@@ -793,6 +793,24 @@ async function startReview(options: StartOptions): Promise<void> {
       const remediationRange = obligations.length > 0 && previousHeadSha && previousHeadSha !== headSha
         ? {baseSha: previousHeadSha, headSha}
         : undefined;
+      // Validated before the manifest is built, because the manifest itself now refuses
+      // to persist an under-revision list that is not a subset of the instruction files -
+      // and it would report that generic failure instead of the named one the author
+      // needs. The remaining leg (the path must actually change) needs the manifest and
+      // runs below.
+      if (context.rewrites.length > 0) {
+        if (!context.hasSpec) {
+          throw new Error(
+            "review.rewrites declares a governance change surface, but the item has no links.spec — an owner-approved spec is what authorizes rewriting instruction files",
+          );
+        }
+        const discovered = discoverInstructionFiles(repository);
+        for (const path of context.rewrites) {
+          if (!discovered.includes(path)) {
+            throw new Error(`review.rewrites names ${path}, which is not an instruction file of this repository`);
+          }
+        }
+      }
       const manifest = createManifest(
         repository,
         baseSha,
@@ -809,18 +827,10 @@ async function startReview(options: StartOptions): Promise<void> {
       // owner-approved spec aborts the round instead of silently narrowing (or
       // silently granting) the authority the author declared.
       if (context.rewrites.length > 0) {
-        if (!context.hasSpec) {
-          throw new Error(
-            "review.rewrites declares a governance change surface, but the item has no links.spec — an owner-approved spec is what authorizes rewriting instruction files",
-          );
-        }
         const changedPaths = new Set(
           [...manifest.files, ...manifest.metadataFiles].map((file) => file.path),
         );
         for (const path of context.rewrites) {
-          if (!manifest.instructionFiles.includes(path)) {
-            throw new Error(`review.rewrites names ${path}, which is not an instruction file of this repository`);
-          }
           if (!changedPaths.has(path)) {
             throw new Error(`review.rewrites names ${path}, which is not changed in ${baseSha}..${headSha}`);
           }
@@ -831,9 +841,18 @@ async function startReview(options: StartOptions): Promise<void> {
       // skips the reviewer, and only while nothing else is owed (open obligations
       // still need a classifying round). The round is explicitly marked and keeps the
       // manifest as the file-list evidence.
+      // metadataFiles are excluded from manifest.files, so an instruction file configured
+      // as landing metadata would otherwise ride along in a range that skips the reviewer
+      // entirely - the one round with no findings, no passes and no prompt. The rewrite
+      // validation and the no-spec-reference instruction both already look at both
+      // groups; the shortcut with the most to give away must not look at fewer.
+      const metadataInstructionFiles = manifest.metadataFiles
+        .map((file) => file.path)
+        .filter((path) => manifest.instructionFiles.includes(path));
       if (
         classes &&
         obligations.length === 0 &&
+        metadataInstructionFiles.length === 0 &&
         manifest.files.length > 0 &&
         manifest.files.every((file) => isExemptOnly(file.path, classes))
       ) {

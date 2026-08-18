@@ -684,6 +684,46 @@ describe("cli-review start", () => {
     expect(ledger.rounds[0].audit.kind).toBe("full");
   });
 
+  test("refuses the exempt short-circuit when a changed instruction file is landing metadata", () => {
+    const repository = mkdtempSync(`${tmpdir()}/loops-review-exempt-metadata-`);
+    git(repository, ["init", "-q", "-b", "master"]);
+    git(repository, ["config", "user.email", "test@example.com"]);
+    git(repository, ["config", "user.name", "Test"]);
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n");
+    writeFileSync(`${repository}/BOARD.md`, "old board\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Add rules and a board"]);
+    git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n\nWeakened rule.\n");
+    writeFileSync(`${repository}/BOARD.md`, "new board\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Change the board and the rules"]);
+    const item = "exempt-metadata-instruction";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: {
+          reviewer: "codex",
+          maxRounds: 5,
+          // AGENTS.md as landing metadata keeps it out of manifest.files, which is what
+          // the exempt condition used to look at on its own.
+          metadataPaths: ["AGENTS.md"],
+          classes: [{ name: "bookkeeping", match: ["BOARD.md"], policy: "exempt" }],
+        },
+      })}\n`,
+    );
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+
+    const result = runStart(repository, dataRepo, item, "master", { FAKE_CODEX_LOG: log });
+
+    expect(result.status).toBe(0);
+    // The reviewer runs: a rule file must never ride into a round that skips review.
+    expect(result.stdout).not.toContain("policy-exempt");
+    expect(existsSync(log)).toBe(true);
+    expect(readLedgerJson(repository, item).rounds[0].audit.kind).not.toBe("exempt");
+  });
+
   test("waives a classed finding end to end and fails closed without the data repo", () => {
     const { repository } = createReviewRepository();
     const item = "waiver-flow-review";

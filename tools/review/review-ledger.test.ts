@@ -625,6 +625,8 @@ describe("recordDisposition — tracked-elsewhere", () => {
       "other-repo-item-slug",
       "home-ops#meta",
       "home-ops#feature/review-receipt",
+      "home-ops#v1.2.3",
+      "home-ops#a-b.c",
       "docs/specs/2026-08-18-thing.md",
     ]) {
       const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", {
@@ -661,6 +663,10 @@ describe("recordDisposition — tracked-elsewhere", () => {
       "repo#.hidden/branch",
       "repo#-leading",
       "repo#weird!name",
+      // The three the first whitelist attempt let through; git rejects all of them.
+      "repo#foo.",
+      "repo#foo..bar",
+      "repo#a-",
     ]) {
       expect(() =>
         recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", { tracks }),
@@ -677,6 +683,54 @@ describe("recordDisposition — tracked-elsewhere", () => {
     expect(() => parseReviewLedger(serialized)).toThrow("tracks must be a board item slug");
     serialized.rounds[0].findings[0].disposition.tracks = "repo#main\u0001";
     expect(() => parseReviewLedger(serialized)).toThrow("tracks must be a board item slug");
+  });
+});
+
+describe("persisted governance manifest", () => {
+  test("rejects an under-revision list that repeats or is not a subset", () => {
+    const base = addReviewRound(
+      createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+      {
+        headSha: "current",
+        model: "codex-default",
+        reviewedAt: "2026-08-18T12:00:00Z",
+        review: {summary: "clean", findings: []},
+        audit: {
+          kind: "full",
+          manifest: {
+            baseSha: "base",
+            headSha: "current",
+            files: [],
+            metadataFiles: [],
+            instructionFiles: ["AGENTS.md", "CLAUDE.md"],
+            instructionFilesUnderRevision: ["AGENTS.md"],
+            contextReferences: [],
+            patchIds: [],
+          },
+          passes: [],
+          obligations: [],
+          metrics: {
+            findingsByPass: {diff: 0, integration: 0, adversarial: 0},
+            findingsByPriority: {P0: 0, P1: 0, P2: 0, P3: 0},
+            findingsByOrigin: {original: 0, remediation: 0, "base-delta": 0, unknown: 0},
+            repeatedFindings: 0,
+            lateHighPriorityFindings: 0,
+            unchangedHeadDrift: false,
+          },
+        },
+      },
+    );
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(base)))).toEqual(base);
+
+    // A false authorization record: it is rendered to the owner as the authority that
+    // was suspended, so the parser fails closed on it like any other invalid audit.
+    const notASubset = JSON.parse(JSON.stringify(base));
+    notASubset.rounds[0].audit.manifest.instructionFilesUnderRevision = ["docs/notes.md"];
+    expect(() => parseReviewLedger(notASubset)).toThrow("audit is present but invalid");
+
+    const repeated = JSON.parse(JSON.stringify(base));
+    repeated.rounds[0].audit.manifest.instructionFilesUnderRevision = ["AGENTS.md", "AGENTS.md"];
+    expect(() => parseReviewLedger(repeated)).toThrow("audit is present but invalid");
   });
 });
 

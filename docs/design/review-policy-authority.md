@@ -80,10 +80,19 @@ non-final ref component. A blacklist of another program's rules has an unbounded
 and every round of it costs a round.
 
 **Remove the family.** The property that has to hold is *anything we accept, git accepts*
-- not *we reject everything git rejects*. A whitelist gives the first property by
-construction: each slash-separated component matches `[A-Za-z0-9_][A-Za-z0-9._-]*` and no
-component ends in `.lock`. That is strictly narrower than git's grammar, so there is no
-tail left to discover. It rejects some branch names git would allow, which is the correct
+- not *we reject everything git rejects*. A whitelist gives the first property, but only
+if it is actually written as one: the first attempt here used the character class
+`[A-Za-z0-9_][A-Za-z0-9._-]*`, which accepts `foo.` and `foo..bar`, and the next round
+caught the claim being false. Separators only *between* alphanumeric runs -
+`[A-Za-z0-9_]+([.-][A-Za-z0-9_]+)*` per slash-separated component, no component ending in
+`.lock` - forbids the leading dot, the trailing dot and the consecutive dots by
+construction instead of by three more blacklist entries.
+
+The subset claim is checked rather than asserted: enumerating every four-character string
+over `a 1 _ . - / l o c k` yields 4,463 branch names this grammar accepts, and
+`git check-ref-format --branch` rejects none of them. Re-run that check if the grammar
+changes; the previous version of this paragraph made the same claim about a grammar that
+did not hold it. It rejects some branch names git would allow, which is the correct
 trade for a pointer field: a destination that cannot be written in a conservative subset
 can be given as a path or a board-item slug instead.
 
