@@ -76,20 +76,32 @@ exist.
 
 Under `no-deploy`, `tested` **is** the terminal state and the item is archived as `tested`:
 nothing rewrites it to `accepted`, because the record must never claim an owner action that
-did not happen. So a `tested` item there carries `next-actor: agent`, no `awaiting`, and a
-`next-step` of "None - ..." like any other finished item. `delivered` and `accepted` stay
-valid states under either tail - the state vocabulary is global and closed, and the owner may
-still set them by hand - and they keep routing as the table above says. An unregistered
-project, or one that declares no `lifecycle`, keeps the `deploy` tail: the fallback costs a
-manual advance, where guessing the other way would archive verified work behind the owner's
-back.
+did not happen. So a `tested` item there carries `next-actor: agent` and no `awaiting` - both
+checked by `bun run check` - and, by the same convention every finished item follows, a
+`next-step` reading "None - ...". That wording is a convention rather than a validated field;
+next-step is free text here exactly as it is for `accepted` and `dropped`.
+
+`delivered` and `accepted` stay valid states under either tail, since the state vocabulary is
+global and closed: set on an item still in `items/` or `for-delivery/`, they route as the
+table above says. **Once the item has been archived, though, reopening it is a hand move.**
+`bun run sync` plans moves for `items/` and `for-delivery/` only, so nothing carries a file
+back out of `archive/` - the same one-way door that has always applied to `accepted`, now
+reached one state earlier. Change the state and move the file yourself; `bun run check` names
+any file left in `archive/` whose state belongs elsewhere.
+
+An unregistered project, or one that declares no `lifecycle`, keeps the `deploy` tail: the
+fallback costs a manual advance, where guessing the other way would archive verified work
+behind the owner's back.
 
 Collapsing a project's tail needs no migration step for the files. The next `bun run sync`
 after the config change moves items already parked in `for-delivery/` to `archive/` under the
 ordinary move machinery, and names each one in its report. Their *frontmatter* does need one
 edit each: parked items carry `next-actor: owner` / `awaiting: deliver` from the old tail, and
-sync moves files without rewriting item state. `bun run check` names every such item, so
-normalize them in the same change that declares the new tail.
+sync moves files without rewriting item state. **Normalize them in the same change that
+declares the new tail, before the first sync** - the move is not gated on it (folder placement
+is derived from state, and holding the file back would park it in the limbo the collapsed tail
+exists to empty), so an unnormalized item is archived carrying a delivery nobody can perform.
+`bun run check` names every such item, before and after the move, until it is edited.
 
 Recording `merged` is a single move that also sets `next-actor: agent`,
 `autonomy: auto`, and `next-step: "Verify per the project verify gate, then flip to

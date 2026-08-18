@@ -80,7 +80,11 @@ describe("validateItem terminal metadata under a no-deploy tail", () => {
   });
 
   test("accepts the terminal shape: agent-owned, no awaiting", () => {
-    expect(validateItem(item({ state: "tested", nextActor: "agent" }), "no-deploy")).toEqual([]);
+    // R2-F3: the fixture's next-step is terminal too, because that is the shape the skill
+    // describes. Its wording is a convention, unvalidated here exactly as it is for
+    // `accepted` and `dropped` - next-step is free text and no check reads it.
+    const terminal = item({ state: "tested", nextActor: "agent", nextStep: "None - verified 2026-08-18." });
+    expect(validateItem(terminal, "no-deploy")).toEqual([]);
   });
 
   test("says nothing about a deploy project's tested item awaiting delivery", () => {

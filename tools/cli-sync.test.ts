@@ -277,6 +277,36 @@ Fixture item.
     expect(existsSync(join(root, "archive", "verified.md"))).toBe(true);
     expect(result.stdout).toContain("verified: moved (for-delivery -> archive)");
     expect(result.stdout).toContain("state tested is terminal for a no-deploy project");
+
+    // R2-F1. The move is not gated on the metadata being clean - folder placement is derived
+    // from state, and holding the file back would park it in the limbo the collapsed tail
+    // exists to empty. What must hold instead is that archiving does not swallow the report:
+    // every later run validates archive/ too, so the stale field stays visible until it is
+    // edited, which is how this codebase surfaces everything about a file in archive/.
+    const again = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+    expect(again.status).toBe(0);
+    expect(again.stdout).toContain("state tested is terminal for a no-deploy project");
+  });
+
+  test("leaves an archived no-deploy item hand-set to delivered where it is, and says so", () => {
+    // R2-F2. archive/ is a one-way door for sync: planMoves is fed items/ and for-delivery/,
+    // so reopening a terminal item means moving its file by hand, whatever the new state. The
+    // collapsed tail makes `tested` terminal, so it inherits that rule - and the validator
+    // names the file and the folder it belongs in rather than leaving it silently stranded.
+    const root = dataRepoWithTestedItem("no-deploy", "items");
+    const raw = readFileSync(join(root, "items", "verified.md"), "utf8");
+    rmSync(join(root, "items", "verified.md"));
+    writeFileSync(join(root, "archive", "verified.md"), raw.replace("state: tested", "state: delivered"));
+
+    const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(root, "archive", "verified.md"))).toBe(true);
+    expect(existsSync(join(root, "for-delivery", "verified.md"))).toBe(false);
+    expect(result.stdout).toContain('state "delivered" belongs in for-delivery/');
+    expect(result.stdout).toContain("which sync never moves a file out of");
+    // Not indexed as finished either: reconciliation only indexes files that belong there.
+    expect(readFileSync(join(root, "ARCHIVE.md"), "utf8")).not.toContain("archive/verified.md");
   });
 
   test("asks nothing and reports nothing about a no-deploy tested item already in archive/", () => {

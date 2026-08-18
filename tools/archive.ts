@@ -24,7 +24,10 @@ export type Folder = "items" | "for-delivery" | "archive";
  * routes to `archive/` - as `tested`, since nothing here rewrites a state. `delivered` and
  * `accepted` stay valid states under either tail (the owner may still set them by hand) and
  * route as they always have; the state vocabulary is global and closed, and only the tail's
- * termination point is per-project.
+ * termination point is per-project. Reaching `archive/` one state earlier also means reaching
+ * the one-way door one state earlier: `planMoves` is fed `items/` and `for-delivery/`, so a
+ * state set on an already-archived item needs its file moved by hand, and `validateItem`
+ * reports the misplacement until someone does.
  *
  * `lifecycle` defaults to the deploy tail for callers that hold a state without a project
  * context. Anything item-shaped should call `itemTargetFolder` instead, so the item's own
