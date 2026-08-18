@@ -87,6 +87,22 @@ describe("reviewPrompt", () => {
     expect(value).toContain("do not re-prove the defect");
   });
 
+  test("marks declared-change-surface instruction files as subject, not authority", () => {
+    const value = reviewPrompt({
+      pass: "diff",
+      manifest: {...manifest, instructionFilesUnderRevision: ["AGENTS.md"]},
+      contextDocuments: [],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: false,
+    });
+    expect(value).toContain("This change is authorized to rewrite these instruction files: AGENTS.md.");
+    expect(value).toContain("do not report its deviation from these files' prior text");
+    expect(value).toContain("Rules in instruction files not listed here remain authority.");
+    // The mandatory-coverage rule is unchanged: under-revision files are still read.
+    expect(value).toContain("coverage.instructionFiles must repeat every path");
+  });
+
   test("renders one guidance line per change class with its matched files", () => {
     const value = reviewPrompt({
       pass: "diff",

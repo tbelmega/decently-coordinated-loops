@@ -72,4 +72,24 @@ describe("buildReviewManifest", () => {
       patchIds: ["patch-one", "patch-two"],
     });
   });
+
+  test("persists the declared change surface sorted, and omits it when empty", () => {
+    const input = {
+      baseSha: "base",
+      headSha: "head",
+      diffText: diff,
+      metadataPaths: [],
+      instructionFiles: ["AGENTS.md", "src/AGENTS.md"],
+      contextReferences: [],
+      patchIds: [],
+    };
+    expect(
+      buildReviewManifest({...input, instructionFilesUnderRevision: ["src/AGENTS.md", "AGENTS.md"]})
+        .instructionFilesUnderRevision,
+    ).toEqual(["AGENTS.md", "src/AGENTS.md"]);
+    expect(buildReviewManifest(input).instructionFilesUnderRevision).toBeUndefined();
+    expect(
+      buildReviewManifest({...input, instructionFilesUnderRevision: []}).instructionFilesUnderRevision,
+    ).toBeUndefined();
+  });
 });

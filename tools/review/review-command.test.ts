@@ -730,6 +730,96 @@ describe("cli-review start", () => {
     expect(passed.stdout).toContain("REVIEW_STATUS=passed");
   });
 
+  test("runs a governance round with the declared change surface recorded in the ledger", () => {
+    const repository = mkdtempSync(`${tmpdir()}/loops-review-governance-`);
+    git(repository, ["init", "-q", "-b", "master"]);
+    git(repository, ["config", "user.email", "test@example.com"]);
+    git(repository, ["config", "user.name", "Test"]);
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n\nOld rule.\n");
+    git(repository, ["add", "AGENTS.md"]);
+    git(repository, ["commit", "-q", "-m", "Add rules"]);
+    git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n\nNew rule.\n");
+    git(repository, ["add", "AGENTS.md"]);
+    git(repository, ["commit", "-q", "-m", "Rewrite the rule"]);
+    const item = "governance-rewrite-review";
+    const dataRepo = createReviewDataRepo(5);
+    mkdirSync(`${dataRepo}/items`, {recursive: true});
+    mkdirSync(`${dataRepo}/docs/specs`, {recursive: true});
+    writeFileSync(`${dataRepo}/docs/specs/rewrite.md`, "# Approved spec\n");
+    writeFileSync(
+      `${dataRepo}/items/${item}.md`,
+      `---\ntitle: Review test\nproject: test\nstate: in-progress\nowner: test\nautonomy: autonomous\n` +
+        `next-actor: agent\nnext-step: Review\nupdated: 2026-08-18\nreview:\n  rewrites: [AGENTS.md]\n` +
+        `links:\n  spec: docs/specs/rewrite.md\n---\n`,
+    );
+
+    const result = runStart(repository, dataRepo, item);
+
+    expect(result.status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds[0].audit.manifest.instructionFilesUnderRevision).toEqual(["AGENTS.md"]);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    expect(readFileSync(paths.markdownPath, "utf8")).toContain(
+      "Instruction files under revision (declared change surface): AGENTS.md",
+    );
+  });
+
+  test("fails a rewrites declaration closed on every invalid leg", () => {
+    // AGENTS.md exists at the base; the reviewed branch changes only change.txt.
+    const repository = mkdtempSync(`${tmpdir()}/loops-review-rewrites-`);
+    git(repository, ["init", "-q", "-b", "master"]);
+    git(repository, ["config", "user.email", "test@example.com"]);
+    git(repository, ["config", "user.name", "Test"]);
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n");
+    git(repository, ["add", "AGENTS.md"]);
+    git(repository, ["commit", "-q", "-m", "Add rules"]);
+    git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+    writeFileSync(`${repository}/change.txt`, "review me\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Add change"]);
+    const item = "invalid-rewrites-review";
+    const dataRepo = createReviewDataRepo(5);
+    mkdirSync(`${dataRepo}/items`, {recursive: true});
+    mkdirSync(`${dataRepo}/docs/specs`, {recursive: true});
+    writeFileSync(`${dataRepo}/docs/specs/rewrite.md`, "# Approved spec\n");
+    const writeItem = (frontmatterTail: string) =>
+      writeFileSync(
+        `${dataRepo}/items/${item}.md`,
+        `---\ntitle: Review test\nproject: test\nstate: in-progress\nowner: test\nautonomy: autonomous\n` +
+          `next-actor: agent\nnext-step: Review\nupdated: 2026-08-18\n${frontmatterTail}---\n`,
+      );
+
+    // Missing links.spec: a governance rewrite needs an owner-approved spec.
+    writeItem("review:\n  rewrites: [AGENTS.md]\n");
+    const withoutSpec = runStart(repository, dataRepo, item);
+    expect(withoutSpec.status).not.toBe(0);
+    expect(withoutSpec.stderr).toContain("no links.spec");
+
+    // Not an instruction file of the repository.
+    writeItem("review:\n  rewrites: [change.txt]\nlinks:\n  spec: docs/specs/rewrite.md\n");
+    const notInstruction = runStart(repository, dataRepo, item);
+    expect(notInstruction.status).not.toBe(0);
+    expect(notInstruction.stderr).toContain("not an instruction file");
+
+    // An instruction file the reviewed range does not change.
+    writeItem("review:\n  rewrites: [AGENTS.md]\nlinks:\n  spec: docs/specs/rewrite.md\n");
+    const unchanged = runStart(repository, dataRepo, item);
+    expect(unchanged.status).not.toBe(0);
+    expect(unchanged.stderr).toContain("not changed in");
+
+    // A malformed declaration aborts instead of silently running without it.
+    writeItem("review:\n  rewrites: []\nlinks:\n  spec: docs/specs/rewrite.md\n");
+    const malformed = runStart(repository, dataRepo, item);
+    expect(malformed.status).not.toBe(0);
+    expect(malformed.stderr).toContain("review.rewrites");
+
+    // No round was recorded by any of the refused attempts.
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(ledger.rounds).toHaveLength(0);
+  });
+
   test("keeps the global review policy for a repository registered to no project", () => {
     const { repository } = createReviewRepository();
     const item = "unregistered-repo-review";

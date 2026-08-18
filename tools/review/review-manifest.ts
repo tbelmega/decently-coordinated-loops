@@ -18,6 +18,11 @@ export interface ReviewManifest {
   remediationFiles?: ReviewFileCoverage[];
   baseDeltaFiles?: ReviewFileCoverage[];
   instructionFiles: string[];
+  /** Instruction files this range is authorized to rewrite (the item's declared change
+   * surface): the reviewer treats their NEW text as the proposed rule under review,
+   * while every other instruction file remains authority. Persisted per round so the
+   * suspended authority stays auditable in the ledger. */
+  instructionFilesUnderRevision?: string[];
   contextReferences: ReviewContextReference[];
   patchIds: string[];
 }
@@ -63,6 +68,7 @@ export function buildReviewManifest(input: {
   baseDeltaDiffText?: string;
   metadataPaths: string[];
   instructionFiles: string[];
+  instructionFilesUnderRevision?: string[];
   contextReferences: ReviewContextReference[];
   patchIds: string[];
 }): ReviewManifest {
@@ -78,6 +84,9 @@ export function buildReviewManifest(input: {
     remediationFiles,
     baseDeltaFiles,
     instructionFiles: [...input.instructionFiles].sort(),
+    ...(input.instructionFilesUnderRevision?.length
+      ? {instructionFilesUnderRevision: [...input.instructionFilesUnderRevision].sort()}
+      : {}),
     contextReferences: [...input.contextReferences],
     patchIds: [...input.patchIds].sort(),
   };

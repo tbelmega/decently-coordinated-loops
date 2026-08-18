@@ -67,6 +67,11 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     passInstructions[input.pass],
     "Return coverage for every manifest file and exact hunk list. Missing coverage invalidates the entire logical round.",
     "coverage.instructionFiles must repeat every path in the manifest's instructionFiles, including files you judged irrelevant to this change. It records that you considered the repository's instructions, so any deviation from that exact set invalidates the round.",
+    ...(input.manifest.instructionFilesUnderRevision?.length
+      ? [
+          `This change is authorized to rewrite these instruction files: ${input.manifest.instructionFilesUnderRevision.join(", ")}. For them the diff's new text is the proposed rule under review: audit it as subject (internal coherence, contradictions with rules not under revision, correctness of embedded commands), and do not report its deviation from these files' prior text, or a conflict with a rule inside these same files, as a defect. Rules in instruction files not listed here remain authority.`,
+        ]
+      : []),
     "Report every actionable correctness, security, data-loss, concurrency, compatibility, accessibility, or material maintainability defect; omit style preferences.",
     "Classify each finding origin as original, remediation, base-delta, or unknown.",
     ...(!input.classifyObligations && input.obligations.length > 0

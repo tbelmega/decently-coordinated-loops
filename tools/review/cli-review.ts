@@ -9,6 +9,7 @@
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { parse as parseYaml } from "yaml";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -335,12 +336,45 @@ function contextDigest(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+/** The item's declared change surface (front-matter `review.rewrites`): instruction
+ * files this change is authorized to rewrite. Parsed strictly and failing closed — a
+ * malformed declaration aborts the review rather than silently running without the
+ * authorization the author thought they declared. */
+function parseReviewRewrites(itemText: string, itemPath: string): string[] {
+  const match = itemText.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return [];
+  const frontmatter = parseYaml(match[1]) as Record<string, unknown>;
+  const review = frontmatter.review;
+  if (review === undefined) return [];
+  if (typeof review !== "object" || review === null || Array.isArray(review)) {
+    throw new Error(`review front-matter in ${itemPath} must be a mapping`);
+  }
+  const rewrites = (review as Record<string, unknown>).rewrites;
+  if (rewrites === undefined) return [];
+  if (
+    !Array.isArray(rewrites) ||
+    rewrites.length === 0 ||
+    new Set(rewrites).size !== rewrites.length ||
+    rewrites.some((path) => typeof path !== "string" || path !== validateEvidencePath(path))
+  ) {
+    throw new Error(
+      `review.rewrites in ${itemPath} must be a non-empty list of unique repository-relative paths`,
+    );
+  }
+  return rewrites as string[];
+}
+
 function loadReviewContext(
   repository: string,
   dataRepo: string | undefined,
   item: string | undefined,
-): {documents: ReviewContextDocument[]; references: ReviewContextReference[]} {
-  if (!dataRepo || !item) return {documents: [], references: []};
+): {
+  documents: ReviewContextDocument[];
+  references: ReviewContextReference[];
+  rewrites: string[];
+  hasSpec: boolean;
+} {
+  if (!dataRepo || !item) return {documents: [], references: [], rewrites: [], hasSpec: false};
   const itemPath = ["items", "for-delivery", "archive"]
     .map((directory) => join(dataRepo, directory, `${item}.md`))
     .find(existsSync);
@@ -359,6 +393,8 @@ function loadReviewContext(
     documents.push({label: "spec", path: specPath, content: readFileSync(specPath, "utf8")});
   }
   return {
+    rewrites: parseReviewRewrites(itemContent, relative(dataRepo, itemPath)),
+    hasSpec: Boolean(specLink),
     documents,
     references: documents.map((document) => {
       const dataRepoPath = relative(dataRepo, document.path);
@@ -386,6 +422,7 @@ function createManifest(
   patchIds: string[],
   baseDeltaRange?: {baseSha: string; headSha: string},
   remediationRange?: {baseSha: string; headSha: string},
+  instructionFilesUnderRevision?: string[],
 ): ReviewManifest {
   const primaryDiff = git([
     "-C",
@@ -429,6 +466,7 @@ function createManifest(
     baseDeltaDiffText: baseDeltaDiff,
     metadataPaths,
     instructionFiles: discoverInstructionFiles(repository),
+    ...(instructionFilesUnderRevision?.length ? {instructionFilesUnderRevision} : {}),
     contextReferences,
     patchIds,
   });
@@ -636,7 +674,30 @@ async function startReview(options: StartOptions): Promise<void> {
         currentPatchIds,
         baseDeltaRange,
         remediationRange,
+        context.rewrites,
       );
+      // The declared change surface fails closed on every leg: a rewrite declaration
+      // that names a non-instruction file, an unchanged file, or arrives without an
+      // owner-approved spec aborts the round instead of silently narrowing (or
+      // silently granting) the authority the author declared.
+      if (context.rewrites.length > 0) {
+        if (!context.hasSpec) {
+          throw new Error(
+            "review.rewrites declares a governance change surface, but the item has no links.spec — an owner-approved spec is what authorizes rewriting instruction files",
+          );
+        }
+        const changedPaths = new Set(
+          [...manifest.files, ...manifest.metadataFiles].map((file) => file.path),
+        );
+        for (const path of context.rewrites) {
+          if (!manifest.instructionFiles.includes(path)) {
+            throw new Error(`review.rewrites names ${path}, which is not an instruction file of this repository`);
+          }
+          if (!changedPaths.has(path)) {
+            throw new Error(`review.rewrites names ${path}, which is not changed in ${baseSha}..${headSha}`);
+          }
+        }
+      }
       // Exempt short-circuit: derived from the diff, never declared per item. Only a
       // range whose every reviewable file is covered by exempt-policy classes alone
       // skips the reviewer, and only while nothing else is owed (open obligations

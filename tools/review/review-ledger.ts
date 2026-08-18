@@ -915,6 +915,9 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         `- Kind: ${round.audit.kind}`,
         `- Passes: ${round.audit.passes.map((pass) => pass.pass).join(", ")}`,
         `- Coverage: complete for ${round.audit.manifest.files.length} reviewable files, ${round.audit.manifest.files.reduce((count, file) => count + file.hunks.length, 0)} hunks, and ${round.audit.manifest.instructionFiles.length} instruction files`,
+        ...(round.audit.manifest.instructionFilesUnderRevision?.length
+          ? [`- Instruction files under revision (declared change surface): ${round.audit.manifest.instructionFilesUnderRevision.join(", ")}`]
+          : []),
         `- Remediation focus: ${round.audit.manifest.remediationFiles?.length ?? 0} files`,
         `- Base-delta focus: ${round.audit.manifest.baseDeltaFiles?.length ?? 0} files`,
         `- Findings by pass: diff=${metrics.findingsByPass.diff}, integration=${metrics.findingsByPass.integration}, adversarial=${metrics.findingsByPass.adversarial}`,
@@ -988,6 +991,7 @@ function isReviewManifest(input: unknown): input is ReviewManifest {
     (input.baseDeltaFiles === undefined ||
       (Array.isArray(input.baseDeltaFiles) && input.baseDeltaFiles.every(isReviewFileCoverage))) &&
     isStringArray(input.instructionFiles) &&
+    (input.instructionFilesUnderRevision === undefined || isStringArray(input.instructionFilesUnderRevision)) &&
     Array.isArray(input.contextReferences) &&
     input.contextReferences.every(
       (reference) =>
