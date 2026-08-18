@@ -806,6 +806,7 @@ describe("cli-review start", () => {
     expect(readLedgerJson(repository, item).authority).toEqual({
       dataRepo: realpathSync.native(dataRepo),
       project: "target",
+      projectRepo: realpathSync.native(repository),
     });
 
     // Unregistering that project would otherwise fall the resolution through to the
@@ -839,6 +840,72 @@ describe("cli-review start", () => {
       { cwd: repository, encoding: "utf8" },
     );
     expect(passed.stdout).toContain("REVIEW_STATUS=passed");
+
+    // A registered name is not an identity: keeping "target" but repointing it at
+    // another checkout makes its policy somebody else's, and both gates must refuse.
+    const elsewhere = mkdtempSync(`${tmpdir()}/loops-review-elsewhere-`);
+    writeConfig({
+      target: {
+        repo: elsewhere,
+        review: { classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2"] }] },
+      },
+    });
+    const repointedStatus = spawnSync(
+      "bun",
+      ["run", CLI, "status", "--item", item, "--data-repo", dataRepo],
+      { cwd: repository, encoding: "utf8" },
+    );
+    expect(repointedStatus.status).not.toBe(0);
+    expect(repointedStatus.stdout).toContain("not authorized");
+    const repointedWaiver = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      "--class",
+      "coordination-prose",
+      "--data-repo",
+      dataRepo,
+    ]);
+    expect(repointedWaiver.status).not.toBe(0);
+    expect(repointedWaiver.stderr).toContain("now points at");
+  });
+
+  test("resolves the exempt short-circuit from the recorded authority, not a fresh match", () => {
+    const { repository } = createReviewRepository();
+    const item = "exempt-authority-binding";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    const writeConfig = (projects: Record<string, unknown>) =>
+      writeFileSync(
+        `${dataRepo}/loops.json`,
+        `${JSON.stringify({ review: { reviewer: "codex", maxRounds: 5 }, projects })}\n`,
+      );
+    // Round 1 starts under a project with no classes at all.
+    writeConfig({ target: { repo: repository } });
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(runDisposition(repository, item, "R1-F1", "rejected", "Not a defect").status).toBe(0);
+    writeFileSync(`${repository}/change.txt`, "review me\nagain\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Touch the file again"]);
+
+    // Repointing the recorded project at another checkout and declaring the range
+    // exempt must NOT buy a reviewer-free passing round: the exempt short-circuit is
+    // the class consumer with the most to give away, so it fails closed like the rest.
+    const elsewhere = mkdtempSync(`${tmpdir()}/loops-review-elsewhere-`);
+    writeConfig({
+      target: {
+        repo: elsewhere,
+        review: { classes: [{ name: "bookkeeping", match: ["change.txt"], policy: "exempt" }] },
+      },
+    });
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+    const result = runStart(repository, dataRepo, item, "master", { FAKE_CODEX_LOG: log });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("policy-exempt");
+    expect(result.stderr).toContain("review classes are not applied this round");
+    expect(existsSync(log)).toBe(true);
+    expect(readLedgerJson(repository, item).rounds[1].audit.kind).not.toBe("exempt");
   });
 
   test("runs a governance round with the declared change surface recorded in the ledger", () => {

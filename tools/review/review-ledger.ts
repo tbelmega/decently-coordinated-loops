@@ -182,6 +182,11 @@ export interface ReviewAuthority {
    * when the reviewed checkout matched no project, which means the global block governs
    * and must keep governing. */
   project?: string;
+  /** Canonical root that project's `repo` pointed at when the review started. A
+   * registered name is not an identity - `projects.<name>.repo` can be repointed at
+   * another checkout while keeping the name - so the name alone would let a review be
+   * governed by a policy that has since become somebody else's. */
+  projectRepo?: string;
 }
 
 export interface CreateLedgerInput {
@@ -261,26 +266,26 @@ export function validateEvidencePath(path: string): string {
  * actionable finding and no record of where its fix lands. A shape check cannot prove
  * the target exists - it is another repository's business, which is the whole point of
  * the kind - but it does reject prose, which is the failure this guards. */
-/** The branch half of a `repo#branch` pointer, checked against the shape rules
- * `git check-ref-format` enforces. Not a claim that the branch exists - it is in another
- * repository by construction - only that the string could name one, which is what
- * separates a pointer from a placeholder like `***`. */
+/** The branch half of a `repo#branch` pointer, checked against a conservative WHITELIST
+ * rather than against git's rejection rules.
+ *
+ * The property that has to hold is "anything we accept, git accepts" - not "we reject
+ * everything git rejects". Three review rounds spent themselves on the second reading,
+ * each finding one more thing the blacklist missed (`***`, then the ASCII control range
+ * and DEL, then `.lock` on a non-final component), because a blacklist of another
+ * program's grammar has an unbounded tail. Every component matching
+ * `[A-Za-z0-9_][A-Za-z0-9._-]*` with no component ending in `.lock` is strictly narrower
+ * than `git check-ref-format --branch`, so the first property holds by construction.
+ *
+ * It refuses some branch names git would take. That is the right trade for a pointer
+ * field: a destination this cannot spell can be given as a path or a board-item slug.
+ * See docs/design/review-policy-authority.md. */
 function isRefNameShaped(branch: string): boolean {
+  const component = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+  const components = branch.split("/");
   return (
     branch.length > 0 &&
-    // 0x00-0x20 and 0x7f: the control range git check-ref-format rejects outright,
-    // whitespace among it. A branch nobody can name is a placeholder, not a pointer.
-    !/[\x00-\x20\x7f~^:?*[\\]/.test(branch) &&
-    !branch.includes("..") &&
-    !branch.includes("@{") &&
-    !branch.includes("//") &&
-    branch !== "@" &&
-    !branch.startsWith("/") &&
-    !branch.endsWith("/") &&
-    !branch.startsWith(".") &&
-    !branch.endsWith(".") &&
-    !branch.endsWith(".lock") &&
-    !branch.split("/").some((segment) => segment.startsWith("."))
+    components.every((part) => component.test(part) && !part.endsWith(".lock"))
   );
 }
 
@@ -442,7 +447,11 @@ function parseAuthority(input: unknown): ReviewAuthority | undefined {
   if (!isRecord(input)) throw new Error("review ledger authority must be an object");
   const dataRepo = requiredString(input, "dataRepo", "review ledger authority");
   const project = optionalString(input, "project", "review ledger authority");
-  return {dataRepo, ...(project ? {project} : {})};
+  const projectRepo = optionalString(input, "projectRepo", "review ledger authority");
+  if (projectRepo && !project) {
+    throw new Error("review ledger authority records a projectRepo without a project");
+  }
+  return {dataRepo, ...(project ? {project} : {}), ...(projectRepo ? {projectRepo} : {})};
 }
 
 export function parseReviewLedger(input: unknown): ReviewLedger {
@@ -1044,7 +1053,10 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     ...(ledger.authority
       ? [
           `- Policy authority: \`${ledger.authority.dataRepo}\`` +
-            (ledger.authority.project ? ` (project \`${ledger.authority.project}\`)` : " (global block)"),
+            (ledger.authority.project
+              ? ` (project \`${ledger.authority.project}\`` +
+                (ledger.authority.projectRepo ? ` at \`${ledger.authority.projectRepo}\`)` : ")")
+              : " (global block)"),
         ]
       : []),
   ];

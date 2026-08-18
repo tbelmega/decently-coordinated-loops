@@ -278,10 +278,16 @@ the review stale. This is for bookkeeping such as landing pointers, not implemen
 
 ## Governance mode: changing the rules the reviewer enforces
 
-Instruction files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`) go to the reviewer as
-a mandatory compliance checklist. A change that rewrites one is therefore judged against
-its own prior text, and every intended rule change reads as a deviation. When your diff
-rewrites instruction files, declare them in the item's front matter:
+Instruction files (`AGENTS.md`, `CLAUDE.md`, `skills/<name>/SKILL.md`,
+`.cursor/rules/*.mdc`) go to the reviewer as a mandatory compliance checklist. A change
+that rewrites one is therefore judged against its own prior text, and every intended rule
+change reads as a deviation.
+
+Governance mode is **opt-in, and it is the only thing that changes that**. Declaring
+nothing is always allowed and always stricter: the file stays authority, the diff is
+reviewed against it, and no spec is required. Declare only when you want the reviewer to
+stop treating the prior text as the rule - which is what a deliberate rule change needs
+and what a typo fix does not:
 
 ```yaml
 review:
@@ -298,9 +304,11 @@ review: it audits internal coherence, contradictions with rules not under revisi
 the correctness of embedded commands, and it does not report deviation from those files'
 prior text as a defect. Every instruction file you did not declare stays authority.
 
-`start` fails closed on the declaration. Each path must be a discovered instruction file
-of the repository, must actually change in the reviewed range, and the item must carry
-`links.spec` - a governance rewrite with no owner-approved spec gets no exemption. Any
+`start` fails closed on the declaration you make. Each declared path must be a discovered
+instruction file of the repository, must actually change in the reviewed range, and the
+item must carry `links.spec` - suspending a file's authority with no owner-approved spec
+behind it gets no exemption. These conditions bind the declaration, not the edit: an
+undeclared instruction-file change needs no spec because it is claiming nothing. Any
 violation aborts the round with a named error instead of silently narrowing or silently
 granting authority. The declaration is persisted in every round's manifest and rendered
 in the `.md` ledger, so the owner sees exactly which authority was suspended for which

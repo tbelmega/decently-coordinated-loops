@@ -87,8 +87,6 @@ interface StartOptions {
   stepBack?: string;
   auditPasses: ReviewAuditPass[];
   metadataPaths: string[];
-  /** Resolved change classes (global block merged with the reviewed project's). */
-  classes?: ReviewClassConfig[];
   /** Resolved confirmation-round scope; undefined behaves as "full". */
   confirmation?: ReviewConfirmation;
   /** The policy authority to stamp on a ledger this run creates: the canonical data-repo
@@ -134,20 +132,26 @@ function canonicalPath(path: string, home = process.env.HOME ?? homedir()): stri
   }
 }
 
-/** The change classes that may authorize a waiver on this ledger, or the reason none
- * can. Waivers are the one disposition an agent grants itself from configuration, so the
- * configuration has to be the one the review started under - not merely the same data
- * repo, because a `projects.*.repo` edit can point the same root at a different project
- * block, and dropping the entry falls through to a broader global one. Resolution reads
- * the RECORDED project, never the freshly matched one, and refuses when that project has
- * since left the config. */
-function waiverClasses(
+/** The review policy that governs an existing ledger, or the reason none does.
+ *
+ * This is the single resolution point for everything the class configuration decides:
+ * waiver authorization at `disposition`, waiver re-authorization at `status`, and the
+ * exempt short-circuit plus reviewer guidance at `start`. It is one function because
+ * four review rounds each found the next consumer that had been resolved somewhere else
+ * - the invariant list and why this shape is the fix are in
+ * docs/design/review-policy-authority.md.
+ *
+ * Every leg fails closed to "no classes", never to the global block, which is the
+ * broader policy: no recorded authority, no resolvable data repo, a different data repo,
+ * a project that has left the config, or a project whose `repo` no longer names the
+ * checkout this review started on. */
+function governingPolicy(
   ledger: ReviewLedger,
   dataRepoFlag: string | undefined,
-): { classes?: ReviewClassConfig[]; refusal: string | null } {
+): { review?: ReviewConfig; refusal: string | null } {
   const authority = ledger.authority;
   if (!authority) {
-    return {refusal: "this review ledger records no policy authority, so no class waiver can be authorized against it"};
+    return {refusal: "this review ledger records no policy authority"};
   }
   const home = process.env.HOME ?? homedir();
   const resolvedRoot = resolveDataRepo(dataRepoFlag, process.env, home);
@@ -157,11 +161,24 @@ function waiverClasses(
     return {refusal: `data repo ${canonical} is not this review's policy authority ${authority.dataRepo}`};
   }
   const config = loadConfig(resolvedRoot);
-  if (authority.project && !Object.prototype.hasOwnProperty.call(config.projects, authority.project)) {
-    return {refusal: `project ${authority.project}, which authorized this review, is no longer registered in ${canonical}`};
+  if (authority.project) {
+    const entry = Object.prototype.hasOwnProperty.call(config.projects, authority.project)
+      ? config.projects[authority.project]
+      : undefined;
+    if (!entry) {
+      return {refusal: `project ${authority.project}, which authorized this review, is no longer registered in ${canonical}`};
+    }
+    // A registered name is not an identity. If the entry has been repointed at another
+    // checkout, its policy is now somebody else's and must not govern this review.
+    const entryRepo = entry.repo ? canonicalPath(entry.repo, home) : undefined;
+    if (authority.projectRepo && entryRepo !== authority.projectRepo) {
+      return {
+        refusal:
+          `project ${authority.project} now points at ${entryRepo ?? "no repo"}, not the ${authority.projectRepo} this review started on`,
+      };
+    }
   }
-  const classes = resolveReviewConfig(config, authority.project).classes;
-  return {refusal: null, ...(classes ? {classes} : {})};
+  return {refusal: null, review: resolveReviewConfig(config, authority.project)};
 }
 
 function reviewedProjectName(config: LoopsConfig, home: string): string | undefined {
@@ -184,16 +201,20 @@ function resolveReviewPolicy(dataRepoFlag?: string): {
   review?: ReviewConfig;
   dataRepo?: string;
   project?: string;
+  projectRepo?: string;
 } {
   const home = process.env.HOME ?? homedir();
   const dataRepo = resolveDataRepo(dataRepoFlag, process.env, home);
   const config = dataRepo ? loadConfig(dataRepo) : undefined;
   const project = config ? reviewedProjectName(config, home) : undefined;
   const review = config ? resolveReviewConfig(config, project) : undefined;
+  const projectEntry = project && config ? config.projects[project] : undefined;
+  const projectRepo = projectEntry?.repo ? canonicalPath(projectEntry.repo, home) : undefined;
   return {
     ...(review ? { review } : {}),
     ...(dataRepo ? { dataRepo } : {}),
     ...(project ? { project } : {}),
+    ...(projectRepo ? { projectRepo } : {}),
   };
 }
 
@@ -206,12 +227,11 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   maxRounds?: number;
   auditPasses: ReviewAuditPass[];
   metadataPaths: string[];
-  classes?: ReviewClassConfig[];
   confirmation?: ReviewConfirmation;
   authority?: ReviewAuthority;
   dataRepo?: string;
 } {
-  const { review, dataRepo, project } = resolveReviewPolicy(flags.dataRepo);
+  const { review, dataRepo, project, projectRepo } = resolveReviewPolicy(flags.dataRepo);
   const id = flags.reviewer ?? review?.reviewer;
   if (!id) {
     throw new Error(
@@ -228,10 +248,15 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     maxRounds: review?.maxRounds,
     auditPasses: review?.auditPasses ?? [...reviewAuditPasses],
     metadataPaths: review?.metadataPaths ?? [],
-    ...(review?.classes ? { classes: review.classes } : {}),
     ...(review?.confirmation ? { confirmation: review.confirmation } : {}),
     ...(dataRepo
-      ? { authority: { dataRepo: canonicalPath(dataRepo), ...(project ? { project } : {}) } }
+      ? {
+          authority: {
+            dataRepo: canonicalPath(dataRepo),
+            ...(project ? { project } : {}),
+            ...(projectRepo ? { projectRepo } : {}),
+          },
+        }
       : {}),
     dataRepo,
   };
@@ -274,7 +299,6 @@ function parseStartOptions(args: string[]): StartOptions {
     ...(stepBack ? {stepBack} : {}),
     auditPasses: configured.auditPasses,
     metadataPaths: configured.metadataPaths,
-    ...(configured.classes ? {classes: configured.classes} : {}),
     ...(configured.confirmation ? {confirmation: configured.confirmation} : {}),
     ...(configured.authority ? {authority: configured.authority} : {}),
     dataRepo: configured.dataRepo,
@@ -668,6 +692,19 @@ async function startReview(options: StartOptions): Promise<void> {
       );
     }
 
+    // The third class consumer, bound to the same authority as the two disposition-side
+    // gates. It fails closed to "no classes": no exempt short-circuit and no guidance, so
+    // the range gets a full review rather than a policy that is no longer this review's.
+    // Announced rather than silent - exemptions vanishing without a word reads as a
+    // config typo.
+    const governing = governingPolicy(ledger, options.dataRepo);
+    if (governing.refusal && ledger.authority) {
+      process.stderr.write(
+        `review classes are not applied this round: ${governing.refusal}\n`,
+      );
+    }
+    const classes = governing.review?.classes;
+
     try {
       const obligations = openObligations(ledger);
       // The same-HEAD remediation guard holds on EVERY path, not only same-base: a
@@ -784,10 +821,10 @@ async function startReview(options: StartOptions): Promise<void> {
       // still need a classifying round). The round is explicitly marked and keeps the
       // manifest as the file-list evidence.
       if (
-        options.classes &&
+        classes &&
         obligations.length === 0 &&
         manifest.files.length > 0 &&
-        manifest.files.every((file) => isExemptOnly(file.path, options.classes ?? []))
+        manifest.files.every((file) => isExemptOnly(file.path, classes))
       ) {
         const exemptFiles = manifest.files.map((file) => file.path);
         ledger = addReviewRound(ledger, {
@@ -870,7 +907,7 @@ async function startReview(options: StartOptions): Promise<void> {
         }));
       // Guidance lines for classes whose paths this range touches; enforcement stays on
       // the disposition side, so this only steers the reviewer's attention and cost.
-      const classGuidance = (options.classes ?? [])
+      const classGuidance = (classes ?? [])
         .filter((entry) => entry.guidance)
         .map((entry) => ({
           name: entry.name,
@@ -1066,9 +1103,9 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
     // be authorized by a loops.json the caller chose after the fact.
     let classes: ReviewClassConfig[] | undefined;
     if (options.kind === "waived-by-policy") {
-      const authorized = waiverClasses(existingLedger, options.dataRepo);
-      if (authorized.refusal) throw new Error(`waiver is not authorized: ${authorized.refusal}`);
-      classes = authorized.classes;
+      const governing = governingPolicy(existingLedger, options.dataRepo);
+      if (governing.refusal) throw new Error(`waiver is not authorized: ${governing.refusal}`);
+      classes = governing.review?.classes;
     }
     const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason, {
       ...(options.doc ? {doc: options.doc} : {}),
@@ -1124,7 +1161,7 @@ function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
     // (--data-repo, else $LOOPS_DATA_REPO), and only when that repo is the authority the
     // ledger recorded. Any other repo, or none, yields no classes and every waiver
     // blocks - the same fail-closed direction as an absent config.
-    const classes = waiverClasses(ledger, dataRepo).classes;
+    const classes = governingPolicy(ledger, dataRepo).review?.classes;
     const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes);
     const latestRound = ledger.rounds.at(-1);
     if (

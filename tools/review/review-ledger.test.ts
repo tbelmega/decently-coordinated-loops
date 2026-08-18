@@ -657,6 +657,10 @@ describe("recordDisposition — tracked-elsewhere", () => {
       "repo#main\u0001",
       "repo#main\u007f",
       "repo#top\u0007ic",
+      "repo#foo.lock/bar",
+      "repo#.hidden/branch",
+      "repo#-leading",
+      "repo#weird!name",
     ]) {
       expect(() =>
         recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", { tracks }),
