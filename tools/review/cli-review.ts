@@ -9,13 +9,13 @@
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { loadConfig, reviewAuditPasses, type ReviewAuditPass } from "../config.ts";
+import { loadConfig, resolveReviewConfig, reviewAuditPasses, type LoopsConfig, type ReviewAuditPass } from "../config.ts";
 import { resolveDataRepo } from "./data-repo.ts";
 import { parseItemFileText } from "../parse.ts";
-import { expandHome } from "../registration.ts";
+import { expandHome, matchProject } from "../registration.ts";
 import {
   addReviewRound,
   createReviewLedger,
@@ -95,8 +95,36 @@ function git(args: string[]): string {
   return result.stdout.toString().trim();
 }
 
+/** The registered project whose `repo` matches the reviewed checkout, resolved exactly
+ * like the participation gate (cli-registered.ts): a linked worktree also matches via its
+ * main checkout root, and both sides are canonicalized (tilde expansion, symlink
+ * resolution). Not a git checkout, or no match: undefined - the global review policy,
+ * which also keeps the data repo itself on the default. Never derived from the item slug:
+ * the slug's project prefix is a naming convention, not an identity. */
+function reviewedProjectName(config: LoopsConfig, home: string): string | undefined {
+  const roots = spawnSync(
+    "git",
+    ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"],
+    { encoding: "utf8" },
+  );
+  if (roots.status !== 0) return undefined;
+  const [worktreeRoot, commonDir] = roots.stdout.toString().trim().split("\n");
+  if (!worktreeRoot) return undefined;
+  const mainCheckoutRoot = commonDir ? commonDir.replace(/\/\.git\/?$/, "") : worktreeRoot;
+  const canonicalize = (path: string): string => {
+    const expanded = resolve(expandHome(path, home));
+    try {
+      return realpathSync.native(expanded);
+    } catch {
+      return expanded; // path doesn't exist — fall back to the lexical form
+    }
+  };
+  return matchProject(config.projects, [worktreeRoot, mainCheckoutRoot], canonicalize) ?? undefined;
+}
+
 /** Resolves which reviewer + model to use: explicit flags win, else the data repo's
- * loops.json `review` block (from --data-repo or $LOOPS_DATA_REPO). */
+ * loops.json review policy (from --data-repo or $LOOPS_DATA_REPO), with the reviewed
+ * repository's registered project overriding the global block field by field. */
 function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string }): {
   reviewer: Reviewer;
   model?: string;
@@ -109,7 +137,8 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   const home = process.env.HOME ?? homedir();
   const dataRepo = resolveDataRepo(flags.dataRepo, process.env, home);
   const config = dataRepo ? loadConfig(dataRepo) : undefined;
-  const id = flags.reviewer ?? config?.review.reviewer;
+  const review = config ? resolveReviewConfig(config, reviewedProjectName(config, home)) : undefined;
+  const id = flags.reviewer ?? review?.reviewer;
   if (!id) {
     throw new Error(
       "no reviewer configured — set review.reviewer in loops.json (run setup) or pass --reviewer <" +
@@ -120,11 +149,11 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   if (!isReviewerId(id)) throw new Error(`unknown reviewer "${id}" — expected one of ${reviewerIds.join(", ")}`);
   return {
     reviewer: getReviewer(id),
-    model: flags.model ?? config?.review.model,
-    effort: flags.effort ?? config?.review.effort,
-    maxRounds: config?.review.maxRounds,
-    auditPasses: config?.review.auditPasses ?? [...reviewAuditPasses],
-    metadataPaths: config?.review.metadataPaths ?? [],
+    model: flags.model ?? review?.model,
+    effort: flags.effort ?? review?.effort,
+    maxRounds: review?.maxRounds,
+    auditPasses: review?.auditPasses ?? [...reviewAuditPasses],
+    metadataPaths: review?.metadataPaths ?? [],
     dataRepo,
   };
 }

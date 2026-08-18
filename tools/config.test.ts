@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, projectLifecycle } from "./config.ts";
+import { loadConfig, projectLifecycle, resolveReviewConfig } from "./config.ts";
 import type { LoopsConfig } from "./config.ts";
 
 function tempRoot(): string {
@@ -198,5 +198,88 @@ describe("projectLifecycle", () => {
     // "toString" resolves to a function on the prototype rather than a config entry.
     expect(projectLifecycle(config({}), "constructor")).toBe("deploy");
     expect(projectLifecycle(config({}), "toString")).toBe("deploy");
+  });
+});
+
+describe("resolveReviewConfig", () => {
+  function config(projects: LoopsConfig["projects"]): LoopsConfig {
+    return {
+      owner: "casey",
+      priorityProjects: [],
+      integrationBranch: "master",
+      landedAdapter: "git",
+      githubTokens: {},
+      projects,
+      review: { reviewer: "codex", model: "frontier-1", effort: "high", maxRounds: 5 },
+    };
+  }
+
+  test("returns the global block when no project name is given", () => {
+    expect(resolveReviewConfig(config({}))).toEqual({
+      reviewer: "codex",
+      model: "frontier-1",
+      effort: "high",
+      maxRounds: 5,
+    });
+  });
+
+  test("returns the global block for an unregistered project or one without an override", () => {
+    const loops = config({ atlas: { repo: "~/atlas" } });
+    expect(resolveReviewConfig(loops, "atlas")).toEqual(loops.review);
+    expect(resolveReviewConfig(loops, "never-heard-of-it")).toEqual(loops.review);
+  });
+
+  test("merges project fields over the global block field by field", () => {
+    const loops = config({
+      atlas: { repo: "~/atlas", review: { maxRounds: 2, effort: "medium" } },
+    });
+    expect(resolveReviewConfig(loops, "atlas")).toEqual({
+      reviewer: "codex",
+      model: "frontier-1",
+      effort: "medium",
+      maxRounds: 2,
+    });
+  });
+
+  test("replaces list-valued fields wholesale instead of concatenating", () => {
+    const loops = config({});
+    loops.review.metadataPaths = [".reviews/**"];
+    loops.projects = { atlas: { review: { metadataPaths: ["docs/evidence/**"] } } };
+    expect(resolveReviewConfig(loops, "atlas").metadataPaths).toEqual(["docs/evidence/**"]);
+  });
+
+  test("does not resolve an inherited Object property name", () => {
+    expect(resolveReviewConfig(config({}), "constructor")).toEqual(config({}).review);
+  });
+});
+
+describe("loadConfig project review blocks", () => {
+  test("rejects an invalid project review block with an error naming the project", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(
+        join(root, "loops.json"),
+        JSON.stringify({ projects: { atlas: { review: { maxRounds: 0 } } } }),
+      );
+      expect(() => loadConfig(root)).toThrow("projects.atlas.review.maxRounds must be a positive integer");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a valid project review override", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(
+        join(root, "loops.json"),
+        JSON.stringify({
+          review: { reviewer: "codex", maxRounds: 5 },
+          projects: { atlas: { review: { maxRounds: 2 } } },
+        }),
+      );
+      expect(loadConfig(root).projects.atlas?.review).toEqual({ maxRounds: 2 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

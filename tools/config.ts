@@ -21,6 +21,10 @@ export interface ProjectConfig {
   landedAdapter?: "github" | "git";
   /** Omit for the default `deploy` tail. */
   lifecycle?: ProjectLifecycle;
+  /** Per-project review policy: the same partial shape as the top-level `review` block,
+   * merged over it field by field (see `resolveReviewConfig`). Omit to use the global
+   * policy unchanged. */
+  review?: ReviewConfig;
 }
 
 export const reviewAuditPasses = ["diff", "integration", "adversarial"] as const;
@@ -56,8 +60,31 @@ function validateProjects(projects: Record<string, ProjectConfig>): Record<strin
       // the deploy tail would look exactly like a collapsed tail that quietly did nothing.
       throw new Error(`projects.${name}.lifecycle must be one of ${projectLifecycles.join(", ")}`);
     }
+    if (project?.review !== undefined) validateReviewConfig(project.review, `projects.${name}.review`);
   }
   return projects;
+}
+
+/** The review policy that governs `project`: the project's `review` block merged over the
+ * global one, field by field. List-valued fields replace wholesale (no concatenation - a
+ * project that overrides `metadataPaths` states its complete set). No project name, an
+ * unregistered name, or a project without an override: the global block unchanged, so
+ * behavior without config edits is exactly the pre-override one. Own-property lookup for
+ * the same reason as `projectLifecycle`. */
+export function resolveReviewConfig(config: LoopsConfig, project?: string): ReviewConfig {
+  const entry = project && Object.prototype.hasOwnProperty.call(config.projects, project)
+    ? config.projects[project]
+    : undefined;
+  const override = entry?.review;
+  if (!override) return config.review;
+  const merged: ReviewConfig = { ...config.review };
+  if (override.reviewer !== undefined) merged.reviewer = override.reviewer;
+  if (override.model !== undefined) merged.model = override.model;
+  if (override.effort !== undefined) merged.effort = override.effort;
+  if (override.maxRounds !== undefined) merged.maxRounds = override.maxRounds;
+  if (override.auditPasses !== undefined) merged.auditPasses = override.auditPasses;
+  if (override.metadataPaths !== undefined) merged.metadataPaths = override.metadataPaths;
+  return merged;
 }
 
 /** The lifecycle tail that governs `project`. An unregistered name, or a registered project
@@ -96,15 +123,17 @@ function defaults(): LoopsConfig {
   };
 }
 
-function validateReviewConfig(review: ReviewConfig): ReviewConfig {
+/** `label` names the block in errors: the global "review", or "projects.<name>.review" -
+ * an instance carries a dozen projects, and a bare message leaves the owner hunting. */
+function validateReviewConfig(review: ReviewConfig, label = "review"): ReviewConfig {
   if (
     review.maxRounds !== undefined &&
     (typeof review.maxRounds !== "number" || !Number.isInteger(review.maxRounds) || review.maxRounds < 1)
   ) {
-    throw new Error("review.maxRounds must be a positive integer");
+    throw new Error(`${label}.maxRounds must be a positive integer`);
   }
   if (review.effort !== undefined && (typeof review.effort !== "string" || review.effort.trim() === "")) {
-    throw new Error("review.effort must be a non-empty string");
+    throw new Error(`${label}.effort must be a non-empty string`);
   }
   if (
     review.auditPasses !== undefined &&
@@ -113,7 +142,7 @@ function validateReviewConfig(review: ReviewConfig): ReviewConfig {
       new Set(review.auditPasses).size !== review.auditPasses.length ||
       review.auditPasses.some((pass) => !reviewAuditPasses.includes(pass)))
   ) {
-    throw new Error(`review.auditPasses must be a non-empty array containing only ${reviewAuditPasses.join(", ")}`);
+    throw new Error(`${label}.auditPasses must be a non-empty array containing only ${reviewAuditPasses.join(", ")}`);
   }
   if (
     review.metadataPaths !== undefined &&
@@ -130,7 +159,7 @@ function validateReviewConfig(review: ReviewConfig): ReviewConfig {
           (pattern.includes("*") && (!pattern.endsWith("/**") || pattern.slice(0, -3).includes("*"))),
       ))
   ) {
-    throw new Error("review.metadataPaths must be a non-empty array of safe repo-relative patterns");
+    throw new Error(`${label}.metadataPaths must be a non-empty array of safe repo-relative patterns`);
   }
   return review;
 }

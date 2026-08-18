@@ -587,6 +587,65 @@ describe("cli-review start", () => {
     expect(updated.rounds[4].findings).toEqual([]);
   });
 
+  test("applies the reviewed repository's project review override from loops.json", () => {
+    const { repository, baseSha, headSha } = createReviewRepository();
+    const item = "project-override-review";
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), { recursive: true });
+    // One recorded round with a rejected finding: the global five-round policy would run
+    // a confirming round, so only the project override's cap of 1 can refuse this start.
+    let ledger = createReviewLedger({ item, branch: "feature/review-receipt", baseRef: "master", baseSha });
+    ledger = addReviewRound(ledger, {
+      headSha,
+      model: "codex (default)",
+      reviewedAt: "2026-07-21T12:00:01Z",
+      review: {
+        summary: "non-actionable suggestion",
+        findings: [{
+          priority: "P2",
+          title: "Suggestion",
+          evidence: "Not a defect",
+          impact: "None",
+          direction: "Keep the implementation",
+          confidence: "high",
+        }],
+      },
+    });
+    ledger = recordDisposition(ledger, "R1-F1", "rejected", "Not an actionable defect");
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: { reviewer: "codex", maxRounds: 5 },
+        projects: { atlas: { repo: repository, review: { maxRounds: 1 } } },
+      })}\n`,
+    );
+
+    const result = runStart(repository, dataRepo, item);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("review round limit of 1 reached");
+  });
+
+  test("keeps the global review policy for a repository registered to no project", () => {
+    const { repository } = createReviewRepository();
+    const item = "unregistered-repo-review";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: { reviewer: "codex", maxRounds: 5 },
+        projects: { atlas: { repo: `${tmpdir()}/somewhere-else`, review: { reviewer: "cursor", maxRounds: 1 } } },
+      })}\n`,
+    );
+
+    const result = runStart(repository, dataRepo, item);
+
+    expect(result.status).toBe(0);
+    expect(readLedgerJson(repository, item).rounds).toHaveLength(1);
+  });
+
   test("does not reset the round cap when only the base-ref spelling changes", () => {
     const { repository, baseSha, headSha } = createReviewRepository();
     const item = "same-base-different-ref";
