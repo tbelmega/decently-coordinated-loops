@@ -654,6 +654,9 @@ describe("recordDisposition — tracked-elsewhere", () => {
       "repo#main/",
       "repo#a//b",
       "repo#head@{0}",
+      "repo#main\u0001",
+      "repo#main\u007f",
+      "repo#top\u0007ic",
     ]) {
       expect(() =>
         recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", { tracks }),
@@ -667,6 +670,8 @@ describe("recordDisposition — tracked-elsewhere", () => {
       ),
     );
     serialized.rounds[0].findings[0].disposition.tracks = "not a pointer";
+    expect(() => parseReviewLedger(serialized)).toThrow("tracks must be a board item slug");
+    serialized.rounds[0].findings[0].disposition.tracks = "repo#main\u0001";
     expect(() => parseReviewLedger(serialized)).toThrow("tracks must be a board item slug");
   });
 });

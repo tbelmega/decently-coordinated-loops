@@ -34,6 +34,7 @@ import {
   liveRounds,
   openObligations,
   parseReviewLedger,
+  type ReviewAuthority,
   priorDispositionNotes,
   recordDisposition,
   recordReviewFailure,
@@ -90,6 +91,10 @@ interface StartOptions {
   classes?: ReviewClassConfig[];
   /** Resolved confirmation-round scope; undefined behaves as "full". */
   confirmation?: ReviewConfirmation;
+  /** The policy authority to stamp on a ledger this run creates: the canonical data-repo
+   * root plus the project whose review block was resolved. Undefined when no data repo
+   * is resolvable, and such a ledger can never authorize a class waiver. */
+  authority?: ReviewAuthority;
   dataRepo?: string;
 }
 
@@ -129,21 +134,34 @@ function canonicalPath(path: string, home = process.env.HOME ?? homedir()): stri
   }
 }
 
-/** The policy authority a waiver in this ledger is bound to, or the reason it cannot be
- * used. Waivers are the one disposition an agent grants itself from configuration, so
- * the configuration has to be the owner's: without this check any caller could pass a
- * `--data-repo` whose classes happen to waive the finding in front of them and walk the
- * review to `passed`. The binding is recorded at the first round and never inferred. */
-function waiverAuthorityRefusal(ledger: ReviewLedger, resolvedDataRepo: string | undefined): string | null {
-  if (!ledger.dataRepo) {
-    return "this review ledger records no policy authority, so no class waiver can be authorized against it";
+/** The change classes that may authorize a waiver on this ledger, or the reason none
+ * can. Waivers are the one disposition an agent grants itself from configuration, so the
+ * configuration has to be the one the review started under - not merely the same data
+ * repo, because a `projects.*.repo` edit can point the same root at a different project
+ * block, and dropping the entry falls through to a broader global one. Resolution reads
+ * the RECORDED project, never the freshly matched one, and refuses when that project has
+ * since left the config. */
+function waiverClasses(
+  ledger: ReviewLedger,
+  dataRepoFlag: string | undefined,
+): { classes?: ReviewClassConfig[]; refusal: string | null } {
+  const authority = ledger.authority;
+  if (!authority) {
+    return {refusal: "this review ledger records no policy authority, so no class waiver can be authorized against it"};
   }
-  if (!resolvedDataRepo) return "no data repo resolved (--data-repo or $LOOPS_DATA_REPO)";
-  const resolved = canonicalPath(resolvedDataRepo);
-  if (resolved !== ledger.dataRepo) {
-    return `data repo ${resolved} is not this review's policy authority ${ledger.dataRepo}`;
+  const home = process.env.HOME ?? homedir();
+  const resolvedRoot = resolveDataRepo(dataRepoFlag, process.env, home);
+  if (!resolvedRoot) return {refusal: "no data repo resolved (--data-repo or $LOOPS_DATA_REPO)"};
+  const canonical = canonicalPath(resolvedRoot, home);
+  if (canonical !== authority.dataRepo) {
+    return {refusal: `data repo ${canonical} is not this review's policy authority ${authority.dataRepo}`};
   }
-  return null;
+  const config = loadConfig(resolvedRoot);
+  if (authority.project && !Object.prototype.hasOwnProperty.call(config.projects, authority.project)) {
+    return {refusal: `project ${authority.project}, which authorized this review, is no longer registered in ${canonical}`};
+  }
+  const classes = resolveReviewConfig(config, authority.project).classes;
+  return {refusal: null, ...(classes ? {classes} : {})};
 }
 
 function reviewedProjectName(config: LoopsConfig, home: string): string | undefined {
@@ -162,12 +180,21 @@ function reviewedProjectName(config: LoopsConfig, home: string): string | undefi
 /** The review policy governing the CURRENT checkout: the data repo's loops.json (from
  * --data-repo or $LOOPS_DATA_REPO) with the reviewed repository's registered project
  * merged over the global block. Undefined when no data repo is resolvable. */
-function resolveReviewPolicy(dataRepoFlag?: string): { review?: ReviewConfig; dataRepo?: string } {
+function resolveReviewPolicy(dataRepoFlag?: string): {
+  review?: ReviewConfig;
+  dataRepo?: string;
+  project?: string;
+} {
   const home = process.env.HOME ?? homedir();
   const dataRepo = resolveDataRepo(dataRepoFlag, process.env, home);
   const config = dataRepo ? loadConfig(dataRepo) : undefined;
-  const review = config ? resolveReviewConfig(config, reviewedProjectName(config, home)) : undefined;
-  return { ...(review ? { review } : {}), ...(dataRepo ? { dataRepo } : {}) };
+  const project = config ? reviewedProjectName(config, home) : undefined;
+  const review = config ? resolveReviewConfig(config, project) : undefined;
+  return {
+    ...(review ? { review } : {}),
+    ...(dataRepo ? { dataRepo } : {}),
+    ...(project ? { project } : {}),
+  };
 }
 
 /** Resolves which reviewer + model to use: explicit flags win, else the resolved
@@ -181,9 +208,10 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   metadataPaths: string[];
   classes?: ReviewClassConfig[];
   confirmation?: ReviewConfirmation;
+  authority?: ReviewAuthority;
   dataRepo?: string;
 } {
-  const { review, dataRepo } = resolveReviewPolicy(flags.dataRepo);
+  const { review, dataRepo, project } = resolveReviewPolicy(flags.dataRepo);
   const id = flags.reviewer ?? review?.reviewer;
   if (!id) {
     throw new Error(
@@ -202,6 +230,9 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     metadataPaths: review?.metadataPaths ?? [],
     ...(review?.classes ? { classes: review.classes } : {}),
     ...(review?.confirmation ? { confirmation: review.confirmation } : {}),
+    ...(dataRepo
+      ? { authority: { dataRepo: canonicalPath(dataRepo), ...(project ? { project } : {}) } }
+      : {}),
     dataRepo,
   };
 }
@@ -245,6 +276,7 @@ function parseStartOptions(args: string[]): StartOptions {
     metadataPaths: configured.metadataPaths,
     ...(configured.classes ? {classes: configured.classes} : {}),
     ...(configured.confirmation ? {confirmation: configured.confirmation} : {}),
+    ...(configured.authority ? {authority: configured.authority} : {}),
     dataRepo: configured.dataRepo,
   };
 }
@@ -616,7 +648,7 @@ async function startReview(options: StartOptions): Promise<void> {
         baseSha = resolvedBaseSha;
         ledger = createReviewLedger({
           item: options.item,
-          ...(options.dataRepo ? {dataRepo: canonicalPath(options.dataRepo)} : {}),
+          ...(options.authority ? {authority: options.authority} : {}),
           branch,
           baseRef: options.baseRef,
           baseSha,
@@ -627,17 +659,13 @@ async function startReview(options: StartOptions): Promise<void> {
       }
     }
 
-    // The policy authority is recorded once and never silently re-pointed: a ledger that
-    // already names one must keep it, or the binding a waiver rests on could be moved
-    // under it by a later run. Backfilled when absent (a ledger opened without one).
-    const resolvedDataRepo = options.dataRepo ? canonicalPath(options.dataRepo) : undefined;
-    if (resolvedDataRepo) {
-      if (!ledger.dataRepo) ledger = {...ledger, dataRepo: resolvedDataRepo};
-      else if (ledger.dataRepo !== resolvedDataRepo) {
-        throw new Error(
-          `review policy authority is ${ledger.dataRepo}, not the supplied ${resolvedDataRepo}`,
-        );
-      }
+    // Recorded at creation and never rewritten or backfilled: a binding a later run can
+    // supply or move is not a binding. A ledger that already names an authority must be
+    // driven with that one.
+    if (ledger.authority && options.authority && ledger.authority.dataRepo !== options.authority.dataRepo) {
+      throw new Error(
+        `review policy authority is ${ledger.authority.dataRepo}, not the supplied ${options.authority.dataRepo}`,
+      );
     }
 
     try {
@@ -1038,10 +1066,9 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
     // be authorized by a loops.json the caller chose after the fact.
     let classes: ReviewClassConfig[] | undefined;
     if (options.kind === "waived-by-policy") {
-      const policy = resolveReviewPolicy(options.dataRepo);
-      const refusal = waiverAuthorityRefusal(existingLedger, policy.dataRepo);
-      if (refusal) throw new Error(`waiver is not authorized: ${refusal}`);
-      classes = policy.review?.classes;
+      const authorized = waiverClasses(existingLedger, options.dataRepo);
+      if (authorized.refusal) throw new Error(`waiver is not authorized: ${authorized.refusal}`);
+      classes = authorized.classes;
     }
     const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason, {
       ...(options.doc ? {doc: options.doc} : {}),
@@ -1097,10 +1124,7 @@ function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
     // (--data-repo, else $LOOPS_DATA_REPO), and only when that repo is the authority the
     // ledger recorded. Any other repo, or none, yields no classes and every waiver
     // blocks - the same fail-closed direction as an absent config.
-    const policy = resolveReviewPolicy(dataRepo);
-    const classes = waiverAuthorityRefusal(ledger, policy.dataRepo) === null
-      ? policy.review?.classes
-      : undefined;
+    const classes = waiverClasses(ledger, dataRepo).classes;
     const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes);
     const latestRound = ledger.rounds.at(-1);
     if (

@@ -150,12 +150,11 @@ export interface ReviewSupersession {
 export interface ReviewLedger {
   version: 1;
   item?: string;
-  /** Canonical root of the data repository whose policy governs this review, recorded at
-   * the first round. Waiver authorization is bound to it: `disposition` and `status` may
-   * only resolve change classes from THIS repository, so a caller cannot point either
-   * command at an unrelated loops.json that happens to waive the finding in front of it.
-   * Absent on a ledger opened without a data repo, and a waiver on such a ledger blocks. */
-  dataRepo?: string;
+  /** The policy authority this review's class waivers are bound to, recorded when the
+   * ledger is created and never rewritten afterwards. Absent on a ledger opened without
+   * a data repo, and a waiver on such a ledger blocks - it is never backfilled, because
+   * a binding a later run can supply is not a binding. */
+  authority?: ReviewAuthority;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -172,9 +171,22 @@ export interface ReviewFailure {
   reason: string;
 }
 
+/** Which configuration may authorize a `waived-by-policy` disposition on this review.
+ * Both halves are needed: the root alone still lets a later `projects.*.repo` edit select
+ * a different project's classes - or drop the entry and fall through to a broader global
+ * block - for a review that started under a narrower policy. */
+export interface ReviewAuthority {
+  /** Canonical root of the data repository whose loops.json governs this review. */
+  dataRepo: string;
+  /** The registered project whose review block was resolved at the first round. Absent
+   * when the reviewed checkout matched no project, which means the global block governs
+   * and must keep governing. */
+  project?: string;
+}
+
 export interface CreateLedgerInput {
   item?: string;
-  dataRepo?: string;
+  authority?: ReviewAuthority;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -256,7 +268,9 @@ export function validateEvidencePath(path: string): string {
 function isRefNameShaped(branch: string): boolean {
   return (
     branch.length > 0 &&
-    !/[\s~^:?*[\\]/.test(branch) &&
+    // 0x00-0x20 and 0x7f: the control range git check-ref-format rejects outright,
+    // whitespace among it. A branch nobody can name is a placeholder, not a pointer.
+    !/[\x00-\x20\x7f~^:?*[\\]/.test(branch) &&
     !branch.includes("..") &&
     !branch.includes("@{") &&
     !branch.includes("//") &&
@@ -423,9 +437,18 @@ function parseStepBack(input: unknown, path: string, roundNumber: number): Revie
   };
 }
 
+function parseAuthority(input: unknown): ReviewAuthority | undefined {
+  if (input === undefined) return undefined;
+  if (!isRecord(input)) throw new Error("review ledger authority must be an object");
+  const dataRepo = requiredString(input, "dataRepo", "review ledger authority");
+  const project = optionalString(input, "project", "review ledger authority");
+  return {dataRepo, ...(project ? {project} : {})};
+}
+
 export function parseReviewLedger(input: unknown): ReviewLedger {
   if (!isRecord(input)) throw new Error("review ledger must be an object");
   if (input.version !== 1) throw new Error("review ledger version must be 1");
+  const authority = parseAuthority(input.authority);
   if (!Array.isArray(input.rounds)) throw new Error("review ledger rounds must be an array");
   const totalRounds = input.rounds.length;
   const rounds = input.rounds.map((roundInput, roundIndex): ReviewRound => {
@@ -631,7 +654,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
   return {
     version: 1,
     ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
-    ...(optionalString(input, "dataRepo", "review ledger") ? { dataRepo: String(input.dataRepo) } : {}),
+    ...(authority ? { authority } : {}),
     branch: requiredString(input, "branch", "review ledger"),
     baseRef: requiredString(input, "baseRef", "review ledger"),
     baseSha: requiredString(input, "baseSha", "review ledger"),
@@ -1017,8 +1040,13 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     `- Base ref: \`${ledger.baseRef}\``,
     `- Base SHA: \`${ledger.baseSha}\``,
     // The authority any policy waiver in this ledger is bound to, on the human surface
-    // so the owner can see which loops.json authorized it without reading the JSON.
-    ...(ledger.dataRepo ? [`- Policy authority: \`${ledger.dataRepo}\``] : []),
+    // so the owner can see which policy authorized it without reading the JSON.
+    ...(ledger.authority
+      ? [
+          `- Policy authority: \`${ledger.authority.dataRepo}\`` +
+            (ledger.authority.project ? ` (project \`${ledger.authority.project}\`)` : " (global block)"),
+        ]
+      : []),
   ];
   if (ledger.supersessions?.length) {
     lines.push("", "## Base supersessions");

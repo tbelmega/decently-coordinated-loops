@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ReviewClassConfig } from "../config.ts";
 import { waiverRefusalReason } from "./review-classes.ts";
-import { openObligations, type ReviewLedger } from "./review-ledger.ts";
+import { liveRounds, openObligations, type ReviewLedger } from "./review-ledger.ts";
 
 export interface ReviewEvidencePaths {
   jsonPath: string;
@@ -86,27 +86,6 @@ export function evaluateReviewStatus(
         reason: "latest review has a finding deferred to the owner",
       };
     }
-    // A round whose findings are ALL non-blocking is terminal: a policy waiver is
-    // pre-authorized by the owner's classes config, and a tracked-elsewhere finding is
-    // conceded correct with its fix landing outside this repository's range — neither
-    // owes a confirming round. Waiver authorization binds against the RESOLVED classes
-    // here, not the record — absent or narrowed config blocks it (fail closed).
-    const waived = latestRound.findings.filter((finding) => finding.disposition?.kind === "waived-by-policy");
-    for (const finding of waived) {
-      const refusal = waiverRefusalReason(
-        {...(finding.file ? {file: finding.file} : {}), priority: finding.priority},
-        finding.disposition?.class ?? "",
-        classes,
-      );
-      if (refusal) {
-        return {
-          kind: "blocked",
-          headSha: currentHeadSha,
-          ledgerPath,
-          reason: `waiver on ${finding.id} is not authorized: ${refusal}`,
-        };
-      }
-    }
     const nonBlocking = latestRound.findings.filter(
       (finding) =>
         finding.disposition?.kind === "waived-by-policy" || finding.disposition?.kind === "tracked-elsewhere",
@@ -119,6 +98,30 @@ export function evaluateReviewStatus(
         ledgerPath,
         reason: `latest review has ${latestRound.findings.length} ${noun}; run another round to obtain a clean review`,
       };
+    }
+  }
+  // A policy waiver is pre-authorized by the owner's classes config and owes no
+  // confirming round, so it never comes back for re-examination on its own. Its
+  // authorization therefore binds against the RESOLVED classes at THIS gate, not against
+  // the record - and across every live round, not just the last one. A waiver recorded in
+  // round 1 is still holding a defect open when round 2 certifies the branch, so
+  // narrowing or removing its class has to block that certification too.
+  for (const round of liveRounds(ledger)) {
+    for (const finding of round.findings) {
+      if (finding.disposition?.kind !== "waived-by-policy") continue;
+      const refusal = waiverRefusalReason(
+        {...(finding.file ? {file: finding.file} : {}), priority: finding.priority},
+        finding.disposition.class ?? "",
+        classes,
+      );
+      if (refusal) {
+        return {
+          kind: "blocked",
+          headSha: currentHeadSha,
+          ledgerPath,
+          reason: `waiver on ${finding.id} is not authorized: ${refusal}`,
+        };
+      }
     }
   }
   // A clean round certifies nothing while an obligation is still open: an owner

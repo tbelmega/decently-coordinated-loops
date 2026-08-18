@@ -80,8 +80,10 @@ record-keeping output is waivable or exempt: review evidence, derived boards, lo
 the fleet's highest-value round on a pure-markdown backup spec, and the one P0 an
 extension-keyed class would have waived lived in a runbook.
 
-Waivers bind against the *resolved* config at every gate, not against the record: a class
-later narrowed or removed blocks its own past waivers rather than grandfathering them.
+Waivers bind against the *resolved* config at every gate, not against the record, and in
+every live round rather than only the last: a class later narrowed or removed blocks its
+own past waivers rather than grandfathering them, including one recorded in an earlier
+round that a later clean round would otherwise carry to `passed`.
 Priority is the independent reviewer's call; you only apply the waiver the owner's config
 already authorizes.
 
@@ -361,11 +363,13 @@ bun "$DCL_HOME/tools/review/cli-review.ts" status --item <item-slug> --data-repo
 ```
 
 Pass the same `--data-repo` you passed to `start` (or export `LOOPS_DATA_REPO`). This
-gate re-resolves the class configuration to authorize any `waived-by-policy`
-disposition, and the ledger records which data repo that must be: the first round binds
-the review to its policy authority, and `disposition` and `status` refuse a waiver
-resolved from any other repo, or from none. A waiver is the one disposition an agent
-grants itself out of configuration, so the configuration has to be the owner's.
+gate re-resolves the class configuration to authorize every `waived-by-policy`
+disposition still standing in the ledger, and the ledger records which configuration that
+must be: the first round binds the review to its policy authority - the canonical
+data-repo root plus the project whose review block was resolved - and `disposition` and
+`status` refuse a waiver resolved from any other repo, from a different project, or from
+none. The binding is written once and never backfilled. A waiver is the one disposition
+an agent grants itself out of configuration, so the configuration has to be the owner's.
 
 Use the item-scoped form for every tracked item; `status` without `--item` remains
 available for an owner-requested review that has no board item. It validates the

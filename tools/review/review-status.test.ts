@@ -123,6 +123,75 @@ describe("evaluateReviewStatus", () => {
     });
   });
 
+  test("blocks a revoked waiver recorded in an earlier round, not just the latest one", () => {
+    // Round 1 waives one finding and accepts another; round 2 confirms the fix and is
+    // clean. The waiver is still the only thing holding R1-F1 closed, so revoking its
+    // class has to block the certification even though the latest round has no findings.
+    const classes = [
+      { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] },
+    ];
+    let ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "first",
+        model: "codex-default",
+        reviewedAt: "2026-08-18T12:00:00Z",
+        review: {
+          summary: "one nit, one defect",
+          findings: [
+            { ...finding, priority: "P3", file: "OUTBOX.md" },
+            { ...finding, title: "Real defect", priority: "P1", file: "src/a.ts" },
+          ],
+        },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "waived-by-policy", "Prose nit", {
+      waivedClass: "coordination-prose",
+      classes,
+    });
+    ledger = recordDisposition(ledger, "R1-F2", "accepted", "will fix");
+    ledger = addReviewRound(ledger, {
+      headSha: "current",
+      model: "codex-default",
+      reviewedAt: "2026-08-18T13:00:00Z",
+      review: { summary: "fix confirmed", findings: [] },
+      audit: {
+        kind: "remediation",
+        scope: "remediation-range",
+        manifest: {
+          baseSha: "first",
+          headSha: "current",
+          files: [{ path: "src/a.ts", hunks: ["-1,1 +1,2"] }],
+          metadataFiles: [],
+          instructionFiles: [],
+          contextReferences: [],
+          patchIds: [],
+        },
+        passes: [],
+        obligations: [{ findingId: "R1-F2", status: "fixed", evidence: "verified", type: "remediation" }],
+        metrics: {
+          findingsByPass: { diff: 0, integration: 0, adversarial: 0 },
+          findingsByPriority: { P0: 0, P1: 0, P2: 0, P3: 0 },
+          findingsByOrigin: { original: 0, remediation: 0, "base-delta": 0, unknown: 0 },
+          repeatedFindings: 0,
+          lateHighPriorityFindings: 0,
+          unchangedHeadDrift: false,
+        },
+      },
+    });
+
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md", classes)).toMatchObject({
+      kind: "passed",
+    });
+    const narrowed = [
+      { name: "coordination-prose", match: ["INBOX.md"], waivablePriorities: ["P3"] as "P3"[] },
+    ];
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md", narrowed)).toMatchObject({
+      kind: "blocked",
+      reason: expect.stringContaining("waiver on R1-F1 is not authorized"),
+    });
+  });
+
   test("blocks a waiver the resolved classes no longer authorize", () => {
     const recordingClasses = [
       { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] },

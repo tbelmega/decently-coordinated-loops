@@ -761,7 +761,7 @@ describe("cli-review start", () => {
         },
       })}\n`,
     );
-    expect(readLedgerJson(repository, item).dataRepo).toBe(realpathSync.native(dataRepo));
+    expect(readLedgerJson(repository, item).authority).toEqual({dataRepo: realpathSync.native(dataRepo)});
     const foreignStatus = spawnSync(
       "bun",
       ["run", CLI, "status", "--item", item, "--data-repo", foreignRepo],
@@ -777,6 +777,68 @@ describe("cli-review start", () => {
     ]);
     expect(foreignWaiver.status).not.toBe(0);
     expect(foreignWaiver.stderr).toContain("is not this review's policy authority");
+  });
+
+  test("binds a waiver to the project whose policy the review started under", () => {
+    const { repository } = createReviewRepository();
+    const item = "waiver-project-authority";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    const writeConfig = (projects: Record<string, unknown>) =>
+      writeFileSync(
+        `${dataRepo}/loops.json`,
+        `${JSON.stringify({
+          review: { reviewer: "codex", maxRounds: 5 },
+          projects,
+        })}\n`,
+      );
+    // The reviewed checkout is registered as "target", whose block waives P2 on the file.
+    writeConfig({
+      target: {
+        repo: repository,
+        review: { classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2"] }] },
+      },
+    });
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(readLedgerJson(repository, item).authority).toEqual({
+      dataRepo: realpathSync.native(dataRepo),
+      project: "target",
+    });
+
+    // Unregistering that project would otherwise fall the resolution through to the
+    // global block; the recorded authority has to refuse instead.
+    writeConfig({});
+    const unregistered = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      "--class",
+      "coordination-prose",
+      "--data-repo",
+      dataRepo,
+    ]);
+    expect(unregistered.status).not.toBe(0);
+    expect(unregistered.stderr).toContain("is no longer registered");
+
+    writeConfig({
+      target: {
+        repo: repository,
+        review: { classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2"] }] },
+      },
+    });
+    const waived = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      "--class",
+      "coordination-prose",
+      "--data-repo",
+      dataRepo,
+    ]);
+    expect(waived.status).toBe(0);
+    const passed = spawnSync(
+      "bun",
+      ["run", CLI, "status", "--item", item, "--data-repo", dataRepo],
+      { cwd: repository, encoding: "utf8" },
+    );
+    expect(passed.stdout).toContain("REVIEW_STATUS=passed");
   });
 
   test("runs a governance round with the declared change surface recorded in the ledger", () => {
