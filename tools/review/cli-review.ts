@@ -760,6 +760,11 @@ async function startReview(options: StartOptions): Promise<void> {
       // marks the narrowed round.
       const scopedRange =
         options.confirmation === "scoped" &&
+        // The narrowed round IS the obligation-classifying diff pass. A project whose
+        // auditPasses omit "diff" has no such pass to narrow to, and scoping would run
+        // integration over the fix delta - the pass the contract says to skip - so it
+        // keeps full confirmation rounds instead.
+        configuredPasses.includes("diff") &&
         auditKind === "remediation" &&
         obligations.length > 0 &&
         obligations.every((obligation) => obligation.type === "remediation") &&
@@ -1005,7 +1010,15 @@ function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-function currentReviewStatus(item?: string): ReviewStatus {
+/** The current-HEAD gate. Two resolution invariants hold here and are the reason
+ * `dataRepo` is a parameter rather than an ambient lookup:
+ *
+ * 1. The policy this gate binds against must be the one `start` and `disposition` used.
+ *    Both take `--data-repo`, so `status` must too; resolving from the environment alone
+ *    left every waiver recorded through the documented flow unauthorized here.
+ * 2. Authorization binds against the RESOLVED classes, never the recorded waiver. No
+ *    resolvable data repo means no classes, and no classes means waivers block. */
+function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
   const branch = git(["branch", "--show-current"]);
   if (!branch) throw new Error("review status requires a named branch");
   const repository = git(["rev-parse", "--show-toplevel"]);
@@ -1030,8 +1043,8 @@ function currentReviewStatus(item?: string): ReviewStatus {
       throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
     }
     // Waiver authorization binds at this gate against the currently resolved classes
-    // ($LOOPS_DATA_REPO); with no data repo resolvable, waivers block (fail closed).
-    const classes = resolveReviewPolicy().review?.classes;
+    // (--data-repo, else $LOOPS_DATA_REPO); no resolvable data repo blocks (fail closed).
+    const classes = resolveReviewPolicy(dataRepo).review?.classes;
     const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes);
     const latestRound = ledger.rounds.at(-1);
     if (
@@ -1081,10 +1094,26 @@ function currentReviewStatus(item?: string): ReviewStatus {
   }
 }
 
-function printReviewStatus(item?: string): void {
-  const status = currentReviewStatus(item);
+function printReviewStatus(item?: string, dataRepo?: string): void {
+  const status = currentReviewStatus(item, dataRepo);
   process.stdout.write(`${renderReviewStatus(status)}\n`);
   if (status.kind !== "passed") process.exitCode = 1;
+}
+
+/** `status [--item <slug>] [--data-repo <path>]`, order-independent. Strict about
+ * unknown and incomplete flags for the same reason the other parsers are: a silently
+ * ignored `--data-repo` here reports a waived round as blocked. */
+function parseStatusOptions(args: string[]): [string | undefined, string | undefined] {
+  let item: string | undefined;
+  let dataRepo: string | undefined;
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (flag === "--item" && value) item = value;
+    else if (flag === "--data-repo" && value) dataRepo = value;
+    else throw new Error("status accepts only --item <item-slug> and --data-repo <path>");
+  }
+  return [item, dataRepo];
 }
 
 async function main(): Promise<void> {
@@ -1094,9 +1123,7 @@ async function main(): Promise<void> {
   } else if (command === "disposition") {
     await addDisposition(parseDispositionOptions(args));
   } else if (command === "status") {
-    if (args.length === 0) printReviewStatus();
-    else if (args.length === 2 && args[0] === "--item" && args[1]) printReviewStatus(args[1]);
-    else throw new Error("status accepts only --item <item-slug>");
+    printReviewStatus(...parseStatusOptions(args));
   } else {
     throw new Error("usage: cli-review <start|disposition|status> [options]");
   }

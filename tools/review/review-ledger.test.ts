@@ -619,6 +619,35 @@ describe("recordDisposition — tracked-elsewhere", () => {
     };
     expect(() => parseReviewLedger(tracksOnRejected)).toThrow("only valid on a tracked-elsewhere disposition");
   });
+
+  test("accepts each documented pointer shape", () => {
+    for (const tracks of ["other-repo-item-slug", "home-ops#meta", "docs/specs/2026-08-18-thing.md"]) {
+      const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", {
+        tracks,
+      });
+      expect(ledger.rounds[0].findings[0].disposition?.tracks).toBe(tracks);
+      expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
+    }
+  });
+
+  test("refuses prose and malformed pointers at record and at parse time", () => {
+    // The pointer is the only record of where a conceded finding's fix lands, so a
+    // value that names no location must not be able to close the finding.
+    for (const tracks of ["not a pointer", "#branch", "repo#", "Some Repo#main", "../escape.md", "/abs/path.md"]) {
+      expect(() =>
+        recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", { tracks }),
+      ).toThrow();
+    }
+    const serialized = JSON.parse(
+      JSON.stringify(
+        recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", {
+          tracks: "other-repo-item-slug",
+        }),
+      ),
+    );
+    serialized.rounds[0].findings[0].disposition.tracks = "not a pointer";
+    expect(() => parseReviewLedger(serialized)).toThrow("tracks must be a board item slug");
+  });
 });
 
 describe("carryForwardDispositions", () => {

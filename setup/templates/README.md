@@ -50,7 +50,7 @@ skill. Any of these keys can be overridden per project under `projects.<name>.re
 The current-HEAD gate is:
 
 ```bash
-bun "{{DCL_HOME}}/tools/review/cli-review.ts" status
+bun "{{DCL_HOME}}/tools/review/cli-review.ts" status --data-repo <this repo>
 ```
 
 Contracts and protocols: the `loops-board`, `loops-queues`, `loops-pickup`,

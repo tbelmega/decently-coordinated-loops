@@ -233,6 +233,35 @@ export function validateEvidencePath(path: string): string {
   return normalized;
 }
 
+/** The three documented shapes a `tracked-elsewhere` pointer may take: a board item
+ * slug, `repo#branch`, or a repository-relative path. Returns the normalized pointer or
+ * throws.
+ *
+ * Shape-checked rather than merely non-blank because `tracked-elsewhere` is terminal and
+ * creates no obligation: the pointer is the ONLY thing standing between a conceded,
+ * actionable finding and no record of where its fix lands. A shape check cannot prove
+ * the target exists - it is another repository's business, which is the whole point of
+ * the kind - but it does reject prose, which is the failure this guards. */
+export function validateTracksPointer(pointer: string): string {
+  const trimmed = pointer.trim();
+  const slug = /^[a-z0-9]+(?:[-.][a-z0-9]+)*$/;
+  const invalid = (): never => {
+    throw new Error(
+      `tracks must be a board item slug, "repo#branch", or a repository-relative path: ${JSON.stringify(pointer)}`,
+    );
+  };
+  if (trimmed.length === 0 || /\s/.test(trimmed)) invalid();
+  if (trimmed.includes("#")) {
+    const [repository, ...rest] = trimmed.split("#");
+    const branch = rest.join("#");
+    if (rest.length !== 1 || !slug.test(repository) || branch.length === 0) invalid();
+    return trimmed;
+  }
+  if (trimmed.includes("/")) return validateEvidencePath(trimmed);
+  if (!slug.test(trimmed)) invalid();
+  return trimmed;
+}
+
 function parseDisposition(input: unknown, path: string): ReviewDisposition | undefined {
   if (input === undefined) return undefined;
   if (!isRecord(input)) throw new Error(`${path} must be an object`);
@@ -320,6 +349,9 @@ function assertDecisionInvariants(
   if (decision.kind === "tracked-elsewhere") {
     if (!decision.tracks) {
       throw new Error(`${path} is tracked-elsewhere and must carry a tracks pointer naming where the fix lands`);
+    }
+    if (decision.tracks !== validateTracksPointer(decision.tracks)) {
+      throw new Error(`${path}.tracks must be a normalized pointer`);
     }
     // No legacy writer existed for this kind.
     if (decision.decidedAfterRound === undefined) {
@@ -818,15 +850,19 @@ export function recordDisposition(
   if (options.tracks !== undefined && kind !== "tracked-elsewhere") {
     throw new Error("a tracks pointer is only valid on a tracked-elsewhere disposition");
   }
-  if (kind === "tracked-elsewhere" && !options.tracks?.trim()) {
-    throw new Error("tracked-elsewhere requires a tracks pointer naming where the fix lands");
+  let tracks: string | undefined;
+  if (kind === "tracked-elsewhere") {
+    if (!options.tracks?.trim()) {
+      throw new Error("tracked-elsewhere requires a tracks pointer naming where the fix lands");
+    }
+    tracks = validateTracksPointer(options.tracks);
   }
   const next: ReviewDisposition = {
     kind,
     reason,
     ...(doc ? {doc} : {}),
     ...(kind === "waived-by-policy" && options.waivedClass ? {class: options.waivedClass} : {}),
-    ...(kind === "tracked-elsewhere" && options.tracks ? {tracks: options.tracks} : {}),
+    ...(tracks ? {tracks} : {}),
     ...(options.owner ? {owner: true} : {}),
     decidedAfterRound: ledger.rounds.length,
   };

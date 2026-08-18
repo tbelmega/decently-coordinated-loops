@@ -145,6 +145,27 @@ describe("reviewPrompt", () => {
     expect(prompt("diff")).not.toContain("never to a spec document");
   });
 
+  test("flags an instruction file that a metadataPath configuration routed out of files", () => {
+    // parseReviewDiff puts every configured metadataPath into metadataFiles. An
+    // instruction file mistakenly configured as landing metadata must not thereby
+    // escape the no-spec-reference rule.
+    const asMetadata = reviewPrompt({
+      pass: "diff",
+      manifest: {
+        ...manifest,
+        files: [{path: "src/a.ts", hunks: ["-1,1 +1,2"]}],
+        metadataFiles: [{path: "AGENTS.md", hunks: ["-1,1 +1,2"]}],
+        metadataPaths: ["AGENTS.md"],
+        instructionFiles: ["AGENTS.md"],
+      },
+      contextDocuments: [],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: false,
+    });
+    expect(asMetadata).toContain("This change edits instruction files (AGENTS.md).");
+  });
+
   test("renders one guidance line per change class with its matched files", () => {
     const value = reviewPrompt({
       pass: "diff",

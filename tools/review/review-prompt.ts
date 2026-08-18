@@ -60,7 +60,11 @@ export function reviewPrompt(input: ReviewPromptInput): string {
       : {}),
   };
   const metadataPaths = input.manifest.metadataFiles.map((file) => file.path);
-  const changedInstructionFiles = input.manifest.files
+  // Both groups: parseReviewDiff routes every configured metadataPath into
+  // metadataFiles, so an instruction file mistakenly configured as landing metadata
+  // would otherwise escape the rule below. The governance validation already unions
+  // the two the same way.
+  const changedInstructionFiles = [...input.manifest.files, ...input.manifest.metadataFiles]
     .map((file) => file.path)
     .filter((path) => input.manifest.instructionFiles.includes(path));
   const hasSpecContext = input.contextDocuments.some((document) => document.label === "spec");

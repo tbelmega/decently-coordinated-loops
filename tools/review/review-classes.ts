@@ -17,8 +17,15 @@ export interface WaiverSubject {
 /**
  * Whether `waivedClass` authorizes waiving this finding under the resolved classes.
  * Returns null when authorized, or the reason it is not. A file matching several
- * classes is waivable only if EVERY matching class waives the priority — the strictest
+ * classes is waivable only if EVERY matching class waives the priority - the strictest
  * class wins, so widening one class's paths can never silently weaken another's.
+ *
+ * An exempt class is a match like any other and refuses: it declares no waivable
+ * priorities, so it cannot authorize one. That is not a contradiction with its own
+ * policy, because a path matched by an exempt class AND a thresholded one is never
+ * exempt in the first place (`isExemptOnly` refuses it too) - it is an owner
+ * configuration saying two different things about one path, and both halves of the
+ * resolution fail it closed rather than picking the looser reading.
  */
 export function waiverRefusalReason(
   subject: WaiverSubject,
@@ -33,7 +40,6 @@ export function waiverRefusalReason(
     return `class ${JSON.stringify(waivedClass)} does not match ${subject.file}`;
   }
   for (const entry of matchingClasses(subject.file, classes)) {
-    if (entry.policy === "exempt") continue;
     if (!entry.waivablePriorities?.includes(subject.priority)) {
       return `class ${JSON.stringify(entry.name)} does not waive ${subject.priority} findings on ${subject.file}`;
     }

@@ -42,6 +42,25 @@ describe("waiverRefusalReason", () => {
     );
     expect(waiverRefusalReason({ file: "queues/audit.md", priority: "P3" }, "coordination-prose", classes)).toBeNull();
   });
+
+  test("a matching exempt class refuses the waiver it cannot authorize", () => {
+    // The same overlap isExemptOnly refuses: an exempt class declares no waivable
+    // priorities, so it cannot authorize one, and a path declared both exempt and
+    // thresholded is a contradictory config that fails closed on both halves.
+    const overlapping: ReviewClassConfig[] = [
+      { name: "evidence", match: ["docs/**"], policy: "exempt" },
+      { name: "runbooks", match: ["docs/runbooks/**"], waivablePriorities: ["P3"] },
+    ];
+    expect(
+      waiverRefusalReason({ file: "docs/runbooks/restore.md", priority: "P3" }, "runbooks", overlapping),
+    ).toContain('"evidence" does not waive P3');
+    // A path the exempt class alone matches keeps the exempt short-circuit; nothing
+    // reaches the waiver path for it, and naming the exempt class as the authorizer
+    // still refuses.
+    expect(waiverRefusalReason({ file: "docs/notes.md", priority: "P3" }, "evidence", overlapping)).toContain(
+      '"evidence" does not waive P3',
+    );
+  });
 });
 
 describe("isExemptOnly", () => {

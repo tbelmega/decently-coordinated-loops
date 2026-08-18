@@ -728,6 +728,24 @@ describe("cli-review start", () => {
       env: { ...process.env, LOOPS_DATA_REPO: dataRepo },
     });
     expect(passed.stdout).toContain("REVIEW_STATUS=passed");
+
+    // The documented flow passes --data-repo explicitly to start and disposition, so
+    // status must accept it too; resolving from the environment alone left every
+    // waiver recorded that way blocked at the gate that has to certify it.
+    const passedByFlag = spawnSync(
+      "bun",
+      ["run", CLI, "status", "--item", item, "--data-repo", dataRepo],
+      { cwd: repository, encoding: "utf8" },
+    );
+    expect(passedByFlag.status).toBe(0);
+    expect(passedByFlag.stdout).toContain("REVIEW_STATUS=passed");
+
+    const rejected = spawnSync("bun", ["run", CLI, "status", "--data-repo"], {
+      cwd: repository,
+      encoding: "utf8",
+    });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("status accepts only");
   });
 
   test("runs a governance round with the declared change surface recorded in the ledger", () => {
@@ -1879,6 +1897,33 @@ describe("cli-review scoped confirmation", () => {
     expect(ledger.rounds[0].audit.kind).toBe("full");
     expect(ledger.rounds[0].audit.scope).toBeUndefined();
     expect(ledger.rounds[0].audit.manifest.baseSha).toBe(baseSha);
+  });
+
+  test("does not narrow a round whose configured passes omit the diff pass", () => {
+    const {repository, baseSha, firstHeadSha, item} = createConfirmationRepository();
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: {reviewer: "codex", maxRounds: 5, confirmation: "scoped", auditPasses: ["integration", "adversarial"]},
+      })}\n`,
+    );
+    acceptAndFix(repository, item, baseSha, firstHeadSha);
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+
+    const result = runStart(repository, dataRepo, item, baseSha, {
+      FAKE_CODEX_LOG: log,
+      FAKE_UNION_REMEDIATION: "1",
+    });
+
+    expect(result.status).toBe(0);
+    // The narrowed round IS the diff pass. With diff excluded there is nothing to
+    // narrow to, and scoping would run integration over the fix delta - the pass the
+    // contract says to skip - so the round stays full.
+    expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["integration", "adversarial"]);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds[1].audit.scope).toBeUndefined();
+    expect(ledger.rounds[1].audit.manifest.baseSha).toBe(baseSha);
   });
 
   test("does not narrow a round that still owes a documentation obligation", () => {
