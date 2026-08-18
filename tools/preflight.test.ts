@@ -2,8 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadArchiveDir, loadForDeliveryDir, loadItemsDir } from "./parse.ts";
 import { runPreflight } from "./preflight.ts";
+import type { LoopsConfig } from "./config.ts";
 
 const FIXTURES = join(import.meta.dir, "__fixtures__");
+
+/** Nothing declares a lifecycle, so every project keeps the deploy tail. The no-deploy
+ * cases below pass their own config. */
+const CONFIG: LoopsConfig = {
+  owner: "casey",
+  priorityProjects: [],
+  integrationBranch: "master",
+  landedAdapter: "git",
+  githubTokens: {},
+  projects: {},
+  review: {},
+};
+
+const NO_DEPLOY_ZETA: LoopsConfig = { ...CONFIG, projects: { zeta: { lifecycle: "no-deploy" } } };
 
 const HEADER = `| Item | Project | State | Next-actor | Awaiting | Auto | Assignee | Updated |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -19,14 +34,14 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Ghost row](items/does-not-exist.md) | alpha | idea | owner | decide | - | - | 2026-07-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.orphanRows.length).toBe(1);
     expect(report.orphanRows[0].path).toBe("items/does-not-exist.md");
   });
 
   test("detects a missing row (item file with no board row) for auto-add self-heal", () => {
     const boardText = HEADER; // no rows at all
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.missingRows).toContain("alpha-needs-approve");
     expect(report.missingRows.length).toBe(items.length);
   });
@@ -35,7 +50,7 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Alpha needs approve](items/alpha-needs-approve.md) | alpha | spec-filed | owner | decide | - | - | 2026-07-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     const mismatch = report.mismatches.find((m) => m.slug === "alpha-needs-approve" && m.field === "awaiting");
     expect(mismatch).toBeDefined();
     expect(mismatch!.boardValue).toBe("decide");
@@ -46,7 +61,7 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Alpha needs approve](items/alpha-needs-approve.md) | alpha | spec-filed | owner | approve | - | codex/default | 2026-07-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.mismatches).toContainEqual({
       slug: "alpha-needs-approve",
       field: "assignee",
@@ -59,7 +74,7 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Alpha needs approve](items/alpha-needs-approve.md) | alpha | spec-filed | owner | approve | - | - | 2026-07-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.mismatches.length).toBe(0);
     expect(report.orphanRows.length).toBe(0);
   });
@@ -69,7 +84,7 @@ describe("runPreflight", () => {
       HEADER +
       "\n## Done\n\n| Item | Project | Finished |\n| --- | --- | --- |\n" +
       "| [Some done item](items/somewhere.md) | atlas | 2026-07-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.orphanRows.length).toBe(0);
   });
 
@@ -81,7 +96,7 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Eta tested, awaiting delivery](items/eta-tested.md) | atlas | tested | owner | deliver | auto | agent-x | 2026-07-08 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.orphanRows.length).toBe(0);
     expect(report.terminalRows.map((r) => r.itemPath)).toEqual(["for-delivery/eta-tested.md"]);
   });
@@ -90,7 +105,7 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Zeta accepted](items/zeta-accepted.md) | zeta | accepted | owner | - | - | agent-x | 2026-07-08 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.orphanRows.length).toBe(0);
     expect(report.terminalRows.map((r) => r.itemPath)).toEqual(["archive/zeta-accepted.md"]);
   });
@@ -102,7 +117,7 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Zeta accepted](items/zeta-accepted.md) | zeta | idea | agent | - | auto | somebody-else | 2026-01-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.mismatches).toEqual([]);
     expect(report.missingRows).not.toContain("zeta-accepted");
   });
@@ -138,7 +153,7 @@ describe("runPreflight", () => {
   for (const { folder, state, stranded, why } of MATRIX) {
     test(`${folder}/ + state ${state} -> ${stranded ? "orphan" : "stale row"} (${why})`, () => {
       const item = { ...archived[0], slug: "misfiled", path: `${folder}/misfiled.md`, state };
-      const report = runPreflight(misfiledRow, items, [item]);
+      const report = runPreflight(misfiledRow, items, [item], CONFIG);
       if (stranded) {
         expect(report.terminalRows).toEqual([]);
         expect(report.orphanRows.map((r) => r.path)).toEqual(["items/misfiled.md"]);
@@ -149,11 +164,37 @@ describe("runPreflight", () => {
     });
   }
 
+  // The one cell the per-project tail moves. `zeta` ends at `tested`, so a `tested` file in
+  // archive/ is where it belongs; its row is stale, not the last trace of live work. Asking
+  // the owner to move it back would manufacture exactly the hand-work the tail removes.
+  test("archive/ + state tested is a stale row, not a stranding, for a no-deploy project", () => {
+    const item = { ...archived[0], slug: "misfiled", path: "archive/misfiled.md", project: "zeta", state: "tested" };
+    const report = runPreflight(misfiledRow, items, [item], NO_DEPLOY_ZETA);
+    expect(report.orphanRows).toEqual([]);
+    expect(report.terminalRows.map((r) => r.itemPath)).toEqual(["archive/misfiled.md"]);
+  });
+
+  test("archive/ + state delivered is still a stranding for a no-deploy project", () => {
+    // `delivered` remains a for-delivery/ state whoever set it, so nothing moves that file
+    // back and its row is still the only trace.
+    const item = { ...archived[0], slug: "misfiled", path: "archive/misfiled.md", project: "zeta", state: "delivered" };
+    const report = runPreflight(misfiledRow, items, [item], NO_DEPLOY_ZETA);
+    expect(report.terminalRows).toEqual([]);
+    expect(report.orphanRows[0].stranded).toEqual({ itemPath: "archive/misfiled.md", belongsIn: "for-delivery" });
+  });
+
+  test("for-delivery/ + state tested is a stale row for a no-deploy project (sync archives it)", () => {
+    const item = { ...archived[0], slug: "misfiled", path: "for-delivery/misfiled.md", project: "zeta", state: "tested" };
+    const report = runPreflight(misfiledRow, items, [item], NO_DEPLOY_ZETA);
+    expect(report.orphanRows).toEqual([]);
+    expect(report.terminalRows.map((r) => r.itemPath)).toEqual(["for-delivery/misfiled.md"]);
+  });
+
   test("still an orphan when the item exists in no folder at all", () => {
     const boardText =
       HEADER +
       "| [Ghost row](items/does-not-exist.md) | alpha | idea | owner | decide | - | - | 2026-07-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.terminalRows.length).toBe(0);
     expect(report.orphanRows.map((r) => r.path)).toEqual(["items/does-not-exist.md"]);
   });
@@ -162,7 +203,7 @@ describe("runPreflight", () => {
     const boardText =
       HEADER +
       "| [Admin: Tenant Detail [S6] model-allowlist](items/alpha-needs-approve.md) | alpha | spec-filed | owner | approve | - | - | 2026-07-01 |\n";
-    const report = runPreflight(boardText, items, terminal);
+    const report = runPreflight(boardText, items, terminal, CONFIG);
     expect(report.orphanRows.length).toBe(0);
     expect(report.missingRows).not.toContain("alpha-needs-approve");
     expect(report.mismatches.length).toBe(0);

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseItemFileText } from "./parse.ts";
 import type { ItemFile } from "./types.ts";
 import { findDuplicateSlugs, validateItem, validateItems } from "./validate.ts";
+import type { LoopsConfig } from "./config.ts";
 
 /** Minimal canonical ItemFile; override to introduce a specific violation. */
 function item(overrides: Partial<ItemFile>): ItemFile {
@@ -21,6 +22,62 @@ function item(overrides: Partial<ItemFile>): ItemFile {
     ...overrides,
   };
 }
+
+const CONFIG: LoopsConfig = {
+  owner: "casey",
+  priorityProjects: [],
+  integrationBranch: "master",
+  landedAdapter: "git",
+  githubTokens: {},
+  projects: { atlas: { lifecycle: "deploy" }, docs: { lifecycle: "no-deploy" } },
+  review: {},
+};
+
+describe("validateItem archive placement per project lifecycle", () => {
+  test("reports a tested file in archive/ for a project whose tail ends at acceptance", () => {
+    const messages = validateItem(item({ state: "tested", path: "archive/x.md" }), "deploy");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('state "tested" belongs in for-delivery/');
+  });
+
+  test("accepts a tested file in archive/ for a project whose tail ends at tested", () => {
+    // Not a stranding: archive/ is where that project's lifecycle puts it, and flagging it
+    // would make every finished no-deploy item a standing integrity anomaly.
+    expect(validateItem(item({ state: "tested", path: "archive/x.md" }), "no-deploy")).toEqual([]);
+  });
+
+  test("still reports a delivered file in archive/ under either tail", () => {
+    for (const lifecycle of ["deploy", "no-deploy"] as const) {
+      const messages = validateItem(item({ state: "delivered", path: "archive/x.md" }), lifecycle);
+      expect(messages[0]).toContain('state "delivered" belongs in for-delivery/');
+    }
+  });
+
+  test("defaults to the deploy tail when no lifecycle is given", () => {
+    expect(validateItem(item({ state: "tested", path: "archive/x.md" }))).toHaveLength(1);
+  });
+});
+
+describe("validateItems resolves each item's lifecycle from its project", () => {
+  test("one project's archived tested item is fine while another's is stranded", () => {
+    const anomalies = validateItems(
+      [
+        item({ slug: "shipped", project: "docs", state: "tested", path: "archive/shipped.md" }),
+        item({ slug: "stranded", project: "atlas", state: "tested", path: "archive/stranded.md" }),
+      ],
+      CONFIG,
+    );
+    expect(anomalies.map((a) => a.slug)).toEqual(["stranded"]);
+  });
+
+  test("an unregistered project keeps the deploy tail", () => {
+    const anomalies = validateItems(
+      [item({ slug: "typo", project: "not-registered", state: "tested", path: "archive/typo.md" })],
+      CONFIG,
+    );
+    expect(anomalies.map((a) => a.slug)).toEqual(["typo"]);
+  });
+});
 
 describe("validateItem", () => {
   test("accepts a fully canonical item", () => {
@@ -291,7 +348,7 @@ describe("validateItems", () => {
     const anomalies = validateItems([
       item({ slug: "good" }),
       item({ slug: "bad-state", state: "done" }),
-    ]);
+    ], CONFIG);
     expect(anomalies).toHaveLength(1);
     expect(anomalies[0].slug).toBe("bad-state");
   });

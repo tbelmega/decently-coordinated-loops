@@ -1,10 +1,26 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+/** Where a project's lifecycle ends. `deploy` keeps the full tail
+ * (`tested -> delivered -> accepted`): the owner releases the change and accepts it, and
+ * sync parks verified items in `for-delivery/` until then. `no-deploy` declares that no
+ * such event exists for this project, so `tested` is terminal and sync archives the item
+ * as `tested` - archived, never rewritten to `accepted`, because nothing may record an
+ * owner action that did not happen (the loops-board skill). */
+export const projectLifecycles = ["deploy", "no-deploy"] as const;
+export type ProjectLifecycle = (typeof projectLifecycles)[number];
+
+/** The tail an undeclared project keeps: today's behavior, and the conservative one - it
+ * costs the owner a manual advance, where guessing `no-deploy` would archive verified work
+ * behind their back. */
+export const DEFAULT_PROJECT_LIFECYCLE: ProjectLifecycle = "deploy";
+
 export interface ProjectConfig {
   repo?: string;
   integrationBranch?: string;
   landedAdapter?: "github" | "git";
+  /** Omit for the default `deploy` tail. */
+  lifecycle?: ProjectLifecycle;
 }
 
 export const reviewAuditPasses = ["diff", "integration", "adversarial"] as const;
@@ -29,6 +45,30 @@ export interface ReviewConfig {
   auditPasses?: ReviewAuditPass[];
   /** Repo-relative landing metadata paths that may change after terminal review. */
   metadataPaths?: string[];
+}
+
+function validateProjects(projects: Record<string, ProjectConfig>): Record<string, ProjectConfig> {
+  for (const [name, project] of Object.entries(projects)) {
+    const lifecycle = project?.lifecycle;
+    if (lifecycle !== undefined && !projectLifecycles.includes(lifecycle)) {
+      // Named, because an instance carries a dozen projects and a bare "invalid lifecycle"
+      // leaves the owner hunting. Thrown rather than defaulted: a typo that silently kept
+      // the deploy tail would look exactly like a collapsed tail that quietly did nothing.
+      throw new Error(`projects.${name}.lifecycle must be one of ${projectLifecycles.join(", ")}`);
+    }
+  }
+  return projects;
+}
+
+/** The lifecycle tail that governs `project`. An unregistered name, or a registered project
+ * that declares none, gets `DEFAULT_PROJECT_LIFECYCLE`. Uses an own-property lookup, so a
+ * project named after something on `Object.prototype` ("constructor") reads as undeclared
+ * rather than resolving to an inherited member. */
+export function projectLifecycle(config: LoopsConfig, project: string): ProjectLifecycle {
+  const entry = Object.prototype.hasOwnProperty.call(config.projects, project)
+    ? config.projects[project]
+    : undefined;
+  return entry?.lifecycle ?? DEFAULT_PROJECT_LIFECYCLE;
 }
 
 export interface LoopsConfig {
@@ -111,7 +151,7 @@ export function loadConfig(root: string): LoopsConfig {
     integrationBranch: raw.integrationBranch ?? base.integrationBranch,
     landedAdapter: raw.landedAdapter ?? base.landedAdapter,
     githubTokens: raw.githubTokens ?? base.githubTokens,
-    projects: raw.projects ?? base.projects,
+    projects: validateProjects(raw.projects ?? base.projects),
     review: validateReviewConfig(raw.review ?? base.review),
   };
 }

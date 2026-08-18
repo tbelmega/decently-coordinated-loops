@@ -1,5 +1,6 @@
-import { currentFolder, targetFolder } from "./archive.ts";
+import { currentFolder, itemTargetFolder } from "./archive.ts";
 import type { Folder } from "./archive.ts";
+import type { LoopsConfig } from "./config.ts";
 import type { ItemFile } from "./types.ts";
 
 export interface BoardRow {
@@ -113,9 +114,14 @@ export function rowSlug(path: string): string {
  *
  * The test is "does not belong in archive/", not "belongs in items/": a `tested` or
  * `delivered` item stranded there is just as invisible as an `in-progress` one. Every
- * misplacement outside `archive/` is one `planMoves` performs, in the same sync run. */
-function isStrandedInArchive(item: ItemFile): boolean {
-  return currentFolder(item.path) === "archive" && targetFolder(item.state) !== "archive";
+ * misplacement outside `archive/` is one `planMoves` performs, in the same sync run.
+ *
+ * "Belongs" is per project: where a project's tail ends at `tested`, a `tested` file in
+ * `archive/` is exactly where it belongs, and its row is stale rather than a last trace.
+ * Asking the owner to move that file back would manufacture the very hand-work the
+ * collapsed tail exists to remove. */
+function isStrandedInArchive(item: ItemFile, config: LoopsConfig): boolean {
+  return currentFolder(item.path) === "archive" && itemTargetFolder(item, config) !== "archive";
 }
 
 /** Pure diff: BOARD.md rows vs item files -> orphan-row / terminal-row / missing-row /
@@ -123,8 +129,14 @@ function isStrandedInArchive(item: ItemFile): boolean {
  * board renders; `terminalItems` are the `for-delivery/` and `archive/` files, passed so
  * that a row whose item has legitimately moved on can be told apart from a genuinely
  * orphaned one. Every row resolves against both sets; only `items` produces missing rows
- * and field comparisons. */
-export function runPreflight(boardText: string, items: ItemFile[], terminalItems: ItemFile[]): PreflightReport {
+ * and field comparisons. `config` supplies the per-project lifecycle tails that decide
+ * which folder a state belongs in. */
+export function runPreflight(
+  boardText: string,
+  items: ItemFile[],
+  terminalItems: ItemFile[],
+  config: LoopsConfig,
+): PreflightReport {
   const rows = parseBoardRows(boardText);
   const itemsBySlug = new Map(items.map((i) => [i.slug, i]));
   const terminalBySlug = new Map(terminalItems.map((i) => [i.slug, i]));
@@ -138,12 +150,15 @@ export function runPreflight(boardText: string, items: ItemFile[], terminalItems
     const terminal = terminalBySlug.get(slug);
     if (!terminal) {
       orphanRows.push(row);
-    } else if (isStrandedInArchive(terminal)) {
+    } else if (isStrandedInArchive(terminal, config)) {
       // The file exists, so the recovery is to move it, not to write a new one. Carry
       // where it is and where it belongs, or the entry would tell the owner to create an
       // item whose slug archive/ already holds, which the duplicate-slug guard then
       // refuses to sync past.
-      orphanRows.push({ ...row, stranded: { itemPath: terminal.path, belongsIn: targetFolder(terminal.state) } });
+      orphanRows.push({
+        ...row,
+        stranded: { itemPath: terminal.path, belongsIn: itemTargetFolder(terminal, config) },
+      });
     } else {
       terminalRows.push({ ...row, itemPath: terminal.path });
     }

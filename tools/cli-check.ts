@@ -2,6 +2,7 @@
 // `bun run check` — report-only integrity check. No write, no OUTBOX append.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadConfig } from "./config.ts";
 import { loadArchiveDir, loadForDeliveryDir, loadItemsDir } from "./parse.ts";
 import { runPreflight } from "./preflight.ts";
 import { printDanglingDeps, printDuplicateSlugs, printPreflightReport, printValidationReport } from "./report.ts";
@@ -16,6 +17,7 @@ if (!existsSync(join(ROOT, "BOARD.md"))) {
   process.exit(2);
 }
 
+const config = loadConfig(ROOT);
 const boardText = readFileSync(join(ROOT, "BOARD.md"), "utf8");
 const items = loadItemsDir(join(ROOT, "items"));
 const forDeliveryItems = loadForDeliveryDir(join(ROOT, "for-delivery"));
@@ -23,10 +25,10 @@ const archiveItems = loadArchiveDir(join(ROOT, "archive"));
 
 // Terminal items are passed for row identity only: a row whose item has moved to
 // for-delivery/ or archive/ is stale, not orphaned, and must not be reported as one.
-const report = runPreflight(boardText, items, [...forDeliveryItems, ...archiveItems]);
+const report = runPreflight(boardText, items, [...forDeliveryItems, ...archiveItems], config);
 printPreflightReport(report);
 
-const anomalies = validateItems([...items, ...forDeliveryItems, ...archiveItems]);
+const anomalies = validateItems([...items, ...forDeliveryItems, ...archiveItems], config);
 printValidationReport(anomalies);
 
 // Duplicate slugs across items/, for-delivery/, and archive/: a slug is a file

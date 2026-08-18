@@ -1,7 +1,7 @@
 import type { ItemFile } from "./types.ts";
 import type { LoopsConfig } from "./config.ts";
 import { makePriorityCompare } from "./priority.ts";
-import { targetFolder } from "./archive.ts";
+import { itemTargetFolder } from "./archive.ts";
 
 const ACTIVE_TABLE_HEADER = `| Item | Project | State | Next-actor | Awaiting | Auto | Assignee | Updated |
 | --- | --- | --- | --- | --- | --- | --- | --- |`;
@@ -54,7 +54,7 @@ export function replaceActiveRow(boardText: string, item: ItemFile): string {
  * filter is defense-in-depth, not the primary move mechanism. */
 export function renderBoardMd(items: ItemFile[], config: LoopsConfig): string {
   const compare = makePriorityCompare(config.priorityProjects);
-  const active = items.filter((i) => targetFolder(i.state) === "items").sort(compare);
+  const active = items.filter((i) => itemTargetFolder(i, config) === "items").sort(compare);
 
   const parts = [header(config), ACTIVE_TABLE_HEADER, ...active.map(activeRow), ""];
   return parts.join("\n");

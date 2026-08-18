@@ -46,16 +46,47 @@ plus `blocked` (waiting on a decision, another item, or an outage) and `dropped`
 | `idea` / `spec-filed` / `in-progress` | pre-landing lifecycle | `items/` |
 | `implemented` | change complete on its agent branch; review requested per `HOUSE-RULES.md → Review mechanism` | `items/` |
 | `merged` | landed on the project's integration branch; item becomes agent-owned for verification | `items/` |
-| `tested` | agent-verified per the project's verify gate (loops-pickup → "Verify a landed item") | `for-delivery/` |
+| `tested` | agent-verified per the project's verify gate (loops-pickup → "Verify a landed item") | `for-delivery/`, or `archive/` where the project's tail ends here (below) |
 | `delivered` | released to the owner's staging/production environment | `for-delivery/` |
 | `accepted` | owner tested the release and accepted | `archive/` |
 | `blocked` | waiting on a decision / another item / outage | `items/` |
 | `dropped` | abandoned | `archive/` |
 
 The tail separates what an agent verifies autonomously (`tested`) from the owner's
-release process (`delivered`/`accepted`). Instances whose release is fully automated
-can note in `HOUSE-RULES.md` that the tail collapses (e.g. `tested` flows straight to
-`accepted`).
+release process (`delivered`/`accepted`).
+
+**Where the tail ends is per project, declared in `loops.json`.** Some projects have no
+release event at all - a skills repo, a docs repo, an ops repo, anything whose artifact
+reaches its users through a clone or a merge rather than a deploy. Their items can never
+advance past `tested`, so they accumulate in `for-delivery/` until the owner advances them
+by hand, which is invented work: the owner is asked to certify a delivery that does not
+exist.
+
+```jsonc
+"projects": {
+  "atlas": { "repo": "acme-org/atlas" },                      // deploy (the default)
+  "docs":  { "repo": "acme-org/docs", "lifecycle": "no-deploy" }
+}
+```
+
+| `lifecycle` | Tail | `tested` routes to |
+| --- | --- | --- |
+| `deploy` (default, omit the field) | `tested → delivered → accepted` | `for-delivery/` |
+| `no-deploy` | ends at `tested` | `archive/`, with an `ARCHIVE.md` row |
+
+Under `no-deploy`, `tested` **is** the terminal state and the item is archived as `tested`:
+nothing rewrites it to `accepted`, because the record must never claim an owner action that
+did not happen. So a `tested` item there carries `next-actor: agent`, no `awaiting`, and a
+`next-step` of "None - ..." like any other finished item. `delivered` and `accepted` stay
+valid states under either tail - the state vocabulary is global and closed, and the owner may
+still set them by hand - and they keep routing as the table above says. An unregistered
+project, or one that declares no `lifecycle`, keeps the `deploy` tail: the fallback costs a
+manual advance, where guessing the other way would archive verified work behind the owner's
+back.
+
+Collapsing a project's tail needs no migration step. The next `bun run sync` after the
+config change moves items already parked in `for-delivery/` to `archive/` under the ordinary
+move machinery, and names each one in its report.
 
 Recording `merged` is a single move that also sets `next-actor: agent`,
 `autonomy: auto`, and `next-step: "Verify per the project verify gate, then flip to
@@ -69,7 +100,8 @@ while explicitly delegated landings remain agent-owned:
 | `implemented` | owner | `review-merge` |
 | `implemented` | agent | — |
 | `merged` | agent | — |
-| `tested` | owner | `deliver` |
+| `tested` (`deploy` tail) | owner | `deliver` |
+| `tested` (`no-deploy` tail, terminal) | agent | - |
 | `delivered` | owner | `accept` |
 
 ## Project participation

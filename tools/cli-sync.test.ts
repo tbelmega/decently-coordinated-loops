@@ -192,6 +192,94 @@ describe("cli-sync rows whose item has moved to a terminal folder", () => {
   }
 });
 
+describe("cli-sync per-project lifecycle tail", () => {
+  const TESTED_ITEM = `---
+title: "Verified"
+project: atlas
+state: tested
+assignee: "-"
+autonomy: auto
+next-actor: agent
+next-step: "n/a - verified"
+updated: 2026-08-17
+---
+Fixture item.
+`;
+
+  /** A data repo holding one `tested` item, in `folder`, with `atlas` declared either way. */
+  function dataRepoWithTestedItem(lifecycle: "deploy" | "no-deploy", folder: "items" | "for-delivery"): string {
+    const root = mkdtempSync(join(tmpdir(), "dcl-sync-"));
+    created.push(root);
+    for (const dir of ["items", "for-delivery", "archive"]) mkdirSync(join(root, dir));
+    const row = `| [Verified](items/verified.md) | atlas | tested | agent | - | auto | - | 2026-08-17 |\n`;
+    writeFileSync(join(root, "BOARD.md"), readFileSync(join(TEMPLATES, "BOARD.md"), "utf8") + (folder === "items" ? row : ""));
+    writeFileSync(join(root, "ARCHIVE.md"), readFileSync(join(TEMPLATES, "ARCHIVE.md"), "utf8"));
+    writeFileSync(join(root, "OUTBOX.md"), "# Outbox\n\n## Open\n");
+    writeFileSync(join(root, "loops.json"), JSON.stringify({ owner: "Casey", projects: { atlas: { lifecycle } } }));
+    writeFileSync(join(root, folder, "verified.md"), TESTED_ITEM);
+    return root;
+  }
+
+  test("archives a no-deploy project's tested item, with an ARCHIVE.md row", () => {
+    const root = dataRepoWithTestedItem("no-deploy", "items");
+
+    const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(root, "archive", "verified.md"))).toBe(true);
+    expect(existsSync(join(root, "items", "verified.md"))).toBe(false);
+    expect(existsSync(join(root, "for-delivery", "verified.md"))).toBe(false);
+    expect(readFileSync(join(root, "ARCHIVE.md"), "utf8")).toContain("| [Verified](archive/verified.md) | atlas |");
+    // Archived AS tested: nothing rewrote the state into a delivery the owner never made.
+    expect(readFileSync(join(root, "archive", "verified.md"), "utf8")).toContain("state: tested");
+    expect(readFileSync(join(root, "BOARD.md"), "utf8")).not.toContain("Verified");
+    // The report names it, which is the whole migration story for items already parked.
+    expect(result.stdout).toContain("verified: moved (items -> archive)");
+  });
+
+  test("still parks a deploy project's tested item in for-delivery/", () => {
+    const root = dataRepoWithTestedItem("deploy", "items");
+
+    const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(root, "for-delivery", "verified.md"))).toBe(true);
+    expect(existsSync(join(root, "archive", "verified.md"))).toBe(false);
+    expect(readFileSync(join(root, "ARCHIVE.md"), "utf8")).not.toContain("verified.md");
+    expect(result.stdout).toContain("verified: moved (items -> for-delivery)");
+  });
+
+  test("carries an already-parked tested item out of for-delivery/ on the first sync after the config change", () => {
+    // The rollout has no migration step of its own: this run is it.
+    const root = dataRepoWithTestedItem("no-deploy", "for-delivery");
+
+    const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(root, "archive", "verified.md"))).toBe(true);
+    expect(readFileSync(join(root, "ARCHIVE.md"), "utf8")).toContain("archive/verified.md");
+    expect(result.stdout).toContain("verified: moved (for-delivery -> archive)");
+  });
+
+  test("asks nothing and reports nothing about a no-deploy tested item already in archive/", () => {
+    // The crash-recovery shape: the move landed, the board write did not. The row is stale,
+    // the file is where that project's tail ends, so this run drops the row and indexes it -
+    // it must not be reported as stranded or routed to the owner.
+    const root = dataRepoWithTestedItem("no-deploy", "items");
+    const raw = readFileSync(join(root, "items", "verified.md"), "utf8");
+    rmSync(join(root, "items", "verified.md"));
+    writeFileSync(join(root, "archive", "verified.md"), raw);
+
+    const result = spawnSync("bun", [SYNC], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(root, "OUTBOX.md"), "utf8")).not.toContain("verified");
+    expect(result.stdout).not.toContain("which sync never moves a file out of");
+    expect(readFileSync(join(root, "ARCHIVE.md"), "utf8")).toContain("archive/verified.md");
+    expect(readFileSync(join(root, "BOARD.md"), "utf8")).not.toContain("Verified");
+  });
+});
+
 describe("cli-sync orphan routing", () => {
   test("files the entry and keeps the row until a later run has seen it", () => {
     // Two phases on purpose. Writing an entry and that entry still being there are not

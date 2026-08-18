@@ -4,6 +4,8 @@
 // otherwise be bucketed silently. This turns any out-of-set value into a visible
 // anomaly — surfaced by the CLI and failing the check command. Pure: no IO.
 import { currentFolder, targetFolder } from "./archive.ts";
+import { DEFAULT_PROJECT_LIFECYCLE, projectLifecycle } from "./config.ts";
+import type { LoopsConfig, ProjectLifecycle } from "./config.ts";
 import type { ItemFile } from "./types.ts";
 
 /** The one authoritative list of `state` values (the loops-board skill). */
@@ -65,8 +67,13 @@ function isCrossPlatformAbsolutePath(path: string): boolean {
 /** Pure: every schema violation on one item, as human-readable messages — a blank
  * mandatory field, or a closed-set enum value outside its canonical set. Empty array =
  * the item is well-formed. Empty required fields are reported first; the enum checks
- * then skip empty values so a blank field isn't also flagged as "not canonical". */
-export function validateItem(item: ItemFile): string[] {
+ * then skip empty values so a blank field isn't also flagged as "not canonical".
+ *
+ * `lifecycle` is the tail of the project that owns the item, and only the archive-placement
+ * check below reads it; every other check is lifecycle-independent. It defaults to the
+ * deploy tail so a caller holding no instance config still gets today's behavior; pass it
+ * from `projectLifecycle(config, item.project)`, which `validateItems` does. */
+export function validateItem(item: ItemFile, lifecycle: ProjectLifecycle = DEFAULT_PROJECT_LIFECYCLE): string[] {
   const messages: string[] = [];
 
   if (item.legacyOwner !== undefined) {
@@ -165,9 +172,12 @@ export function validateItem(item: ItemFile): string[] {
   // otherwise be visible in no index, no report and no queue, with the file itself the
   // only trace. Everything else the board projects can be recovered from the board; this
   // cannot, so it is checked where the file is read.
-  if (currentFolder(item.path) === "archive" && targetFolder(item.state) !== "archive") {
+  // Where the project's tail ends at `tested`, archive/ is where a `tested` file belongs, so
+  // there is nothing to report: flagging it would make every finished item of every no-deploy
+  // project a standing integrity anomaly.
+  if (currentFolder(item.path) === "archive" && targetFolder(item.state, lifecycle) !== "archive") {
     messages.push(
-      `state "${item.state}" belongs in ${targetFolder(item.state)}/, but the file is in archive/, which sync never moves a file out of — move it back by hand`,
+      `state "${item.state}" belongs in ${targetFolder(item.state, lifecycle)}/, but the file is in archive/, which sync never moves a file out of — move it back by hand`,
     );
   }
 
@@ -188,10 +198,11 @@ export interface ItemAnomaly {
   messages: string[];
 }
 
-/** Pure: run validateItem across a set and keep only the ones with violations. */
-export function validateItems(items: ItemFile[]): ItemAnomaly[] {
+/** Pure: run validateItem across a set and keep only the ones with violations, each item
+ * judged against its own project's lifecycle tail. */
+export function validateItems(items: ItemFile[], config: LoopsConfig): ItemAnomaly[] {
   return items
-    .map((item) => ({ slug: item.slug, messages: validateItem(item) }))
+    .map((item) => ({ slug: item.slug, messages: validateItem(item, projectLifecycle(config, item.project)) }))
     .filter((entry) => entry.messages.length > 0);
 }
 

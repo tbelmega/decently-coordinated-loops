@@ -59,13 +59,13 @@ try {
     // Terminal items resolve row identity, nothing more: a row whose item has moved to
     // for-delivery/ or archive/ must not be routed to the owner as an orphan, and only
     // `items` below feeds the regenerated board.
-    const report = runPreflight(boardText, items, [...forDeliveryItems, ...archiveItems]);
+    const report = runPreflight(boardText, items, [...forDeliveryItems, ...archiveItems], config);
     printPreflightReport(report);
     // Archive files are validated too, though sync never moves them: a file stranded there
     // is the one misplacement no run repairs, and if it was archived the ordinary way there
     // is no board row left to reveal it. Reporting it from the file is the only way it gets
     // said at all.
-    printValidationReport(validateItems([...allItems, ...archiveItems]));
+    printValidationReport(validateItems([...allItems, ...archiveItems], config));
 
     let retainedOrphanRows: string[] = [];
     if (report.orphanRows.length) {
@@ -89,7 +89,7 @@ try {
       }
     }
 
-    const moves = planMoves(allItems);
+    const moves = planMoves(allItems, config);
     if (moves.length) {
       const logs = performMoves(ROOT, moves);
       console.log(`\nMoved ${moves.length} item(s):`);
@@ -108,7 +108,7 @@ try {
     // when its ARCHIVE.md row was missing, leaving the item in neither derived index.
     const archived = loadArchiveDir(join(ROOT, "archive"));
     const archiveText = readFileSync(ARCHIVE_MD_PATH, "utf8");
-    const reconciledArchive = reconcileArchiveRows(archiveText, archived);
+    const reconciledArchive = reconcileArchiveRows(archiveText, archived, config);
     if (reconciledArchive !== archiveText) writeFileSync(ARCHIVE_MD_PATH, reconciledArchive);
 
     // Read items/ back rather than deriving the render set from the pre-move load. Both
