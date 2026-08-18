@@ -30,6 +30,27 @@ export interface ProjectConfig {
 export const reviewAuditPasses = ["diff", "integration", "adversarial"] as const;
 export type ReviewAuditPass = (typeof reviewAuditPasses)[number];
 
+export const reviewPriorities = ["P0", "P1", "P2", "P3"] as const;
+export type ReviewPriority = (typeof reviewPriorities)[number];
+
+/** A review change class: paths matched by function (record-keeping vs executed), never
+ * by extension — a doc whose text gets executed is executable surface. A class either
+ * waives reviewer findings up to the listed priorities (the waiver is recorded per
+ * finding, authorized by this config) or declares the paths exempt from review
+ * entirely; never both. */
+export interface ReviewClassConfig {
+  name: string;
+  /** Same pattern shape as `metadataPaths`: exact path or `dir/**`. */
+  match: string[];
+  /** Priorities a finding on a matched path may be waived at (`waived-by-policy`). */
+  waivablePriorities?: ReviewPriority[];
+  /** "exempt": a range changing only such paths records a review-free exempt round. */
+  policy?: "exempt";
+  /** Optional reviewer steering for matched paths; cost reduction only — the
+   * disposition-side waiver is the enforcement. */
+  guidance?: string;
+}
+
 /** Local code-review adapter selection. Empty (no `reviewer`) means review is not
  * activated for this instance; `bun run setup` offers to fill it in. */
 export interface ReviewConfig {
@@ -49,6 +70,9 @@ export interface ReviewConfig {
   auditPasses?: ReviewAuditPass[];
   /** Repo-relative landing metadata paths that may change after terminal review. */
   metadataPaths?: string[];
+  /** Change classes authorizing finding-level waivers and review-exempt ranges. Absent:
+   * every finding blocks until dispositioned, exactly the pre-class behavior. */
+  classes?: ReviewClassConfig[];
 }
 
 function validateProjects(projects: Record<string, ProjectConfig>): Record<string, ProjectConfig> {
@@ -84,6 +108,7 @@ export function resolveReviewConfig(config: LoopsConfig, project?: string): Revi
   if (override.maxRounds !== undefined) merged.maxRounds = override.maxRounds;
   if (override.auditPasses !== undefined) merged.auditPasses = override.auditPasses;
   if (override.metadataPaths !== undefined) merged.metadataPaths = override.metadataPaths;
+  if (override.classes !== undefined) merged.classes = override.classes;
   return merged;
 }
 
@@ -121,6 +146,70 @@ function defaults(): LoopsConfig {
     projects: {},
     review: {},
   };
+}
+
+/** The pattern shape shared by `metadataPaths` and class `match` lists: an exact
+ * repo-relative path or a `dir/**` prefix, nothing absolute, traversing, or fancier. */
+function isSafePathPattern(pattern: unknown): pattern is string {
+  return (
+    typeof pattern === "string" &&
+    pattern.trim() !== "" &&
+    !pattern.startsWith("/") &&
+    !pattern.split("/").includes("..") &&
+    !pattern.includes("\\") &&
+    (!pattern.includes("*") || (pattern.endsWith("/**") && !pattern.slice(0, -3).includes("*")))
+  );
+}
+
+function validateReviewClasses(classes: unknown, label: string): void {
+  if (!Array.isArray(classes) || classes.length === 0) {
+    throw new Error(`${label} must be a non-empty array of class objects`);
+  }
+  const names = new Set<string>();
+  for (const [index, entry] of classes.entries()) {
+    const path = `${label}[${index}]`;
+    const candidate = entry as Partial<ReviewClassConfig> | null;
+    if (typeof candidate !== "object" || candidate === null) throw new Error(`${path} must be an object`);
+    if (typeof candidate.name !== "string" || candidate.name.trim() === "") {
+      throw new Error(`${path}.name must be a non-empty string`);
+    }
+    if (names.has(candidate.name)) {
+      // Waivers name their authorizing class, so two classes sharing a name would make
+      // the recorded authorization ambiguous.
+      throw new Error(`${path}.name duplicates class ${JSON.stringify(candidate.name)}`);
+    }
+    names.add(candidate.name);
+    if (
+      !Array.isArray(candidate.match) ||
+      candidate.match.length === 0 ||
+      new Set(candidate.match).size !== candidate.match.length ||
+      candidate.match.some((pattern) => !isSafePathPattern(pattern))
+    ) {
+      throw new Error(`${path}.match must be a non-empty array of safe repo-relative patterns`);
+    }
+    const thresholded = candidate.waivablePriorities !== undefined;
+    const exempt = candidate.policy !== undefined;
+    if (thresholded === exempt) {
+      throw new Error(`${path} must declare exactly one of waivablePriorities or policy: "exempt"`);
+    }
+    if (exempt && candidate.policy !== "exempt") {
+      throw new Error(`${path}.policy must be "exempt"`);
+    }
+    if (
+      thresholded &&
+      (!Array.isArray(candidate.waivablePriorities) ||
+        candidate.waivablePriorities.length === 0 ||
+        new Set(candidate.waivablePriorities).size !== candidate.waivablePriorities.length ||
+        candidate.waivablePriorities.some((priority) => !reviewPriorities.includes(priority)))
+    ) {
+      throw new Error(
+        `${path}.waivablePriorities must be a non-empty array containing only ${reviewPriorities.join(", ")}`,
+      );
+    }
+    if (candidate.guidance !== undefined && (typeof candidate.guidance !== "string" || candidate.guidance.trim() === "")) {
+      throw new Error(`${path}.guidance must be a non-empty string when present`);
+    }
+  }
 }
 
 /** `label` names the block in errors: the global "review", or "projects.<name>.review" -
@@ -161,6 +250,7 @@ function validateReviewConfig(review: ReviewConfig, label = "review"): ReviewCon
   ) {
     throw new Error(`${label}.metadataPaths must be a non-empty array of safe repo-relative patterns`);
   }
+  if (review.classes !== undefined) validateReviewClasses(review.classes, `${label}.classes`);
   return review;
 }
 

@@ -628,6 +628,108 @@ describe("cli-review start", () => {
     expect(result.stderr).toContain("review round limit of 1 reached");
   });
 
+  test("records a policy-exempt round without invoking the reviewer for an exempt-only range", () => {
+    const { repository } = createReviewRepository();
+    const item = "exempt-range-review";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: {
+          reviewer: "codex",
+          maxRounds: 5,
+          classes: [{ name: "bookkeeping", match: ["change.txt"], policy: "exempt" }],
+        },
+      })}\n`,
+    );
+    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
+
+    const result = runStart(repository, dataRepo, item, "master", { FAKE_CODEX_LOG: log });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("policy-exempt");
+    expect(existsSync(log)).toBe(false);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds).toHaveLength(1);
+    expect(ledger.rounds[0].model).toBe("policy-exempt");
+    expect(ledger.rounds[0].audit.kind).toBe("exempt");
+    expect(ledger.rounds[0].findings).toEqual([]);
+    const status = runStatus(repository, item);
+    expect(status.stdout).toContain("REVIEW_STATUS=passed");
+  });
+
+  test("runs a normal review when the range mixes exempt and reviewable files", () => {
+    const { repository } = createReviewRepository();
+    writeFileSync(`${repository}/code.ts`, "export const x = 1;\n");
+    git(repository, ["add", "code.ts"]);
+    git(repository, ["commit", "-q", "-m", "Add code"]);
+    const item = "mixed-range-review";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: {
+          reviewer: "codex",
+          maxRounds: 5,
+          classes: [{ name: "bookkeeping", match: ["change.txt"], policy: "exempt" }],
+        },
+      })}\n`,
+    );
+
+    const result = runStart(repository, dataRepo, item);
+
+    expect(result.status).toBe(0);
+    const ledger = readLedgerJson(repository, item);
+    expect(ledger.rounds[0].model).not.toBe("policy-exempt");
+    expect(ledger.rounds[0].audit.kind).toBe("full");
+  });
+
+  test("waives a classed finding end to end and fails closed without the data repo", () => {
+    const { repository } = createReviewRepository();
+    const item = "waiver-flow-review";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: {
+          reviewer: "codex",
+          maxRounds: 5,
+          classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2", "P3"] }],
+        },
+      })}\n`,
+    );
+    const first = runStart(repository, dataRepo, item, "master", {
+      FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+    });
+    expect(first.status).toBe(0);
+
+    const unauthorized = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      "--class",
+      "coordination-prose",
+    ]);
+    expect(unauthorized.status).not.toBe(0);
+    expect(unauthorized.stderr).toContain("no review classes");
+
+    const waived = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      "--class",
+      "coordination-prose",
+      "--data-repo",
+      dataRepo,
+    ]);
+    expect(waived.status).toBe(0);
+    expect(readLedgerJson(repository, item).rounds[0].findings[0].disposition.class).toBe("coordination-prose");
+
+    // Status resolves the classes via $LOOPS_DATA_REPO; without it the waiver blocks.
+    const blocked = runStatus(repository, item);
+    expect(blocked.stdout).toContain("not authorized");
+    const passed = spawnSync("bun", ["run", CLI, "status", "--item", item], {
+      cwd: repository,
+      encoding: "utf8",
+      env: { ...process.env, LOOPS_DATA_REPO: dataRepo },
+    });
+    expect(passed.stdout).toContain("REVIEW_STATUS=passed");
+  });
+
   test("keeps the global review policy for a repository registered to no project", () => {
     const { repository } = createReviewRepository();
     const item = "unregistered-repo-review";

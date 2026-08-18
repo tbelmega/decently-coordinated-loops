@@ -12,7 +12,16 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { loadConfig, resolveReviewConfig, reviewAuditPasses, type LoopsConfig, type ReviewAuditPass } from "../config.ts";
+import {
+  loadConfig,
+  resolveReviewConfig,
+  reviewAuditPasses,
+  type LoopsConfig,
+  type ReviewAuditPass,
+  type ReviewClassConfig,
+  type ReviewConfig,
+} from "../config.ts";
+import { isExemptOnly, matchingClasses } from "./review-classes.ts";
 import { resolveDataRepo } from "./data-repo.ts";
 import { parseItemFileText } from "../parse.ts";
 import { expandHome, matchProject } from "../registration.ts";
@@ -74,6 +83,8 @@ interface StartOptions {
   stepBack?: string;
   auditPasses: ReviewAuditPass[];
   metadataPaths: string[];
+  /** Resolved change classes (global block merged with the reviewed project's). */
+  classes?: ReviewClassConfig[];
   dataRepo?: string;
 }
 
@@ -122,9 +133,19 @@ function reviewedProjectName(config: LoopsConfig, home: string): string | undefi
   return matchProject(config.projects, [worktreeRoot, mainCheckoutRoot], canonicalize) ?? undefined;
 }
 
-/** Resolves which reviewer + model to use: explicit flags win, else the data repo's
- * loops.json review policy (from --data-repo or $LOOPS_DATA_REPO), with the reviewed
- * repository's registered project overriding the global block field by field. */
+/** The review policy governing the CURRENT checkout: the data repo's loops.json (from
+ * --data-repo or $LOOPS_DATA_REPO) with the reviewed repository's registered project
+ * merged over the global block. Undefined when no data repo is resolvable. */
+function resolveReviewPolicy(dataRepoFlag?: string): { review?: ReviewConfig; dataRepo?: string } {
+  const home = process.env.HOME ?? homedir();
+  const dataRepo = resolveDataRepo(dataRepoFlag, process.env, home);
+  const config = dataRepo ? loadConfig(dataRepo) : undefined;
+  const review = config ? resolveReviewConfig(config, reviewedProjectName(config, home)) : undefined;
+  return { ...(review ? { review } : {}), ...(dataRepo ? { dataRepo } : {}) };
+}
+
+/** Resolves which reviewer + model to use: explicit flags win, else the resolved
+ * review policy (see resolveReviewPolicy). */
 function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string }): {
   reviewer: Reviewer;
   model?: string;
@@ -132,12 +153,10 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   maxRounds?: number;
   auditPasses: ReviewAuditPass[];
   metadataPaths: string[];
+  classes?: ReviewClassConfig[];
   dataRepo?: string;
 } {
-  const home = process.env.HOME ?? homedir();
-  const dataRepo = resolveDataRepo(flags.dataRepo, process.env, home);
-  const config = dataRepo ? loadConfig(dataRepo) : undefined;
-  const review = config ? resolveReviewConfig(config, reviewedProjectName(config, home)) : undefined;
+  const { review, dataRepo } = resolveReviewPolicy(flags.dataRepo);
   const id = flags.reviewer ?? review?.reviewer;
   if (!id) {
     throw new Error(
@@ -154,6 +173,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     maxRounds: review?.maxRounds,
     auditPasses: review?.auditPasses ?? [...reviewAuditPasses],
     metadataPaths: review?.metadataPaths ?? [],
+    ...(review?.classes ? { classes: review.classes } : {}),
     dataRepo,
   };
 }
@@ -195,6 +215,7 @@ function parseStartOptions(args: string[]): StartOptions {
     ...(stepBack ? {stepBack} : {}),
     auditPasses: configured.auditPasses,
     metadataPaths: configured.metadataPaths,
+    ...(configured.classes ? {classes: configured.classes} : {}),
     dataRepo: configured.dataRepo,
   };
 }
@@ -616,6 +637,46 @@ async function startReview(options: StartOptions): Promise<void> {
         baseDeltaRange,
         remediationRange,
       );
+      // Exempt short-circuit: derived from the diff, never declared per item. Only a
+      // range whose every reviewable file is covered by exempt-policy classes alone
+      // skips the reviewer, and only while nothing else is owed (open obligations
+      // still need a classifying round). The round is explicitly marked and keeps the
+      // manifest as the file-list evidence.
+      if (
+        options.classes &&
+        obligations.length === 0 &&
+        manifest.files.length > 0 &&
+        manifest.files.every((file) => isExemptOnly(file.path, options.classes ?? []))
+      ) {
+        const exemptFiles = manifest.files.map((file) => file.path);
+        ledger = addReviewRound(ledger, {
+          headSha,
+          model: "policy-exempt",
+          reviewedAt: new Date().toISOString(),
+          review: {
+            summary: `Exempt range: every changed file matches only exempt review classes (${exemptFiles.join(", ")})`,
+            findings: [],
+          },
+          audit: {
+            kind: "exempt",
+            manifest,
+            passes: [],
+            obligations: [],
+            metrics: computeReviewMetrics({
+              roundNumber: ledger.rounds.length + 1,
+              headSha,
+              passResults: [],
+              findings: [],
+            }),
+          },
+          ...(stepBack ? {stepBack} : {}),
+        });
+        await writeLedger(ledger, paths);
+        process.stdout.write(
+          `Review round ${ledger.rounds.length} recorded as policy-exempt (no reviewer run) in ${paths.markdownPath}\n`,
+        );
+        return;
+      }
       const passes = auditKind === "base-delta" && obligations.length === 0
         ? options.auditPasses.filter((pass) => pass !== "diff")
         : options.auditPasses;
@@ -628,6 +689,18 @@ async function startReview(options: StartOptions): Promise<void> {
           path: obligation.doc as string,
           content: git(["-C", repository, "show", `${headSha}:${obligation.doc}`]),
         }));
+      // Guidance lines for classes whose paths this range touches; enforcement stays on
+      // the disposition side, so this only steers the reviewer's attention and cost.
+      const classGuidance = (options.classes ?? [])
+        .filter((entry) => entry.guidance)
+        .map((entry) => ({
+          name: entry.name,
+          guidance: entry.guidance as string,
+          files: manifest.files
+            .map((file) => file.path)
+            .filter((path) => matchingClasses(path, [entry]).length > 0),
+        }))
+        .filter((entry) => entry.files.length > 0);
       const passResults: ReviewPassResult[] = [];
       for (const pass of passes) {
         const prompt = reviewPrompt({
@@ -637,6 +710,7 @@ async function startReview(options: StartOptions): Promise<void> {
           priorNotes: priorDispositionNotes(ledger),
           obligations,
           classifyObligations: pass === obligationPass,
+          ...(classGuidance.length > 0 ? {classGuidance} : {}),
           ...(pass === obligationPass && docArtifacts.length > 0 ? {docArtifacts} : {}),
           ...(remediationRange
             ? {remediationBaseSha: remediationRange.baseSha}
@@ -752,6 +826,9 @@ interface DispositionOptions {
   reason: string;
   doc?: string;
   owner?: boolean;
+  /** Authorizing class name for waived-by-policy (`--class`). */
+  waivedClass?: string;
+  dataRepo?: string;
 }
 
 function parseDispositionOptions(args: string[]): DispositionOptions {
@@ -781,6 +858,8 @@ function parseDispositionOptions(args: string[]): DispositionOptions {
     kind: status,
     reason,
     ...(values.get("--doc") ? {doc: values.get("--doc")} : {}),
+    ...(values.get("--class") ? {waivedClass: values.get("--class")} : {}),
+    ...(values.get("--data-repo") ? {dataRepo: values.get("--data-repo")} : {}),
     ...(owner ? {owner: true} : {}),
   };
 }
@@ -797,8 +876,15 @@ async function addDisposition(options: DispositionOptions): Promise<void> {
       throw new Error(`review ledger branch is ${existingLedger.branch}, expected ${branch}`);
     }
     if (existingLedger.item !== options.item) throw new Error("review item does not match the existing ledger");
+    // Resolved lazily and only for a waiver: every other disposition kind must keep
+    // working without a data repo, and a waiver without one must fail closed, not pass.
+    const classes = options.kind === "waived-by-policy"
+      ? resolveReviewPolicy(options.dataRepo).review?.classes
+      : undefined;
     const ledger = recordDisposition(existingLedger, options.findingId, options.kind, options.reason, {
       ...(options.doc ? {doc: options.doc} : {}),
+      ...(options.waivedClass ? {waivedClass: options.waivedClass} : {}),
+      ...(classes ? {classes} : {}),
       ...(options.owner ? {owner: true} : {}),
     });
     await writeLedger(ledger, paths);
@@ -836,7 +922,10 @@ function currentReviewStatus(item?: string): ReviewStatus {
     if (ledger.branch !== branch) {
       throw new Error(`review ledger branch is ${ledger.branch}, expected ${branch}`);
     }
-    const status = evaluateReviewStatus(ledger, headSha, ledgerPath);
+    // Waiver authorization binds at this gate against the currently resolved classes
+    // ($LOOPS_DATA_REPO); with no data repo resolvable, waivers block (fail closed).
+    const classes = resolveReviewPolicy().review?.classes;
+    const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes);
     const latestRound = ledger.rounds.at(-1);
     if (
       status.kind === "blocked" &&
@@ -844,7 +933,7 @@ function currentReviewStatus(item?: string): ReviewStatus {
       latestRound?.headSha !== headSha &&
       latestRound?.audit?.manifest.metadataPaths?.length
     ) {
-      const reviewedStatus = evaluateReviewStatus(ledger, latestRound.headSha, ledgerPath);
+      const reviewedStatus = evaluateReviewStatus(ledger, latestRound.headSha, ledgerPath, classes);
       const ancestor = spawnSync(
         "git",
         ["-C", repository, "merge-base", "--is-ancestor", latestRound.headSha, headSha],

@@ -16,6 +16,15 @@ export interface ReviewDocArtifact {
   content: string;
 }
 
+/** Reviewer steering for one change class whose paths this range touches. Cost
+ * reduction only: the disposition-side waiver threshold is the enforcement, so a
+ * reviewer that ignores the guidance still converges. */
+export interface ReviewClassGuidance {
+  name: string;
+  files: string[];
+  guidance: string;
+}
+
 export interface ReviewPromptInput {
   pass: ReviewAuditPass;
   manifest: ReviewManifest;
@@ -24,6 +33,7 @@ export interface ReviewPromptInput {
   obligations: ReviewObligation[];
   classifyObligations: boolean;
   docArtifacts?: ReviewDocArtifact[];
+  classGuidance?: ReviewClassGuidance[];
   remediationBaseSha?: string;
   baseDeltaRange?: {baseSha: string; headSha: string};
 }
@@ -80,6 +90,10 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     ...(metadataPaths.length > 0
       ? [`These paths are landing metadata excluded from terminal code coverage: ${metadataPaths.join(", ")}. Inspect them only for contradictions that affect the reviewed behavior.`]
       : []),
+    ...(input.classGuidance ?? []).map(
+      (entry) =>
+        `Change class "${entry.name}" covers these changed files: ${entry.files.join(", ")}. ${entry.guidance}`,
+    ),
     ...(input.baseDeltaRange
       ? [`The patch series is unchanged after a rebase. Audit integration against the base delta ${input.baseDeltaRange.baseSha}..${input.baseDeltaRange.headSha}; classify defects caused by that interaction as base-delta.`]
       : []),

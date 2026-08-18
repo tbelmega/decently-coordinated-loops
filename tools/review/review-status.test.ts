@@ -91,6 +91,89 @@ describe("evaluateReviewStatus", () => {
     });
   });
 
+  test("passes an all-waived round under the authorizing classes, fails closed without them", () => {
+    const classes = [
+      { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P2", "P3"] as ("P2" | "P3")[] },
+    ];
+    let ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "current",
+        model: "codex-default",
+        reviewedAt: "2026-07-19T12:00:00Z",
+        review: {
+          summary: "wording nit",
+          findings: [{ ...finding, priority: "P3", file: "OUTBOX.md" }],
+        },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "waived-by-policy", "Prose nit on a coordination queue", {
+      waivedClass: "coordination-prose",
+      classes,
+    });
+
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md", classes)).toMatchObject({
+      kind: "passed",
+      rounds: 1,
+    });
+    // Fail closed: the same ledger without the resolved classes blocks rather than passes.
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md")).toMatchObject({
+      kind: "blocked",
+      reason: expect.stringContaining("R1-F1"),
+    });
+  });
+
+  test("blocks a waiver the resolved classes no longer authorize", () => {
+    const recordingClasses = [
+      { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] },
+    ];
+    let ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "current",
+        model: "codex-default",
+        reviewedAt: "2026-07-19T12:00:00Z",
+        review: { summary: "wording nit", findings: [{ ...finding, priority: "P3", file: "OUTBOX.md" }] },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "waived-by-policy", "Prose nit", {
+      waivedClass: "coordination-prose",
+      classes: recordingClasses,
+    });
+    const narrowed = [{ name: "coordination-prose", match: ["INBOX.md"], waivablePriorities: ["P3"] as "P3"[] }];
+
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md", narrowed)).toMatchObject({
+      kind: "blocked",
+      reason: expect.stringContaining("does not match OUTBOX.md"),
+    });
+  });
+
+  test("keeps blocking a mixed round whose other finding is not waived", () => {
+    const classes = [{ name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] }];
+    let ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "current",
+        model: "codex-default",
+        reviewedAt: "2026-07-19T12:00:00Z",
+        review: {
+          summary: "one nit, one bug",
+          findings: [{ ...finding, priority: "P3", file: "OUTBOX.md" }, finding],
+        },
+      },
+    );
+    ledger = recordDisposition(ledger, "R1-F1", "waived-by-policy", "Prose nit", {
+      waivedClass: "coordination-prose",
+      classes,
+    });
+    ledger = recordDisposition(ledger, "R1-F2", "accepted", "Real defect");
+
+    expect(evaluateReviewStatus(ledger, "current", ".reviews/feature.md", classes)).toMatchObject({
+      kind: "blocked",
+      reason: expect.stringContaining("findings"),
+    });
+  });
+
   test("reports not-run when no review round exists", () => {
     const ledger = createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" });
 

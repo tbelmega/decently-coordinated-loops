@@ -253,6 +253,67 @@ describe("resolveReviewConfig", () => {
   });
 });
 
+describe("loadConfig review classes", () => {
+  function loadWithClasses(classes: unknown): LoopsConfig {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, "loops.json"), JSON.stringify({ review: { reviewer: "codex", classes } }));
+      return loadConfig(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("accepts a thresholded class and an exempt class", () => {
+    const classes = [
+      { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P2", "P3"], guidance: "Only factual errors." },
+      { name: "bookkeeping", match: [".reviews/**", "BOARD.md"], policy: "exempt" },
+    ];
+    expect(loadWithClasses(classes).review.classes).toEqual(classes as never);
+  });
+
+  test("rejects a class declaring both a threshold and the exempt policy, or neither", () => {
+    expect(() =>
+      loadWithClasses([{ name: "both", match: ["a.md"], waivablePriorities: ["P3"], policy: "exempt" }]),
+    ).toThrow("exactly one of");
+    expect(() => loadWithClasses([{ name: "neither", match: ["a.md"] }])).toThrow("exactly one of");
+  });
+
+  test("rejects unknown priorities, unsafe patterns, and duplicate class names", () => {
+    expect(() =>
+      loadWithClasses([{ name: "bad", match: ["a.md"], waivablePriorities: ["P4"] }]),
+    ).toThrow("review.classes[0].waivablePriorities");
+    expect(() =>
+      loadWithClasses([{ name: "bad", match: ["../escape.md"], waivablePriorities: ["P3"] }]),
+    ).toThrow("review.classes[0].match");
+    expect(() =>
+      loadWithClasses([
+        { name: "twin", match: ["a.md"], waivablePriorities: ["P3"] },
+        { name: "twin", match: ["b.md"], policy: "exempt" },
+      ]),
+    ).toThrow("duplicates class");
+  });
+
+  test("a project override replaces the class list wholesale", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(
+        join(root, "loops.json"),
+        JSON.stringify({
+          review: { reviewer: "codex", classes: [{ name: "global", match: ["a.md"], policy: "exempt" }] },
+          projects: {
+            atlas: { review: { classes: [{ name: "local", match: ["b.md"], waivablePriorities: ["P3"] }] } },
+          },
+        }),
+      );
+      const config = loadConfig(root);
+      expect(resolveReviewConfig(config, "atlas").classes?.map((entry) => entry.name)).toEqual(["local"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("loadConfig project review blocks", () => {
   test("rejects an invalid project review block with an error naming the project", () => {
     const root = tempRoot();

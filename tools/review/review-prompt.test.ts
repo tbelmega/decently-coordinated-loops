@@ -86,4 +86,21 @@ describe("reviewPrompt", () => {
     expect(value).toContain("documented, incomplete, or regressed");
     expect(value).toContain("do not re-prove the defect");
   });
+
+  test("renders one guidance line per change class with its matched files", () => {
+    const value = reviewPrompt({
+      pass: "diff",
+      manifest,
+      contextDocuments: [],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: false,
+      classGuidance: [
+        {name: "coordination-prose", files: ["OUTBOX.md"], guidance: "Report only factual errors."},
+      ],
+    });
+    expect(value).toContain(
+      'Change class "coordination-prose" covers these changed files: OUTBOX.md. Report only factual errors.',
+    );
+  });
 });

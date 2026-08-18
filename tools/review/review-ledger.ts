@@ -3,13 +3,14 @@
 // render is the human surface. Model-agnostic — a reviewer adapter (reviewers.ts)
 // produces a Review; everything here is pure.
 
-import type {ReviewAuditPass} from "../config.ts";
+import type {ReviewAuditPass, ReviewClassConfig} from "../config.ts";
 import type {
   FindingOrigin,
   ReviewCoverage,
   ReviewMetrics,
   ReviewObligationResult,
 } from "./review-audit.ts";
+import {waiverRefusalReason} from "./review-classes.ts";
 import type {ReviewManifest} from "./review-manifest.ts";
 
 export const priorities = ["P0", "P1", "P2", "P3"] as const;
@@ -20,6 +21,7 @@ export const dispositionKinds = [
   "already-addressed",
   "deferred-to-human",
   "accepted-as-limitation",
+  "waived-by-policy",
 ] as const;
 
 export type Priority = (typeof priorities)[number];
@@ -68,6 +70,10 @@ export interface ReviewDisposition {
   /** Documentation evidence path (accepted-as-limitation only): repository-relative,
    * recorded normalized; resolution binds at each consuming gate, not at recording. */
   doc?: string;
+  /** The change class authorizing this waiver (waived-by-policy only). Authorization is
+   * re-validated against the RESOLVED config at every consuming gate, so a narrowed
+   * class blocks a previously recorded waiver rather than the record certifying it. */
+  class?: string;
   /** Owner attribution — required for accepted-as-limitation on P0/P1 findings and for
    * the accepted disposition that reverses a limitation. */
   owner?: boolean;
@@ -105,7 +111,10 @@ export interface ReviewRound {
 }
 
 export interface ReviewRoundAudit {
-  kind: "full" | "remediation" | "base-delta";
+  /** "exempt": the range changed only exempt-classed paths, so the round was recorded
+   * without invoking a reviewer (zero findings, zero passes, manifest kept as the
+   * explicit file-list evidence). */
+  kind: "full" | "remediation" | "base-delta" | "exempt";
   manifest: ReviewManifest;
   passes: {pass: ReviewAuditPass; summary: string; coverage: ReviewCoverage}[];
   obligations: ReviewObligationResult[];
@@ -223,10 +232,12 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
     throw new Error(`${path}.decidedAfterRound must be a non-negative integer when present`);
   }
   const doc = optionalString(input, "doc", path);
+  const waivedClass = optionalString(input, "class", path);
   return {
     kind,
     reason: requiredString(input, "reason", path),
     ...(doc ? {doc} : {}),
+    ...(waivedClass ? {class: waivedClass} : {}),
     ...(input.owner === true ? {owner: true} : {}),
     ...(typeof decidedAfterRound === "number" ? {decidedAfterRound} : {}),
   };
@@ -234,7 +245,12 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
 
 /** Invariant 5: a persisted decision honors the recording rules even when the ledger
  * arrived from disk — a malformed ledger must fail closed, not certify silently. */
-function assertDecisionInvariants(decision: ReviewDisposition, priority: Priority, path: string): void {
+function assertDecisionInvariants(
+  decision: ReviewDisposition,
+  finding: Pick<Finding, "priority" | "file">,
+  path: string,
+): void {
+  const priority = finding.priority;
   if (decision.kind === "accepted-as-limitation") {
     if (!decision.doc) {
       throw new Error(`${path} is accepted-as-limitation and must carry a doc path`);
@@ -252,6 +268,23 @@ function assertDecisionInvariants(decision: ReviewDisposition, priority: Priorit
     }
   } else if (decision.doc) {
     throw new Error(`${path}.doc is only valid on an accepted-as-limitation disposition`);
+  }
+  if (decision.kind === "waived-by-policy") {
+    // Structural half of the waiver contract; authorization against the resolved
+    // classes binds at each consuming gate, not at parse (a config edit must block a
+    // stale waiver, not make the ledger unreadable).
+    if (!decision.class) {
+      throw new Error(`${path} is waived-by-policy and must name its authorizing class`);
+    }
+    if (!finding.file) {
+      throw new Error(`${path} is waived-by-policy but its finding has no file anchor`);
+    }
+    // No legacy writer existed for this kind either.
+    if (decision.decidedAfterRound === undefined) {
+      throw new Error(`${path} is waived-by-policy and must carry decidedAfterRound`);
+    }
+  } else if (decision.class) {
+    throw new Error(`${path}.class is only valid on a waived-by-policy disposition`);
   }
 }
 
@@ -300,7 +333,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       const findingPath = `${path}.findings[${findingIndex}]`;
       const disposition = parseDisposition(findingInput.disposition, `${findingPath}.disposition`);
       if (disposition) {
-        assertDecisionInvariants(disposition, finding.priority, `${findingPath}.disposition`);
+        assertDecisionInvariants(disposition, finding, `${findingPath}.disposition`);
       }
       if (findingInput.history !== undefined && !Array.isArray(findingInput.history)) {
         throw new Error(`${findingPath}.history must be an array when present`);
@@ -310,7 +343,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
             const historyPath = `${findingPath}.history[${historyIndex}]`;
             const parsed = parseDisposition(entry, historyPath);
             if (!parsed) throw new Error(`${historyPath} must be an object`);
-            assertDecisionInvariants(parsed, finding.priority, historyPath);
+            assertDecisionInvariants(parsed, finding, historyPath);
             return parsed;
           })
         : undefined;
@@ -695,6 +728,11 @@ export function remediationChurnTripwire(ledger: ReviewLedger): TripwireState {
 export interface RecordDispositionOptions {
   doc?: string;
   owner?: boolean;
+  /** The class name authorizing a waived-by-policy disposition. */
+  waivedClass?: string;
+  /** The RESOLVED review classes (loops.json, after per-project merge). Required for
+   * waived-by-policy: recording a waiver without the config context fails closed. */
+  classes?: ReviewClassConfig[];
 }
 
 export function recordDisposition(
@@ -708,6 +746,9 @@ export function recordDisposition(
   if (options.doc !== undefined && kind !== "accepted-as-limitation") {
     throw new Error("a doc path is only valid on an accepted-as-limitation disposition");
   }
+  if (options.waivedClass !== undefined && kind !== "waived-by-policy") {
+    throw new Error("a class is only valid on a waived-by-policy disposition");
+  }
   let doc: string | undefined;
   if (kind === "accepted-as-limitation") {
     if (!options.doc) {
@@ -715,10 +756,14 @@ export function recordDisposition(
     }
     doc = validateEvidencePath(options.doc);
   }
+  if (kind === "waived-by-policy" && !options.waivedClass) {
+    throw new Error("waived-by-policy requires the authorizing class name");
+  }
   const next: ReviewDisposition = {
     kind,
     reason,
     ...(doc ? {doc} : {}),
+    ...(kind === "waived-by-policy" && options.waivedClass ? {class: options.waivedClass} : {}),
     ...(options.owner ? {owner: true} : {}),
     decidedAfterRound: ledger.rounds.length,
   };
@@ -736,6 +781,14 @@ export function recordDisposition(
         throw new Error(
           `${findingId} is ${finding.priority}: accepted-as-limitation requires owner attribution`,
         );
+      }
+      if (kind === "waived-by-policy" && options.waivedClass) {
+        const refusal = waiverRefusalReason(
+          {...(finding.file ? {file: finding.file} : {}), priority: finding.priority},
+          options.waivedClass,
+          options.classes,
+        );
+        if (refusal) throw new Error(`${findingId} cannot be waived: ${refusal}`);
       }
       if (!finding.disposition) return { ...finding, disposition: next };
       // Two dispositions may be superseded, and both sides always stay in the ledger
@@ -783,7 +836,8 @@ export function priorDispositionNotes(ledger: ReviewLedger): string[] {
 function renderDisposition(disposition: ReviewDisposition): string {
   const attribution = disposition.owner ? " (owner-attributed)" : "";
   const doc = disposition.doc ? ` (documented at: ${disposition.doc})` : "";
-  return `**${disposition.kind}**${attribution} — ${disposition.reason}${doc}`;
+  const waivedClass = disposition.class ? ` (class: ${disposition.class})` : "";
+  return `**${disposition.kind}**${attribution}${waivedClass} — ${disposition.reason}${doc}`;
 }
 
 export function renderReviewLedger(ledger: ReviewLedger): string {
@@ -984,7 +1038,7 @@ function isReviewMetrics(input: unknown): input is ReviewMetrics {
 function isReviewRoundAudit(input: unknown): input is ReviewRoundAudit {
   return (
     isRecord(input) &&
-    (input.kind === "full" || input.kind === "remediation" || input.kind === "base-delta") &&
+    (input.kind === "full" || input.kind === "remediation" || input.kind === "base-delta" || input.kind === "exempt") &&
     isReviewManifest(input.manifest) &&
     Array.isArray(input.passes) &&
     input.passes.every(

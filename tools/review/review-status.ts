@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import type { ReviewClassConfig } from "../config.ts";
+import { waiverRefusalReason } from "./review-classes.ts";
 import { openObligations, type ReviewLedger } from "./review-ledger.ts";
 
 export interface ReviewEvidencePaths {
@@ -44,6 +46,7 @@ export function evaluateReviewStatus(
   ledger: ReviewLedger,
   currentHeadSha: string,
   ledgerPath: string,
+  classes?: ReviewClassConfig[],
 ): ReviewStatus {
   const latestRound = ledger.rounds.at(-1);
   const latestFailure = ledger.failures?.at(-1);
@@ -83,13 +86,35 @@ export function evaluateReviewStatus(
         reason: "latest review has a finding deferred to the owner",
       };
     }
-    const noun = latestRound.findings.length === 1 ? "finding" : "findings";
-    return {
-      kind: "blocked",
-      headSha: currentHeadSha,
-      ledgerPath,
-      reason: `latest review has ${latestRound.findings.length} ${noun}; run another round to obtain a clean review`,
-    };
+    // A round whose findings are ALL policy-waived is terminal: the waiver is
+    // pre-authorized by the owner's classes config, so no confirming round is owed.
+    // Authorization binds against the RESOLVED classes here, not the record — absent
+    // or narrowed config blocks the waiver (fail closed toward full review).
+    const waived = latestRound.findings.filter((finding) => finding.disposition?.kind === "waived-by-policy");
+    for (const finding of waived) {
+      const refusal = waiverRefusalReason(
+        {...(finding.file ? {file: finding.file} : {}), priority: finding.priority},
+        finding.disposition?.class ?? "",
+        classes,
+      );
+      if (refusal) {
+        return {
+          kind: "blocked",
+          headSha: currentHeadSha,
+          ledgerPath,
+          reason: `waiver on ${finding.id} is not authorized: ${refusal}`,
+        };
+      }
+    }
+    if (waived.length < latestRound.findings.length) {
+      const noun = latestRound.findings.length === 1 ? "finding" : "findings";
+      return {
+        kind: "blocked",
+        headSha: currentHeadSha,
+        ledgerPath,
+        reason: `latest review has ${latestRound.findings.length} ${noun}; run another round to obtain a clean review`,
+      };
+    }
   }
   // A clean round certifies nothing while an obligation is still open: an owner
   // reversal of a documented limitation reopens a defect without adding a round, so

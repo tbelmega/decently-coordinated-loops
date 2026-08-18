@@ -452,6 +452,115 @@ describe("recordDisposition — accepted-as-limitation", () => {
   });
 });
 
+describe("recordDisposition — waived-by-policy", () => {
+  const classes = [
+    { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P2", "P3"] as ("P2" | "P3")[] },
+    { name: "strict-overlap", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] },
+  ];
+  const proseFinding = { ...finding, priority: "P3" as const, file: "OUTBOX.md" };
+
+  function ledgerWithFinding(subject: Finding): ReviewLedger {
+    return addReviewRound(createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }), {
+      headSha: "current",
+      model: "codex-default",
+      reviewedAt: "2026-07-19T12:00:00Z",
+      review: { summary: "one issue", findings: [subject] },
+    });
+  }
+
+  test("records an authorized waiver with its class and round stamp", () => {
+    const ledger = recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Prose nit", {
+      waivedClass: "coordination-prose",
+      classes: [classes[0]],
+    });
+    expect(ledger.rounds[0].findings[0].disposition).toEqual({
+      kind: "waived-by-policy",
+      reason: "Prose nit",
+      class: "coordination-prose",
+      decidedAfterRound: 1,
+    });
+    // The waiver round-trips through the parser's structural invariants.
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
+  });
+
+  test("fails closed without a class name, without resolved classes, or on a finding without a file", () => {
+    expect(() =>
+      recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Prose nit", {
+        classes: [classes[0]],
+      }),
+    ).toThrow("requires the authorizing class name");
+    expect(() =>
+      recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Prose nit", {
+        waivedClass: "coordination-prose",
+      }),
+    ).toThrow("no review classes");
+    const anchorless: Finding = (({ file: _file, line: _line, ...rest }) => rest)(proseFinding);
+    expect(() =>
+      recordDisposition(ledgerWithFinding(anchorless), "R1-F1", "waived-by-policy", "Prose nit", {
+        waivedClass: "coordination-prose",
+        classes: [classes[0]],
+      }),
+    ).toThrow("no file anchor");
+  });
+
+  test("refuses a non-waivable priority and applies multi-class strictness", () => {
+    expect(() =>
+      recordDisposition(ledgerWithFinding({ ...proseFinding, priority: "P1" }), "R1-F1", "waived-by-policy", "Nit", {
+        waivedClass: "coordination-prose",
+        classes: [classes[0]],
+      }),
+    ).toThrow("does not waive P1");
+    // Both classes match OUTBOX.md; strict-overlap does not waive P2, so P2 stays blocked
+    // even though the named class would allow it.
+    expect(() =>
+      recordDisposition(
+        ledgerWithFinding({ ...proseFinding, priority: "P2" }),
+        "R1-F1",
+        "waived-by-policy",
+        "Nit",
+        { waivedClass: "coordination-prose", classes },
+      ),
+    ).toThrow('"strict-overlap" does not waive P2');
+  });
+
+  test("rejects a class option on any other disposition kind", () => {
+    expect(() =>
+      recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "rejected", "Not a defect", {
+        waivedClass: "coordination-prose",
+      }),
+    ).toThrow("only valid on a waived-by-policy disposition");
+  });
+
+  test("parser rejects a persisted waiver missing its class, file anchor, or round stamp", () => {
+    const authorized = recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Nit", {
+      waivedClass: "coordination-prose",
+      classes: [classes[0]],
+    });
+    const serialized = JSON.parse(JSON.stringify(authorized));
+    const persistedFinding = serialized.rounds[0].findings[0];
+
+    const withoutClass = structuredClone(serialized);
+    delete withoutClass.rounds[0].findings[0].disposition.class;
+    expect(() => parseReviewLedger(withoutClass)).toThrow("must name its authorizing class");
+
+    const withoutStamp = structuredClone(serialized);
+    delete withoutStamp.rounds[0].findings[0].disposition.decidedAfterRound;
+    expect(() => parseReviewLedger(withoutStamp)).toThrow("must carry decidedAfterRound");
+
+    const withoutFile = structuredClone(serialized);
+    delete withoutFile.rounds[0].findings[0].file;
+    expect(() => parseReviewLedger(withoutFile)).toThrow("no file anchor");
+
+    const classOnRejected = structuredClone(serialized);
+    classOnRejected.rounds[0].findings[0].disposition = {
+      kind: "rejected",
+      reason: "Not a defect",
+      class: persistedFinding.disposition.class,
+    };
+    expect(() => parseReviewLedger(classOnRejected)).toThrow("only valid on a waived-by-policy disposition");
+  });
+});
+
 describe("openObligations", () => {
   test("types remediation and documentation obligations and carries the doc path", () => {
     let ledger = seededLedger(p2Finding);
