@@ -56,7 +56,7 @@ export interface ReviewClassConfig {
   match: string[];
   /** Priorities a finding on a matched path may be waived at (`waived-by-policy`). */
   waivablePriorities: ReviewPriority[];
-  /** Optional reviewer steering for matched paths; cost reduction only — the
+  /** Optional reviewer steering for matched paths; cost reduction only; the
    * disposition-side waiver is the enforcement. */
   guidance?: string;
 }

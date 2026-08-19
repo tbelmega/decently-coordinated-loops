@@ -462,7 +462,7 @@ function contextDigest(content: string): string {
 }
 
 /** The item's declared change surface (front-matter `review.rewrites`): instruction
- * files this change is authorized to rewrite. Parsed strictly and failing closed — a
+ * files this change is authorized to rewrite. Parsed strictly and failing closed: a
  * malformed declaration aborts the review rather than silently running without the
  * authorization the author thought they declared. */
 function parseReviewRewrites(itemText: string, itemPath: string): string[] {
@@ -821,7 +821,7 @@ async function startReview(options: StartOptions): Promise<void> {
       if (context.rewrites.length > 0) {
         if (!context.hasSpec) {
           throw new Error(
-            "review.rewrites declares a governance change surface, but the item has no links.spec — an owner-approved spec is what authorizes rewriting instruction files",
+            "review.rewrites declares a governance change surface, but the item has no links.spec; an owner-approved spec is what authorizes rewriting instruction files",
           );
         }
         const discovered = discoverInstructionFiles(repository);

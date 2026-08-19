@@ -984,7 +984,7 @@ export function recordDisposition(
  * terminal and non-remediation gets that decision applied automatically, marked
  * `carriedFrom`. The carried copy creates no new obligation, counts in the terminal
  * predicate as its kind, and may be overridden by any fresh disposition. Carrying only
- * happens when the MOST RECENT prior occurrence's decision is carryable — a repeat of
+ * happens when the MOST RECENT prior occurrence's decision is carryable: a repeat of
  * an accepted or deferred finding stays undispositioned and blocks as today. */
 export function carryForwardDispositions(ledger: ReviewLedger): ReviewLedger {
   const latest = ledger.rounds.at(-1);
@@ -1037,7 +1037,7 @@ function renderDisposition(disposition: ReviewDisposition): string {
   const doc = disposition.doc ? ` (documented at: ${disposition.doc})` : "";
   const waivedClass = disposition.class ? ` (class: ${disposition.class})` : "";
   const tracks = disposition.tracks ? ` (tracked at: ${disposition.tracks})` : "";
-  return `**${disposition.kind}**${attribution}${waivedClass}${tracks} — ${disposition.reason}${doc}`;
+  return `**${disposition.kind}**${attribution}${waivedClass}${tracks} - ${disposition.reason}${doc}`;
 }
 
 export function renderReviewLedger(ledger: ReviewLedger): string {

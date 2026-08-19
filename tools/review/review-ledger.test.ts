@@ -453,7 +453,7 @@ describe("recordDisposition — accepted-as-limitation", () => {
   });
 });
 
-describe("recordDisposition — waived-by-policy", () => {
+describe("recordDisposition: waived-by-policy", () => {
   const classes = [
     { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P2", "P3"] as ("P2" | "P3")[] },
     { name: "strict-overlap", match: ["OUTBOX.md"], waivablePriorities: ["P3"] as "P3"[] },
@@ -562,7 +562,7 @@ describe("recordDisposition — waived-by-policy", () => {
   });
 });
 
-describe("recordDisposition — tracked-elsewhere", () => {
+describe("recordDisposition: tracked-elsewhere", () => {
   function ledgerWithFinding(): ReviewLedger {
     return addReviewRound(createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }), {
       headSha: "current",
@@ -1375,7 +1375,9 @@ describe("renderReviewLedger", () => {
     ledger = { ...ledger, failures: [{ headSha: "cafe", model: "m", attemptedAt: "t0", reason: "timeout" }] };
     const md = renderReviewLedger(ledger);
     expect(md).toContain("### R1-F1");
-    expect(md).toContain("**accepted** — fixing");
+    // Separator changed with the renderer, not the assertion's meaning: the disposition
+    // line now uses a plain hyphen, per the house rule against em dashes in new text.
+    expect(md).toContain("**accepted** - fixing");
     expect(md).toContain("Incomplete attempts");
     expect(md).toContain("timeout");
   });

@@ -1,6 +1,6 @@
 // Finding-level resolution of the review change classes (loops.json → review.classes).
 // Everything fails closed toward full review: no file, no matching class, no resolved
-// config, or any matching class that does not waive the priority — the finding blocks
+// config, or any matching class that does not waive the priority: the finding blocks
 // exactly as it would without classes.
 import type { ReviewClassConfig, ReviewPriority } from "../config.ts";
 import { matchesMetadataPath } from "./review-manifest.ts";

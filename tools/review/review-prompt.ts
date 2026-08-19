@@ -108,7 +108,7 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     // so an instruction file citing one carries a dangling authority by construction.
     ...(changedInstructionFiles.length > 0
       ? [
-          `This change edits instruction files (${changedInstructionFiles.join(", ")}). Instruction files must state the current rule or delegate to another instruction file, never to a spec document — specs are historical change records with no standing authority. Report as a defect any reference this diff adds from an instruction file to a spec (for example under docs/specs/), including precedence claims such as "the spec wins".`,
+          `This change edits instruction files (${changedInstructionFiles.join(", ")}). Instruction files must state the current rule or delegate to another instruction file, never to a spec document; specs are historical change records with no standing authority. Report as a defect any reference this diff adds from an instruction file to a spec (for example under docs/specs/), including precedence claims such as "the spec wins".`,
         ]
       : []),
     ...(input.classGuidance ?? []).map(
@@ -126,7 +126,7 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     // that turns every later intentional edit into a defect.
     ...(hasSpecContext
       ? [
-          "The WORKSTREAM_CONTEXT spec is the acceptance oracle for this reviewed range only: verify the change implements it. It grants the diff no authority over unchanged text, and once this item lands the repository's living documents outrank it — do not treat the spec as a standing rulebook beyond this range.",
+          "The WORKSTREAM_CONTEXT spec is the acceptance oracle for this reviewed range only: verify the change implements it. It grants the diff no authority over unchanged text, and once this item lands the repository's living documents outrank it: do not treat the spec as a standing rulebook beyond this range.",
         ]
       : []),
     ...(input.priorNotes.length > 0
