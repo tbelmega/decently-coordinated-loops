@@ -23,7 +23,7 @@ import {
   type ReviewConfig,
   type ReviewConfirmation,
 } from "../config.ts";
-import { isExemptOnly, matchingClasses } from "./review-classes.ts";
+import { matchingClasses } from "./review-classes.ts";
 import { resolveDataRepo } from "./data-repo.ts";
 import { parseItemFileText } from "../parse.ts";
 import { expandHome, matchProject } from "../registration.ts";
@@ -135,9 +135,9 @@ function canonicalPath(path: string, home = process.env.HOME ?? homedir()): stri
 /** The review policy that governs an existing ledger, or the reason none does.
  *
  * This is the single resolution point for everything the class configuration decides:
- * waiver authorization at `disposition`, waiver re-authorization at `status`, and the
- * exempt short-circuit plus reviewer guidance at `start`. It is one function because
- * four review rounds each found the next consumer that had been resolved somewhere else
+ * waiver authorization at `disposition`, waiver re-authorization at `status`, and
+ * reviewer guidance at `start`. It is one function because four review rounds each
+ * found the next consumer that had been resolved somewhere else
  * - the invariant list and why this shape is the fix are in
  * docs/design/review-policy-authority.md.
  *
@@ -724,9 +724,9 @@ async function startReview(options: StartOptions): Promise<void> {
     }
 
     // The third class consumer, bound to the same authority as the two disposition-side
-    // gates. It fails closed to "no classes": no exempt short-circuit and no guidance, so
-    // the range gets a full review rather than a policy that is no longer this review's.
-    // Announced rather than silent - exemptions vanishing without a word reads as a
+    // gates. It fails closed to "no classes": no reviewer guidance, so the range is
+    // reviewed under no policy rather than under one that is no longer this review's.
+    // Announced rather than silent - a policy vanishing without a word reads as a
     // config typo.
     const governing = governingPolicy(ledger, options.dataRepo);
     if (governing.refusal && ledger.authority) {
@@ -862,63 +862,6 @@ async function startReview(options: StartOptions): Promise<void> {
             throw new Error(`review.rewrites names ${path}, which is not changed in ${baseSha}..${headSha}`);
           }
         }
-      }
-      // Exempt short-circuit: derived from the diff, never declared per item. Only a
-      // range whose every reviewable file is covered by exempt-policy classes alone
-      // skips the reviewer, and only while nothing else is owed (open obligations
-      // still need a classifying round). The round is explicitly marked and keeps the
-      // manifest as the file-list evidence.
-      // The exempt shortcut is the only path that records a passing round with no
-      // reviewer run at all, and three rounds each found one more way into it - a
-      // metadata-routed rule file, an ordinary rule file, a changed metadata path. So it
-      // is stated as a rule instead of guarded again:
-      //
-      //   every changed path, in BOTH manifest groups, is exempt-classed
-      //   AND no changed path is an instruction file, whatever the config says.
-      //
-      // The second clause is unconditional by design. A rule file is executed prose -
-      // its text tells someone what to do next - so it is never record-keeping output,
-      // and an exempt class that matches one is a misconfiguration rather than a
-      // decision to honor. See docs/design/review-policy-authority.md.
-      const changedFiles = [...manifest.files, ...manifest.metadataFiles];
-      const changedInstructionFiles = changedFiles.filter((file) =>
-        manifest.instructionFiles.includes(file.path),
-      );
-      if (
-        classes &&
-        obligations.length === 0 &&
-        changedInstructionFiles.length === 0 &&
-        changedFiles.length > 0 &&
-        changedFiles.every((file) => isExemptOnly(file.path, classes))
-      ) {
-        const exemptFiles = changedFiles.map((file) => file.path);
-        ledger = addReviewRound(ledger, {
-          headSha,
-          model: "policy-exempt",
-          reviewedAt: new Date().toISOString(),
-          review: {
-            summary: `Exempt range: every changed file matches only exempt review classes (${exemptFiles.join(", ")})`,
-            findings: [],
-          },
-          audit: {
-            kind: "exempt",
-            manifest,
-            passes: [],
-            obligations: [],
-            metrics: computeReviewMetrics({
-              roundNumber: ledger.rounds.length + 1,
-              headSha,
-              passResults: [],
-              findings: [],
-            }),
-          },
-          ...(stepBack ? {stepBack} : {}),
-        });
-        await writeLedger(ledger, paths);
-        process.stdout.write(
-          `Review round ${ledger.rounds.length} recorded as policy-exempt (no reviewer run) in ${paths.markdownPath}\n`,
-        );
-        return;
       }
       const configuredPasses = auditKind === "base-delta" && obligations.length === 0
         ? options.auditPasses.filter((pass) => pass !== "diff")

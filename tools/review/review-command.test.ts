@@ -628,177 +628,6 @@ describe("cli-review start", () => {
     expect(result.stderr).toContain("review round limit of 1 reached");
   });
 
-  test("records a policy-exempt round without invoking the reviewer for an exempt-only range", () => {
-    const { repository } = createReviewRepository();
-    const item = "exempt-range-review";
-    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
-    writeFileSync(
-      `${dataRepo}/loops.json`,
-      `${JSON.stringify({
-        review: {
-          reviewer: "codex",
-          maxRounds: 5,
-          classes: [{ name: "bookkeeping", match: ["change.txt"], policy: "exempt" }],
-        },
-      })}\n`,
-    );
-    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
-
-    const result = runStart(repository, dataRepo, item, "master", { FAKE_CODEX_LOG: log });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("policy-exempt");
-    expect(existsSync(log)).toBe(false);
-    const ledger = readLedgerJson(repository, item);
-    expect(ledger.rounds).toHaveLength(1);
-    expect(ledger.rounds[0].model).toBe("policy-exempt");
-    expect(ledger.rounds[0].audit.kind).toBe("exempt");
-    expect(ledger.rounds[0].findings).toEqual([]);
-    const status = runStatus(repository, item);
-    expect(status.stdout).toContain("REVIEW_STATUS=passed");
-  });
-
-  test("runs a normal review when the range mixes exempt and reviewable files", () => {
-    const { repository } = createReviewRepository();
-    writeFileSync(`${repository}/code.ts`, "export const x = 1;\n");
-    git(repository, ["add", "code.ts"]);
-    git(repository, ["commit", "-q", "-m", "Add code"]);
-    const item = "mixed-range-review";
-    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
-    writeFileSync(
-      `${dataRepo}/loops.json`,
-      `${JSON.stringify({
-        review: {
-          reviewer: "codex",
-          maxRounds: 5,
-          classes: [{ name: "bookkeeping", match: ["change.txt"], policy: "exempt" }],
-        },
-      })}\n`,
-    );
-
-    const result = runStart(repository, dataRepo, item);
-
-    expect(result.status).toBe(0);
-    const ledger = readLedgerJson(repository, item);
-    expect(ledger.rounds[0].model).not.toBe("policy-exempt");
-    expect(ledger.rounds[0].audit.kind).toBe("full");
-  });
-
-  test("refuses the exempt short-circuit when a changed instruction file is landing metadata", () => {
-    const repository = mkdtempSync(`${tmpdir()}/loops-review-exempt-metadata-`);
-    git(repository, ["init", "-q", "-b", "master"]);
-    git(repository, ["config", "user.email", "test@example.com"]);
-    git(repository, ["config", "user.name", "Test"]);
-    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n");
-    writeFileSync(`${repository}/BOARD.md`, "old board\n");
-    git(repository, ["add", "."]);
-    git(repository, ["commit", "-q", "-m", "Add rules and a board"]);
-    git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
-    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n\nWeakened rule.\n");
-    writeFileSync(`${repository}/BOARD.md`, "new board\n");
-    git(repository, ["add", "."]);
-    git(repository, ["commit", "-q", "-m", "Change the board and the rules"]);
-    const item = "exempt-metadata-instruction";
-    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
-    writeFileSync(
-      `${dataRepo}/loops.json`,
-      `${JSON.stringify({
-        review: {
-          reviewer: "codex",
-          maxRounds: 5,
-          // AGENTS.md as landing metadata keeps it out of manifest.files, which is what
-          // the exempt condition used to look at on its own.
-          metadataPaths: ["AGENTS.md"],
-          classes: [{ name: "bookkeeping", match: ["BOARD.md"], policy: "exempt" }],
-        },
-      })}\n`,
-    );
-    const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
-
-    const result = runStart(repository, dataRepo, item, "master", { FAKE_CODEX_LOG: log });
-
-    expect(result.status).toBe(0);
-    // The reviewer runs: a rule file must never ride into a round that skips review.
-    expect(result.stdout).not.toContain("policy-exempt");
-    expect(existsSync(log)).toBe(true);
-    expect(readLedgerJson(repository, item).rounds[0].audit.kind).not.toBe("exempt");
-  });
-
-  test("never exempts a range that changes a rule file, however it is classed or routed", () => {
-    // Three shapes the shortcut has leaked through: a rule file routed into
-    // metadataFiles, a rule file matched directly by an exempt class, and a changed
-    // metadata path riding along. The rule is one sentence and covers all three.
-    for (const [name, extraConfig, edit] of [
-      ["metadata-routed rule file", {metadataPaths: ["AGENTS.md"]}, "AGENTS.md"],
-      ["directly exempt rule file", {}, "AGENTS.md"],
-      ["exempt skill file", {}, "skills/loops-pickup/SKILL.md"],
-    ] as [string, Record<string, unknown>, string][]) {
-      const repository = mkdtempSync(`${tmpdir()}/loops-review-exempt-rule-`);
-      git(repository, ["init", "-q", "-b", "master"]);
-      git(repository, ["config", "user.email", "test@example.com"]);
-      git(repository, ["config", "user.name", "Test"]);
-      mkdirSync(`${repository}/skills/loops-pickup`, {recursive: true});
-      writeFileSync(`${repository}/AGENTS.md`, "# Rules\n");
-      writeFileSync(`${repository}/skills/loops-pickup/SKILL.md`, "# Pickup\n");
-      writeFileSync(`${repository}/BOARD.md`, "old\n");
-      git(repository, ["add", "."]);
-      git(repository, ["commit", "-q", "-m", "Add rules and a board"]);
-      git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
-      writeFileSync(`${repository}/${edit}`, "# Changed\n");
-      writeFileSync(`${repository}/BOARD.md`, "new\n");
-      git(repository, ["add", "."]);
-      git(repository, ["commit", "-q", "-m", "Change the board and a rule file"]);
-      const item = "exempt-rule-file";
-      const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
-      writeFileSync(
-        `${dataRepo}/loops.json`,
-        `${JSON.stringify({
-          review: {
-            reviewer: "codex",
-            maxRounds: 5,
-            ...extraConfig,
-            classes: [
-              { name: "bookkeeping", match: ["BOARD.md", "AGENTS.md", "skills/**"], policy: "exempt" },
-            ],
-          },
-        })}\n`,
-      );
-
-      const result = runStart(repository, dataRepo, item, "master");
-
-      expect(result.status).toBe(0);
-      expect(result.stdout).not.toContain("policy-exempt");
-      expect(readLedgerJson(repository, item).rounds[0].audit.kind).not.toBe("exempt");
-    }
-  });
-
-  test("refuses the exempt shortcut when a changed metadata path is not exempt-classed", () => {
-    const { repository } = createReviewRepository();
-    const item = "exempt-with-metadata";
-    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
-    writeFileSync(
-      `${dataRepo}/loops.json`,
-      `${JSON.stringify({
-        review: {
-          reviewer: "codex",
-          maxRounds: 5,
-          metadataPaths: ["docs/landing-state.md"],
-          classes: [{ name: "bookkeeping", match: ["change.txt"], policy: "exempt" }],
-        },
-      })}\n`,
-    );
-    mkdirSync(`${repository}/docs`, {recursive: true});
-    writeFileSync(`${repository}/docs/landing-state.md`, "landed\n");
-    git(repository, ["add", "."]);
-    git(repository, ["commit", "-q", "-m", "Record landing state"]);
-
-    const result = runStart(repository, dataRepo, item, "master");
-
-    // metadataPaths is a post-review allowance, not a no-review one.
-    expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain("policy-exempt");
-  });
-
   test("waives a classed finding end to end and fails closed without the data repo", () => {
     const { repository } = createReviewRepository();
     const item = "waiver-flow-review";
@@ -1053,9 +882,9 @@ describe("cli-review start", () => {
     expect(copied.stdout).toContain("not authorized");
   });
 
-  test("resolves the exempt short-circuit from the recorded authority, not a fresh match", () => {
+  test("applies no review classes at start when the recorded authority no longer governs", () => {
     const { repository } = createReviewRepository();
-    const item = "exempt-authority-binding";
+    const item = "class-authority-binding";
     const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
     const writeConfig = (projects: Record<string, unknown>) =>
       writeFileSync(
@@ -1074,24 +903,31 @@ describe("cli-review start", () => {
     git(repository, ["add", "change.txt"]);
     git(repository, ["commit", "-q", "-m", "Touch the file again"]);
 
-    // Repointing the recorded project at another checkout and declaring the range
-    // exempt must NOT buy a reviewer-free passing round: the exempt short-circuit is
-    // the class consumer with the most to give away, so it fails closed like the rest.
+    // Repointing the recorded project at another checkout must not let a fresh config
+    // steer this round: the start-side consumer, reviewer guidance, fails closed to no
+    // classes and announces it, exactly like the disposition-side gates.
     const elsewhere = mkdtempSync(`${tmpdir()}/loops-review-elsewhere-`);
     writeConfig({
       target: {
         repo: elsewhere,
-        review: { classes: [{ name: "bookkeeping", match: ["change.txt"], policy: "exempt" }] },
+        review: {
+          classes: [
+            {
+              name: "bookkeeping",
+              match: ["change.txt"],
+              waivablePriorities: ["P3"],
+              guidance: "Only factual errors.",
+            },
+          ],
+        },
       },
     });
     const log = `${mkdtempSync(`${tmpdir()}/loops-fake-log-`)}/passes.log`;
     const result = runStart(repository, dataRepo, item, "master", { FAKE_CODEX_LOG: log });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain("policy-exempt");
     expect(result.stderr).toContain("review classes are not applied this round");
     expect(existsSync(log)).toBe(true);
-    expect(readLedgerJson(repository, item).rounds[1].audit.kind).not.toBe("exempt");
   });
 
   test("runs a governance round with the declared change surface recorded in the ledger", () => {

@@ -28,7 +28,7 @@ without waiting for the owner to invoke this skill.
   "metadataPaths": ["docs/landing-state.md"],
   "confirmation": "full",
   "classes": [
-    {"name": "bookkeeping", "match": [".reviews/**", "BOARD.md"], "policy": "exempt"},
+    {"name": "bookkeeping", "match": [".reviews/**", "BOARD.md"], "waivablePriorities": ["P3"]},
     {"name": "coordination-prose", "match": ["OUTBOX.md"], "waivablePriorities": ["P2", "P3"],
      "guidance": "Report only factual errors, broken references, and contradictions with reviewed behavior; no wording improvements."}
   ]
@@ -59,13 +59,14 @@ stays where it is.
 
 `review.classes` is optional. Absent, every finding blocks until it is dispositioned and
 every changed file is reviewed - the strictest behavior, and the one you get without
-config. A class declares exactly one of two policies for the paths it matches:
+config. A class declares what may be waived on the paths it matches:
 
 - `waivablePriorities`: a finding anchored to a matched file may be dispositioned
   `waived-by-policy` at those priorities, with no confirming round.
-- `policy: "exempt"`: a range whose every reviewable file matches only exempt classes
-  records a zero-finding exempt round without invoking the reviewer at all. A mixed
-  range runs normally, with the finding-level waivers still available.
+
+Every file is still reviewed; a class lowers what a finding costs, never whether the
+reviewer runs. A range that skips the reviewer entirely is a separate, unbuilt feature
+(board item `dcl-review-exempt-change-class`).
 
 `guidance` is optional steering for the reviewer on matched paths. It reduces cost only;
 the waiver threshold is the enforcement, so a reviewer that ignores the guidance still
@@ -75,10 +76,10 @@ converges.
 error in it change what a person or machine does next?* If yes it is executable surface
 and takes full review - code, scripts, machine-read config, and any document whose text
 gets executed, which includes runbooks, specs, skills, and procedures. Only
-record-keeping output is waivable or exempt: review evidence, derived boards, logs.
+record-keeping output is waivable: review evidence, derived boards, logs.
 `**/*.md` and `docs/**` are the non-examples to refuse, and a rule file is barred
-outright: an exempt class matching AGENTS.md, CLAUDE.md or a `SKILL.md` never buys the
-review-free round, because a rule file is executed prose by definition. The 2026-08-17 cost report found
+outright: AGENTS.md, CLAUDE.md and a `skills/<name>/SKILL.md` never belong in a class at
+all, because a rule file is executed prose by definition. The 2026-08-17 cost report found
 the fleet's highest-value round on a pure-markdown backup spec, and the one P0 an
 extension-keyed class would have waived lived in a runbook.
 

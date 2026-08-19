@@ -47,18 +47,15 @@ export type ReviewConfirmation = (typeof reviewConfirmations)[number];
 export const DEFAULT_REVIEW_CONFIRMATION: ReviewConfirmation = "full";
 
 /** A review change class: paths matched by function (record-keeping vs executed), never
- * by extension — a doc whose text gets executed is executable surface. A class either
- * waives reviewer findings up to the listed priorities (the waiver is recorded per
- * finding, authorized by this config) or declares the paths exempt from review
- * entirely; never both. */
+ * by extension, because a doc whose text gets executed is executable surface. A class
+ * waives reviewer findings up to the listed priorities; the waiver is recorded per
+ * finding and authorized by this config. */
 export interface ReviewClassConfig {
   name: string;
   /** Same pattern shape as `metadataPaths`: exact path or `dir/**`. */
   match: string[];
   /** Priorities a finding on a matched path may be waived at (`waived-by-policy`). */
-  waivablePriorities?: ReviewPriority[];
-  /** "exempt": a range changing only such paths records a review-free exempt round. */
-  policy?: "exempt";
+  waivablePriorities: ReviewPriority[];
   /** Optional reviewer steering for matched paths; cost reduction only — the
    * disposition-side waiver is the enforcement. */
   guidance?: string;
@@ -83,8 +80,8 @@ export interface ReviewConfig {
   auditPasses?: ReviewAuditPass[];
   /** Repo-relative landing metadata paths that may change after terminal review. */
   metadataPaths?: string[];
-  /** Change classes authorizing finding-level waivers and review-exempt ranges. Absent:
-   * every finding blocks until dispositioned, exactly the pre-class behavior. */
+  /** Change classes authorizing finding-level waivers. Absent: every finding blocks
+   * until dispositioned, exactly the pre-class behavior. */
   classes?: ReviewClassConfig[];
   /** Confirmation-round scope. Omit for `DEFAULT_REVIEW_CONFIRMATION`. */
   confirmation?: ReviewConfirmation;
@@ -203,20 +200,11 @@ function validateReviewClasses(classes: unknown, label: string): void {
     ) {
       throw new Error(`${path}.match must be a non-empty array of safe repo-relative patterns`);
     }
-    const thresholded = candidate.waivablePriorities !== undefined;
-    const exempt = candidate.policy !== undefined;
-    if (thresholded === exempt) {
-      throw new Error(`${path} must declare exactly one of waivablePriorities or policy: "exempt"`);
-    }
-    if (exempt && candidate.policy !== "exempt") {
-      throw new Error(`${path}.policy must be "exempt"`);
-    }
     if (
-      thresholded &&
-      (!Array.isArray(candidate.waivablePriorities) ||
-        candidate.waivablePriorities.length === 0 ||
-        new Set(candidate.waivablePriorities).size !== candidate.waivablePriorities.length ||
-        candidate.waivablePriorities.some((priority) => !reviewPriorities.includes(priority)))
+      !Array.isArray(candidate.waivablePriorities) ||
+      candidate.waivablePriorities.length === 0 ||
+      new Set(candidate.waivablePriorities).size !== candidate.waivablePriorities.length ||
+      candidate.waivablePriorities.some((priority) => !reviewPriorities.includes(priority))
     ) {
       throw new Error(
         `${path}.waivablePriorities must be a non-empty array containing only ${reviewPriorities.join(", ")}`,

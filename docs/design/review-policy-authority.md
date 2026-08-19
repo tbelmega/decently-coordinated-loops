@@ -12,12 +12,11 @@ That is the pattern the tripwire exists to interrupt.
 Every other review disposition is a judgment an agent argues for in prose, which the next
 round re-reads. Two are not. A `waived-by-policy` disposition is granted by
 **configuration**: the agent applies it, and the terminal predicate honors it, because
-`loops.json` said that class of finding may be waived at that priority. An `exempt` class
-goes further and records a passing round with **no reviewer run at all**.
+`loops.json` said that class of finding may be waived at that priority.
 
 So the configuration is the authority, and the question "which configuration?" is the
-whole control. Get it wrong and an agent authorizes its own waiver, or skips review
-entirely, out of a file it chose.
+whole control. Get it wrong and an agent authorizes its own waiver out of a file it
+chose.
 
 ## The invariant list
 
@@ -42,13 +41,13 @@ invariant list, not only the parts findings have named so far:
    gate.
 5. **Absence fails closed, in every direction.** No recorded authority, no resolvable
    data repo, a different data repo, a project that has left the config, or a project
-   that no longer maps to this checkout: no classes, so waivers block and nothing is
-   exempt. Never a fallthrough to the global block, which is the broader policy.
+   that no longer maps to this checkout: no classes, so waivers block. Never a
+   fallthrough to the global block, which is the broader policy.
 6. **Every class consumer obeys all of the above.** Not just the waiver gate. The class
    list drives three things - waiver authorization at `disposition`, waiver
-   re-authorization at `status`, and the exempt short-circuit plus reviewer guidance at
-   `start`. A consumer resolved outside this path is a hole regardless of how well the
-   others are guarded.
+   re-authorization at `status`, and reviewer guidance at `start`. A consumer resolved
+   outside this path is a hole regardless of how well the others are guarded. It drove a
+   fourth, the exempt short-circuit, while that shortcut was still part of this change.
 7. **The recorded authority is visible to the owner** in the rendered ledger, so the
    configuration a waiver rested on can be audited without reading JSON.
 
@@ -67,12 +66,12 @@ project name, and the project's canonical repo root - so invariant 4 is checkabl
 than assumed. Invariant 6 stops being something to remember and becomes something the
 code shape enforces: there is one place to get it right.
 
-## The exempt shortcut: one rule, not a growing condition
+## The exempt shortcut: split out, and the rule it owes
 
-The same shape played out a second time, on the only path that records a passing round
-with no reviewer run at all. Three rounds each found one more way in: a rule file routed
-through `metadataPaths`, a rule file matched directly by an exempt class, and a changed
-metadata path riding along beside an exempt one. Each was closed by extending the
+The same shape played out a second time, on the only path that would record a passing
+round with no reviewer run at all. Three rounds each found one more way in: a rule file
+routed through `metadataPaths`, a rule file matched directly by an exempt class, and a
+changed metadata path riding along beside an exempt one. Each was closed by extending the
 condition, which is what invited the next.
 
 Stated as a rule instead: **every changed path, in both manifest groups, must be
@@ -81,6 +80,14 @@ The second clause is unconditional on purpose. A rule file is executed prose - i
 tells someone what to do next, which is the same test the change classes are drawn by - so
 it can never be record-keeping output, and an exempt class matching one is a
 misconfiguration rather than a decision to honor.
+
+**The shortcut is not part of this change.** Four of the six review rounds found
+something in it, a fifth round would have been needed to confirm the last fix, and no
+project in this instance configures `review.classes` at all - so Thiemo ruled it out of
+this change rather than confirmed once more (OUTBOX 107, 2026-08-18). It returns as its
+own board item, `dcl-review-exempt-change-class`, and the rule above travels with it:
+whatever reintroduces the shortcut owes that rule and the fail-closed tests removed with
+the code.
 
 ## What is deliberately not pinned
 
@@ -119,7 +126,8 @@ can be given as a path or a board-item slug instead.
 
 ## Obligations this covers
 
-- R4-F1 (exempt short-circuit not bound to the recorded authority) - invariant 6.
+- R4-F1 (exempt short-circuit not bound to the recorded authority) - invariant 6; the
+  shortcut itself has since left this change.
 - R4-F3, R4-F5 (recorded project not verified against the reviewed checkout) - invariant 4.
 - R4-F4, R4-F6 (`.lock` accepted in a non-final ref component) - the whitelist rewrite.
 - Retrospectively, the closed obligations R2-F2, R3-F2 and R3-F6 are all instances of

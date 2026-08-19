@@ -122,10 +122,7 @@ export interface ReviewRound {
 }
 
 export interface ReviewRoundAudit {
-  /** "exempt": the range changed only exempt-classed paths, so the round was recorded
-   * without invoking a reviewer (zero findings, zero passes, manifest kept as the
-   * explicit file-list evidence). */
-  kind: "full" | "remediation" | "base-delta" | "exempt";
+  kind: "full" | "remediation" | "base-delta";
   /** "remediation-range": the round ran under scoped confirmation
    * (`review.confirmation: "scoped"`), so the reviewer saw the remediation range alone
    * and only the obligation-classifying pass. Absent means the round covered the whole
@@ -1272,7 +1269,7 @@ function isReviewMetrics(input: unknown): input is ReviewMetrics {
 function isReviewRoundAudit(input: unknown): input is ReviewRoundAudit {
   return (
     isRecord(input) &&
-    (input.kind === "full" || input.kind === "remediation" || input.kind === "base-delta" || input.kind === "exempt") &&
+    (input.kind === "full" || input.kind === "remediation" || input.kind === "base-delta") &&
     (input.scope === undefined || input.scope === "remediation-range") &&
     isReviewManifest(input.manifest) &&
     Array.isArray(input.passes) &&

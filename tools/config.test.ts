@@ -264,19 +264,18 @@ describe("loadConfig review classes", () => {
     }
   }
 
-  test("accepts a thresholded class and an exempt class", () => {
+  test("accepts thresholded classes with optional reviewer guidance", () => {
     const classes = [
       { name: "coordination-prose", match: ["OUTBOX.md"], waivablePriorities: ["P2", "P3"], guidance: "Only factual errors." },
-      { name: "bookkeeping", match: [".reviews/**", "BOARD.md"], policy: "exempt" },
+      { name: "bookkeeping", match: [".reviews/**", "BOARD.md"], waivablePriorities: ["P3"] },
     ];
     expect(loadWithClasses(classes).review.classes).toEqual(classes as never);
   });
 
-  test("rejects a class declaring both a threshold and the exempt policy, or neither", () => {
-    expect(() =>
-      loadWithClasses([{ name: "both", match: ["a.md"], waivablePriorities: ["P3"], policy: "exempt" }]),
-    ).toThrow("exactly one of");
-    expect(() => loadWithClasses([{ name: "neither", match: ["a.md"] }])).toThrow("exactly one of");
+  test("rejects a class that waives nothing", () => {
+    expect(() => loadWithClasses([{ name: "silent", match: ["a.md"] }])).toThrow(
+      "review.classes[0].waivablePriorities",
+    );
   });
 
   test("rejects unknown priorities, unsafe patterns, and duplicate class names", () => {
@@ -289,7 +288,7 @@ describe("loadConfig review classes", () => {
     expect(() =>
       loadWithClasses([
         { name: "twin", match: ["a.md"], waivablePriorities: ["P3"] },
-        { name: "twin", match: ["b.md"], policy: "exempt" },
+        { name: "twin", match: ["b.md"], waivablePriorities: ["P3"] },
       ]),
     ).toThrow("duplicates class");
   });
@@ -300,7 +299,7 @@ describe("loadConfig review classes", () => {
       writeFileSync(
         join(root, "loops.json"),
         JSON.stringify({
-          review: { reviewer: "codex", classes: [{ name: "global", match: ["a.md"], policy: "exempt" }] },
+          review: { reviewer: "codex", classes: [{ name: "global", match: ["a.md"], waivablePriorities: ["P3"] }] },
           projects: {
             atlas: { review: { classes: [{ name: "local", match: ["b.md"], waivablePriorities: ["P3"] }] } },
           },
