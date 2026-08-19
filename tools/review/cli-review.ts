@@ -868,22 +868,30 @@ async function startReview(options: StartOptions): Promise<void> {
       // skips the reviewer, and only while nothing else is owed (open obligations
       // still need a classifying round). The round is explicitly marked and keeps the
       // manifest as the file-list evidence.
-      // metadataFiles are excluded from manifest.files, so an instruction file configured
-      // as landing metadata would otherwise ride along in a range that skips the reviewer
-      // entirely - the one round with no findings, no passes and no prompt. The rewrite
-      // validation and the no-spec-reference instruction both already look at both
-      // groups; the shortcut with the most to give away must not look at fewer.
-      const metadataInstructionFiles = manifest.metadataFiles
-        .map((file) => file.path)
-        .filter((path) => manifest.instructionFiles.includes(path));
+      // The exempt shortcut is the only path that records a passing round with no
+      // reviewer run at all, and three rounds each found one more way into it - a
+      // metadata-routed rule file, an ordinary rule file, a changed metadata path. So it
+      // is stated as a rule instead of guarded again:
+      //
+      //   every changed path, in BOTH manifest groups, is exempt-classed
+      //   AND no changed path is an instruction file, whatever the config says.
+      //
+      // The second clause is unconditional by design. A rule file is executed prose -
+      // its text tells someone what to do next - so it is never record-keeping output,
+      // and an exempt class that matches one is a misconfiguration rather than a
+      // decision to honor. See docs/design/review-policy-authority.md.
+      const changedFiles = [...manifest.files, ...manifest.metadataFiles];
+      const changedInstructionFiles = changedFiles.filter((file) =>
+        manifest.instructionFiles.includes(file.path),
+      );
       if (
         classes &&
         obligations.length === 0 &&
-        metadataInstructionFiles.length === 0 &&
-        manifest.files.length > 0 &&
-        manifest.files.every((file) => isExemptOnly(file.path, classes))
+        changedInstructionFiles.length === 0 &&
+        changedFiles.length > 0 &&
+        changedFiles.every((file) => isExemptOnly(file.path, classes))
       ) {
-        const exemptFiles = manifest.files.map((file) => file.path);
+        const exemptFiles = changedFiles.map((file) => file.path);
         ledger = addReviewRound(ledger, {
           headSha,
           model: "policy-exempt",

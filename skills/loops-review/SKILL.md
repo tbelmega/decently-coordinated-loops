@@ -76,7 +76,9 @@ error in it change what a person or machine does next?* If yes it is executable 
 and takes full review - code, scripts, machine-read config, and any document whose text
 gets executed, which includes runbooks, specs, skills, and procedures. Only
 record-keeping output is waivable or exempt: review evidence, derived boards, logs.
-`**/*.md` and `docs/**` are the non-examples to refuse. The 2026-08-17 cost report found
+`**/*.md` and `docs/**` are the non-examples to refuse, and a rule file is barred
+outright: an exempt class matching AGENTS.md, CLAUDE.md or a `SKILL.md` never buys the
+review-free round, because a rule file is executed prose by definition. The 2026-08-17 cost report found
 the fleet's highest-value round on a pure-markdown backup spec, and the one P0 an
 extension-keyed class would have waived lived in a runbook.
 
@@ -115,8 +117,11 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
 
    ```bash
    bun "$DCL_HOME/tools/review/cli-review.ts" disposition --item <item-slug> --finding R1-F1 \
-     --status accepted --reason "<technical reason>"
+     --status accepted --reason "<technical reason>" --data-repo <data-repo>
    ```
+
+   `--data-repo` (or `LOOPS_DATA_REPO`) is required for a `waived-by-policy`
+   disposition and must be the one `start` used; every other kind works without it.
 
    Status is `accepted`, `rejected`, `already-addressed`, `accepted-as-limitation`,
    `waived-by-policy`, `tracked-elsewhere`, or `deferred-to-human`.
@@ -139,7 +144,8 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    earlier `documented` result cannot satisfy.
 
    **`waived-by-policy`** applies a waiver the owner's `review.classes` config already
-   authorizes. It requires `--class <name>` naming the authorizing class, and the CLI
+   authorizes. It requires `--class <name>` naming the authorizing class and the same
+   `--data-repo` the review started under, and the CLI
    refuses it when the finding has no file anchor, when the named class does not match
    that file, or when the finding's priority is not waivable there; a file matching
    several classes is waivable only if every match waives that priority. It creates no

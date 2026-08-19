@@ -67,6 +67,21 @@ project name, and the project's canonical repo root - so invariant 4 is checkabl
 than assumed. Invariant 6 stops being something to remember and becomes something the
 code shape enforces: there is one place to get it right.
 
+## The exempt shortcut: one rule, not a growing condition
+
+The same shape played out a second time, on the only path that records a passing round
+with no reviewer run at all. Three rounds each found one more way in: a rule file routed
+through `metadataPaths`, a rule file matched directly by an exempt class, and a changed
+metadata path riding along beside an exempt one. Each was closed by extending the
+condition, which is what invited the next.
+
+Stated as a rule instead: **every changed path, in both manifest groups, must be
+exempt-classed, and no changed path may be an instruction file whatever the config says.**
+The second clause is unconditional on purpose. A rule file is executed prose - its text
+tells someone what to do next, which is the same test the change classes are drawn by - so
+it can never be record-keeping output, and an exempt class matching one is a
+misconfiguration rather than a decision to honor.
+
 ## What is deliberately not pinned
 
 `auditPasses`, `metadataPaths` and `confirmation` stay resolved per run. They set review

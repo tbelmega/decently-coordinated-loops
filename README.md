@@ -77,7 +77,8 @@ Run from the data-repo root:
 
 If the bundled local reviewer is active, run it once from the target project at the
 final handoff of a tracked item. `cli-review.ts status --item <item-slug> --data-repo <data-repo>`
-verifies that a terminal review round covers the current HEAD and prints the one-line
+verifies that a terminal review round covers the current HEAD, or a descendant whose
+intervening commits touch only configured landing-metadata paths, and prints the one-line
 evidence agents place in their completion receipt. Pass the same data repo you passed to
 `start`: the gate re-resolves the review policy from it to authorize any class waiver, and
 a waiver authorized by any other one is refused.
