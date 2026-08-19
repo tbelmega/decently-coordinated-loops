@@ -31,9 +31,15 @@ invariant list, not only the parts findings have named so far:
    started under, compared canonically (tilde-expanded, resolved, symlink-free).
 3. **Same project block.** Within that repository, the project whose `review` block was
    resolved at the start is the one that governs. Not the block a fresh match would pick.
-4. **The project must still be the reviewed checkout's project.** A registered name is
-   not an identity: `projects.<name>.repo` can be repointed at a different checkout while
-   keeping the name, which would hand this review a policy belonging to something else.
+4. **The project must still be the reviewed checkout's project - both directions.** A
+   registered name is not an identity: `projects.<name>.repo` can be repointed at a
+   different checkout while keeping the name, which would hand this review a policy
+   belonging to something else. And the ledger must still be *consumed in* the checkout
+   that project names, or an otherwise valid ledger copied into another checkout at the
+   same branch and HEAD would carry its origin's classes with it. Checking one half and
+   calling the invariant done is how the second half stayed open for a round; a linked
+   worktree of the named checkout counts as it, exactly as it does for the participation
+   gate.
 5. **Absence fails closed, in every direction.** No recorded authority, no resolvable
    data repo, a different data repo, a project that has left the config, or a project
    that no longer maps to this checkout: no classes, so waivers block and nothing is

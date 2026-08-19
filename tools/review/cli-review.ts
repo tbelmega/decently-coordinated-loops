@@ -188,21 +188,41 @@ function governingPolicy(
           `project ${authority.project} now points at ${entryRepo ?? "no repo"}, not the ${authority.projectRepo} this review started on`,
       };
     }
+    // The same invariant from the other side: the ledger must still be consumed IN the
+    // checkout the recorded project names. Checking only the config half would let an
+    // otherwise valid ledger, copied into another checkout at the same branch and HEAD,
+    // keep being authorized by the classes of the project it came from. A linked
+    // worktree of that checkout counts, exactly as it does for the participation gate.
+    if (!reviewedRoots(home).includes(authority.projectRepo)) {
+      return {
+        refusal:
+          `this checkout is not the ${authority.projectRepo} that project ${authority.project} authorized this review for`,
+      };
+    }
   }
   return {refusal: null, review: resolveReviewConfig(config, authority.project)};
 }
 
-function reviewedProjectName(config: LoopsConfig, home: string): string | undefined {
+/** The identities the current checkout can be registered under: its own root and, for a
+ * linked worktree, the main checkout's - the same pair `cli-registered` matches on, so a
+ * worktree of a registered repo is that repo. Canonicalized. Empty outside a checkout. */
+function reviewedRoots(home: string): string[] {
   const roots = spawnSync(
     "git",
     ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"],
     { encoding: "utf8" },
   );
-  if (roots.status !== 0) return undefined;
+  if (roots.status !== 0) return [];
   const [worktreeRoot, commonDir] = roots.stdout.toString().trim().split("\n");
-  if (!worktreeRoot) return undefined;
+  if (!worktreeRoot) return [];
   const mainCheckoutRoot = commonDir ? commonDir.replace(/\/\.git\/?$/, "") : worktreeRoot;
-  return matchProject(config.projects, [worktreeRoot, mainCheckoutRoot], (path) => canonicalPath(path, home)) ?? undefined;
+  return [...new Set([worktreeRoot, mainCheckoutRoot].map((path) => canonicalPath(path, home)))];
+}
+
+function reviewedProjectName(config: LoopsConfig, home: string): string | undefined {
+  const roots = reviewedRoots(home);
+  if (roots.length === 0) return undefined;
+  return matchProject(config.projects, roots, (path) => canonicalPath(path, home)) ?? undefined;
 }
 
 /** The review policy governing the CURRENT checkout: the data repo's loops.json (from

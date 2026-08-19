@@ -929,6 +929,55 @@ describe("cli-review start", () => {
     expect(uncheckable.stderr).toContain("without the checkout it pointed at");
   });
 
+  test("refuses a ledger consumed outside the checkout its project authorized", () => {
+    const { repository } = createReviewRepository();
+    const item = "waiver-checkout-binding";
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({
+        review: { reviewer: "codex", maxRounds: 5 },
+        projects: {
+          target: {
+            repo: repository,
+            review: { classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2"] }] },
+          },
+        },
+      })}\n`,
+    );
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+        "--class",
+        "coordination-prose",
+        "--data-repo",
+        dataRepo,
+      ]).status,
+    ).toBe(0);
+
+    // The same ledger, same branch, same reviewed SHA, in a different checkout. The
+    // config half of the binding still passes; the checkout half must not.
+    const copy = createReviewRepository();
+    const from = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const to = reviewEvidencePaths(copy.repository, "feature/review-receipt", item);
+    mkdirSync(dirname(to.jsonPath), { recursive: true });
+    const ledger = JSON.parse(readFileSync(from.jsonPath, "utf8"));
+    ledger.rounds[0].headSha = copy.headSha;
+    writeFileSync(to.jsonPath, `${JSON.stringify(ledger)}\n`);
+
+    const copied = spawnSync(
+      "bun",
+      ["run", CLI, "status", "--item", item, "--data-repo", dataRepo],
+      { cwd: copy.repository, encoding: "utf8" },
+    );
+    expect(copied.status).not.toBe(0);
+    expect(copied.stdout).toContain("not authorized");
+  });
+
   test("resolves the exempt short-circuit from the recorded authority, not a fresh match", () => {
     const { repository } = createReviewRepository();
     const item = "exempt-authority-binding";
