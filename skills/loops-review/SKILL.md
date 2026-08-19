@@ -304,6 +304,17 @@ review: it audits internal coherence, contradictions with rules not under revisi
 the correctness of embedded commands, and it does not report deviation from those files'
 prior text as a defect. Every instruction file you did not declare stays authority.
 
+**Governance mode covers rewrites, not removals.** The declarable set is discovered from
+the rule files present at the reviewed HEAD, so a range that *deletes* AGENTS.md,
+CLAUDE.md or a `SKILL.md` cannot declare that path - the start refuses it as "not an
+instruction file" - and the deleted file's prior text is not handed to the reviewer as
+authority. The removal is still reviewed: the diff carries it, and every surviving rule
+file still binds. What is missing is the subject-not-authority treatment for the rule
+being removed, so state the reasoning for a deletion in the item and the commit rather
+than expecting the reviewer to weigh it against the rule that used to stand there. Owner's
+call, 2026-08-18: this is a documented limitation of governance mode, tracked separately
+rather than fixed inside the change that introduced the mode.
+
 `start` fails closed on the declaration you make. Each declared path must be a discovered
 instruction file of the repository, must actually change in the reviewed range, and the
 item must carry `links.spec` - suspending a file's authority with no owner-approved spec
