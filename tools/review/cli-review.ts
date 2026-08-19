@@ -827,8 +827,15 @@ async function startReview(options: StartOptions): Promise<void> {
       // owner-approved spec aborts the round instead of silently narrowing (or
       // silently granting) the authority the author declared.
       if (context.rewrites.length > 0) {
+        // The item's OWN range, deliberately not manifest.files: on a patch-equivalent
+        // rebase the manifest folds in the base delta, so a rule file touched only by
+        // the integration-base update would otherwise satisfy a declaration the item's
+        // patch never earns. Named separately from the manifest for the same reason the
+        // error message names this range.
         const changedPaths = new Set(
-          [...manifest.files, ...manifest.metadataFiles].map((file) => file.path),
+          git(["-C", repository, "diff", "--name-only", `${baseSha}..${headSha}`, "--"])
+            .split("\n")
+            .filter(Boolean),
         );
         for (const path of context.rewrites) {
           if (!changedPaths.has(path)) {

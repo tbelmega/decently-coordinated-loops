@@ -1005,6 +1005,45 @@ describe("cli-review start", () => {
     );
   });
 
+  test("refuses a rewrite declaration a rebased base, not the item's patch, satisfies", () => {
+    const repository = mkdtempSync(`${tmpdir()}/loops-review-rewrites-basedelta-`);
+    git(repository, ["init", "-q", "-b", "master"]);
+    git(repository, ["config", "user.email", "test@example.com"]);
+    git(repository, ["config", "user.name", "Test"]);
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Add rules"]);
+    git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+    writeFileSync(`${repository}/change.txt`, "review me\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Add change"]);
+    const item = "rewrites-base-delta";
+    const dataRepo = createReviewDataRepo(5);
+    mkdirSync(`${dataRepo}/docs/specs`, {recursive: true});
+    writeFileSync(`${dataRepo}/docs/specs/rewrite.md`, "# Approved spec\n");
+    expect(runStart(repository, dataRepo, item, "master").status).toBe(0);
+
+    // The integration base moves and touches AGENTS.md; the item's own patch does not.
+    git(repository, ["switch", "-q", "master"]);
+    writeFileSync(`${repository}/AGENTS.md`, "# Rules\n\nBase-side edit.\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Edit rules on the base"]);
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+    writeItemWithLinks(dataRepo, item, {spec: "docs/specs/rewrite.md"});
+    const itemPath = `${dataRepo}/items/${item}.md`;
+    writeFileSync(
+      itemPath,
+      readFileSync(itemPath, "utf8").replace("links:", "review:\n  rewrites: [AGENTS.md]\nlinks:"),
+    );
+
+    const result = runStart(repository, dataRepo, item, "master");
+
+    // The manifest folds the base delta in, so an unscoped check would accept this.
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("which is not changed in");
+  });
+
   test("discovers skill rule files and lets an item declare a skill rewrite", () => {
     const repository = mkdtempSync(`${tmpdir()}/loops-review-skill-governance-`);
     git(repository, ["init", "-q", "-b", "master"]);
