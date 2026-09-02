@@ -1,6 +1,6 @@
 ---
 name: loops-queues
-description: Use when processing the inbox ("process the inbox"), writing to or processing the outbox ("process the outbox"), or when the owner says "interview me" — the contracts for both queues and interview mode
+description: Use when processing the inbox ("process the inbox"), writing to or processing the outbox ("process the outbox"), or when the owner says "interview me"; the contracts for both queues and interview mode
 ---
 
 # The queues: inbox and outbox
@@ -9,20 +9,20 @@ Two files in the data repo connect the owner and the agent fleet asynchronously.
 Both trend toward empty: agents drain the inbox, the owner drains the outbox.
 "The owner" is the human named in `HOUSE-RULES.md → Owner`.
 
-## Inbox — `INBOX.md`
+## Inbox - `INBOX.md`
 
 The owner's dump zone: raw thoughts in, board items out. The owner writes anything
-below the marker line — bullets, half sentences, any language, zero format — locally
+below the marker line (bullets, half sentences, any language, zero format), locally
 or from a phone via the git host's editor.
 
 **Processing contract:**
 
 - Process when told ("process the inbox") and at the start of every unattended
-  pickup. `git pull --rebase` first — entries may have been committed from the
+  pickup. `git pull --rebase` first; entries may have been committed from the
   phone.
 - For each entry below the marker: create a board item (state `idea` unless it is
   clearly further along) or append to an existing item if it obviously belongs
-  there. Quote the original dump verbatim in the item file, then interpret — don't
+  there. Quote the original dump verbatim in the item file, then interpret; don't
   paraphrase it away.
 - **Remove each processed entry.** Below the marker trends toward empty; the board
   item is the durable home. An unprocessed inbox entry and its board item must
@@ -32,10 +32,10 @@ or from a phone via the git host's editor.
   delete, don't ask the same question twice.
 - Never edit anything above the marker line.
 
-## Outbox — `OUTBOX.md`
+## Outbox - `OUTBOX.md`
 
-The mirror: everything the fleet needs FROM the owner — questions, proposals,
-approval requests — aggregated in one place, answerable in one line each. The owner
+The mirror: everything the fleet needs FROM the owner (questions, proposals,
+approval requests) aggregated in one place, answerable in one line each. The owner
 answers on `> A:` lines, in any order; partial answers and "later" are valid.
 
 **Entry shape.** One decision per entry, ≤6 lines of body, appended under `## Open`
@@ -54,7 +54,11 @@ Options: (a) Redis, (b) a Postgres table, (c) in-memory until it hurts.
 
 The heading line is structural, not decoration: `### <id> — <type> · <project> ·
 <title>`, with an em dash after the id and middle dots between the fields. Only the
-first three separators are read as separators, so a title may contain both. IDs are
+first three separators are read as separators, so a title may contain both. **Those two
+characters are data, not typography:** `tools/outbox.ts` matches the em dash and the
+middle dots literally, so a hyphen or a hyphen-minus in their place fails the parse. A
+house or personal style rule against em dashes governs prose and does not reach this
+separator. IDs are
 sequential at append time but sparse over the file's life, because routed entries are
 deleted; never renumber to close a gap, since answered entries are cited by ID.
 
@@ -66,7 +70,7 @@ deleted; never renumber to close a gap, since answered entries are cited by ID.
   where the answer space is known. It ends with an empty `> A:` line: an entry with no
   `> A:` line cannot be answered in place.
 - Every question only the owner can answer that you write into an item file gets
-  mirrored here — the item file holds the context, the outbox is where the owner
+  mirrored here; the item file holds the context, the outbox is where the owner
   finds it.
 - **Name the machine.** An entry that mentions a checkout, worktree, branch or local
   path says which machine it is on, and so does any board item that mentions one. A
@@ -144,5 +148,5 @@ and the outbox, then interview live, one question at a time, highest-leverage fi
 4. probing vague `idea` items toward spec-readiness.
 
 Use structured multiple-choice prompts where the harness supports them. Route every
-answer immediately — an interview ends with the board updated and the outbox
+answer immediately; an interview ends with the board updated and the outbox
 shorter, not with notes to file later.

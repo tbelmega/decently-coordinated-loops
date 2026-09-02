@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
-// `bun cli-registered.ts --data-repo <dir> [--cwd <dir>]` — the project-participation
+// `bun cli-registered.ts --data-repo <dir> [--cwd <dir>]` - the project-participation
 // gate. Unlike the other tools, this runs from inside an *arbitrary* project checkout
 // (not the data repo): it answers "should I engage the board here?" for the harness
 // config block, before any board read.
 //
 // Exit codes:
-//   0 — registered. Prints the project name (or "(data repo)") to stdout.
-//   1 — not a registered project (or the cwd isn't a git checkout). Prints nothing.
-//   2 — usage error / the --data-repo path doesn't exist.
+//   0 - registered. Prints the project name (or "(data repo)") to stdout.
+//   1 - not a registered project (or the cwd isn't a git checkout). Prints nothing.
+//   2 - usage error / the --data-repo path doesn't exist.
 import { existsSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -52,7 +52,7 @@ if (!existsSync(dataRepo)) {
   process.exit(2);
 }
 
-// The checkout to test, plus its main checkout root — for a linked worktree these
+// The checkout to test, plus its main checkout root - for a linked worktree these
 // differ, and either matching a registered repo counts as registered.
 const worktreeRoot = git(opts.cwd, ["rev-parse", "--show-toplevel"]);
 if (worktreeRoot === null) process.exit(1); // not a git checkout → not participating
@@ -64,7 +64,7 @@ const canonicalize: Canonicalize = (path) => {
   try {
     return realpathSync.native(expanded);
   } catch {
-    return expanded; // path doesn't exist — fall back to the lexical form
+    return expanded; // path doesn't exist - fall back to the lexical form
   }
 };
 

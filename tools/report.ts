@@ -49,22 +49,22 @@ export function printValidationReport(anomalies: ItemAnomaly[]): void {
 }
 
 /** Human-readable duplicate-slug summary: one slug carried by more than one item
- * file across folders. An integrity error — the sync CLI stops before writing and the
+ * file across folders. An integrity error - the sync CLI stops before writing and the
  * check CLI exits non-zero. */
 export function printDuplicateSlugs(duplicates: DuplicateSlug[]): void {
   if (!duplicates.length) return;
-  console.log(`\nDuplicate slugs (${duplicates.length} — same slug on more than one item file):`);
+  console.log(`\nDuplicate slugs (${duplicates.length} - same slug on more than one item file):`);
   for (const dup of duplicates) {
     console.log(`  - ${dup.slug}: ${dup.paths.join(", ")}`);
   }
 }
 
 /** Human-readable dangling-dependency summary: a `depends-on` target that resolves to
- * no known item — the item can never become eligible. An integrity error the check CLI
+ * no known item - the item can never become eligible. An integrity error the check CLI
  * exits non-zero on. */
 export function printDanglingDeps(dangling: DanglingDep[]): void {
   if (!dangling.length) return;
-  console.log(`\nDangling depends-on targets (${dangling.length} — target resolves to no item):`);
+  console.log(`\nDangling depends-on targets (${dangling.length} - target resolves to no item):`);
   for (const dep of dangling) {
     console.log(`  - ${dep.slug}: depends-on target "${dep.target}" not found`);
   }

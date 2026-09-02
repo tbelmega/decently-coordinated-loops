@@ -1,6 +1,6 @@
 ---
 name: loops-dispatch
-description: Use when the owner asks you to set yourself up for dispatch duty or periodic dispatch — configures this session as a recurring unattended-pickup dispatcher, and inspects or stops one that is already running
+description: Use when the owner asks you to set yourself up for dispatch duty or periodic dispatch; configures this session as a recurring unattended-pickup dispatcher, and inspects or stops one that is already running
 ---
 
 # Dispatch duty
@@ -19,7 +19,7 @@ roles across a roster of harnesses or coordinate other machines.
 ## 1. Check the harness can do this at all
 
 Dispatch needs a recurring scheduler that re-enters *this* conversation. Use only
-what your harness genuinely provides — never simulate a scheduler by sleeping,
+what your harness genuinely provides; never simulate a scheduler by sleeping,
 polling in a loop, or promising to "remember" to wake up. A harness without one
 cannot hold dispatch duty: say so plainly and stop, so the owner can put the duty on
 a harness that can.
@@ -30,12 +30,12 @@ Claude Code provides session-bound cron (`CronCreate`/`CronList`/`CronDelete`).
 
 In precedence order, lowest first:
 
-1. `loops-pickup/references/periodic-dispatch.md` — the default mechanics and
+1. `loops-pickup/references/periodic-dispatch.md` - the default mechanics and
    failure modes (it stays with loops-pickup; house rules point at it by path).
-2. `HOUSE-RULES.md → Dispatch` in the data repo — the instance's cadence, usage-limit
+2. `HOUSE-RULES.md → Dispatch` in the data repo - the instance's cadence, usage-limit
    handling, and stagger policy. **Read it every time; never schedule from memory.**
-3. The owner's invocation — a one-off frequency, a stagger offset, or a restriction
-   to a single project overrides the house rules for this session.
+3. The owner's invocation (a one-off frequency, a stagger offset, or a restriction to
+   a single project) overrides the house rules for this session.
 
 If house rules leave `Dispatch` empty or `TODO`, do not invent a cadence. Ask the
 owner for one, and offer to record the answer there so the next setup resolves it.
@@ -54,23 +54,23 @@ every 5 hours, set up at 14:23  →  ceil(24/5) = 5 hours
 ```
 
 The term count matters: don't step until the values repeat. When `N` does not divide
-24 the sequence only repeats after 24 terms — stepping by 5 from 14 walks through
+24 the sequence only repeats after 24 terms; stepping by 5 from 14 walks through
 every hour of the day, which would schedule **hourly**, not five-hourly.
 
 ### Check the wrap gap before registering
 
 An hour-list repeats daily, so when `24 % N != 0` the final gap of the day is shorter
-than the rest: `wrap = 24 - N * (ceil(24/N) - 1)`. Compute it every time — it degrades
+than the rest: `wrap = 24 - N * (ceil(24/N) - 1)`. Compute it every time; it degrades
 badly as `N` approaches 24, and the failure is silent.
 
 | `N` | fires | wrap gap | |
 | --- | --- | --- | --- |
-| 5 | 5×/day | 4h | fine — 80% of the interval, disclose and proceed |
-| 10 | 3×/day | 4h | thin — ask first |
+| 5 | 5×/day | 4h | fine: 80% of the interval, disclose and proceed |
+| 10 | 3×/day | 4h | thin: ask first |
 | 23 | 2×/day | **1h** | two firings an hour apart; never register this silently |
 
 Rule: proceed when the wrap gap is at least **half of `N`**, and say the number out
-loud in the confirmation. Below half, stop and put the choice to the owner — a
+loud in the confirmation. Below half, stop and put the choice to the owner: a
 rounded cadence that divides 24, an interval-capable scheduler if the harness has
 one, or a firing that no-ops unless `N` hours have actually elapsed since the last
 pickup. Do not quietly register the compressed schedule.
@@ -83,7 +83,7 @@ than not registering one.
 
 Three adjustments:
 
-- **Pick an off-minute.** Not `:00` or `:30` — every scheduler on the planet fires
+- **Pick an off-minute.** Not `:00` or `:30`; every scheduler on the planet fires
   there. Reuse the setup minute, or nudge a few minutes off.
 - **Nudge it earlier, never later.** The hour list includes the setup hour, so a
   minute later in the current hour fires almost immediately: registering at 14:23 with
@@ -92,7 +92,7 @@ Three adjustments:
 - **Apply a stagger offset** only if house rules ask for one. Some instances
   explicitly waive staggering; don't add it unasked.
 
-An immediate first pickup is a legitimate thing to want — the owner asking for
+An immediate first pickup is a legitimate thing to want; the owner asking for
 dispatch duty often wants work starting now. Make it a decision, not an accident:
 either start that first pickup deliberately and say so, or keep the first firing a
 full `N` hours out.
@@ -108,16 +108,17 @@ state from the board, so the prompt carries no context from this conversation be
 the standing restrictions:
 
 > Periodic dispatch: pick up the next available piece of work per the loops-pickup
-> skill. You are running unattended — complete the full prior-obligation sweep,
+> skill. You are running unattended: complete the full prior-obligation sweep,
 > then perform substantive eligible work in this firing; preflight bookkeeping does
 > not complete the wakeup, and only substantial work in progress inherited from the
 > previous turn may itself be the substantive outcome. Deliver a change for review
-> or refinement per the protocol, babysit any review you open, and never land
-> changes or deploy. Before going idle, publish all durable item and board state,
-> then schedule a one-shot prompt containing exactly `/compact` for the next minute.
+> or refinement per the protocol, babysit any review you open, and resolve landing
+> and development-deployment authority from the house rules; never make other
+> deployments. Before going idle, publish all durable item and board state, then use
+> the harness-supported compaction mechanism described by the dispatcher setup.
 
 If the owner restricted the session to one project, name it in the prompt as a hard
-constraint — loops-pickup must then consider only that project's items and treat
+constraint; loops-pickup must then consider only that project's items and treat
 everything else as out of scope, even when a higher-priority item exists elsewhere.
 
 ### Compact after each firing
@@ -131,7 +132,7 @@ finishing when the minute arrives, the command waits until that response ends.
 
 Never schedule compaction before updating, committing, and pushing the item/board
 state needed to re-hydrate the next firing. Do not create a second recurring job for
-compaction — one one-shot per completed firing preserves the required ordering. If
+compaction; one one-shot per completed firing preserves the required ordering. If
 the harness cannot schedule or invoke compaction, say so during setup and omit the
 claim that each firing compacts; never simulate support it does not have.
 
@@ -141,7 +142,7 @@ Register the job, then tell the owner in plain terms:
 
 - the cadence, and the **actual clock times** it will fire (not just the expression)
 - the project restriction, if any
-- **that the schedule dies with this session** — closing the window silently kills
+- **that the schedule dies with this session:** closing the window silently kills
   dispatch; nothing is written to disk and nothing inherits it
 - **the expiry date**, when the harness expires recurring jobs (Claude Code: 7 days,
   after which the job fires one final time and is deleted)
@@ -151,11 +152,11 @@ you say them out loud. Re-run this skill in a fresh session to renew.
 
 ## 6. Inspecting and stopping
 
-- **"What dispatch is running?"** — list the harness's jobs and report cadence, next
+- **"What dispatch is running?"** - list the harness's jobs and report cadence, next
   fire time, and expiry. If none, say so; do not infer from this conversation's
   history that a job still exists.
-- **"Stop dispatch"** — delete the job and confirm which one. A dispatcher that
+- **"Stop dispatch"** - delete the job and confirm which one. A dispatcher that
   cannot be stopped on request is a bug in the setup.
-- **On a hard usage-limit warning mid-run** — finish or park the current item safely
+- **On a hard usage-limit warning mid-run** - finish or park the current item safely
   per loops-pickup, then stop the recurring job and log that you did, rather than
   letting later firings fail against an exhausted budget.

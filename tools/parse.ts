@@ -22,7 +22,7 @@ export function parseItemFileText(path: string, text: string): ItemFile {
   for (const [key, value] of Object.entries(rawLinks)) {
     if (typeof value === "string" && value.length > 0) links[key] = value;
   }
-  // Rename the kebab-case frontmatter keys to their typed camelCase fields — but only
+  // Rename the kebab-case frontmatter keys to their typed camelCase fields - but only
   // when present, so absent links don't become own-properties with `undefined` values.
   for (const [from, to] of [
     ["stack-parent", "stackParent"],
@@ -120,18 +120,18 @@ export function loadItemsDir(itemsDir: string): ItemFile[] {
 }
 
 /** IO boundary: read every archive/*.md file from `archiveDir` and parse it. Same
- * shape as loadItemsDir — used so depends-on targets that have since been archived
+ * shape as loadItemsDir - used so depends-on targets that have since been archived
  * still resolve. Missing directory (archive/ doesn't exist until the first item is
- * archived) is not an error — returns []. */
+ * archived) is not an error - returns []. */
 export function loadArchiveDir(archiveDir: string): ItemFile[] {
   if (!existsSync(archiveDir)) return [];
   return loadDir(archiveDir, "archive");
 }
 
-/** IO boundary: read every for-delivery/*.md file and parse it — the verified
+/** IO boundary: read every for-delivery/*.md file and parse it - the verified
  * (tested/delivered) work-streams that have left the active board. Loaded so they
  * feed depends-on resolution against merged/verified targets. Missing directory is
- * not an error — returns []. */
+ * not an error - returns []. */
 export function loadForDeliveryDir(forDeliveryDir: string): ItemFile[] {
   if (!existsSync(forDeliveryDir)) return [];
   return loadDir(forDeliveryDir, "for-delivery");

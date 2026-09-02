@@ -60,7 +60,7 @@ export interface ItemMove {
 }
 
 /** Pure: given every loaded item across `items/` and `for-delivery/`, the file
- * moves the next sync must perform — each item whose state-implied folder differs
+ * moves the next sync must perform - each item whose state-implied folder differs
  * from where its file currently sits (items/→for-delivery/ on `tested`, →archive/
  * on `accepted`, for-delivery/→archive/ on `accepted`, etc.). Each item's destination is
  * resolved against its own project's lifecycle tail, so a no-deploy project's `tested` item
@@ -80,12 +80,12 @@ function archiveRow(item: ItemFile): string {
   return `| [${item.title}](archive/${item.slug}.md) | ${item.project} | ${item.updated} |`;
 }
 
-/** Reconcile ARCHIVE.md against the set of archived items — derived and idempotent.
+/** Reconcile ARCHIVE.md against the set of archived items - derived and idempotent.
  * A row for an item already indexed (matched by its `archive/<slug>.md` link) is left
  * untouched; only items with no row yet are appended, sorted most-recently-finished
  * first. Because it reconciles against the archive/ folder rather than a one-shot
  * "just moved" batch, a sync that crashed after moving a file but before indexing it
- * is repaired on the next run — the move and the index become recoverable as one
+ * is repaired on the next run - the move and the index become recoverable as one
  * derived operation. No-op (returns `archiveText` unchanged) when nothing is missing.
  *
  * Only files that actually belong in `archive/` - state plus the owning project's lifecycle

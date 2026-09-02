@@ -15,7 +15,7 @@ function lockPath(root: string): string {
 
 function isPidAlive(pid: number): boolean {
   try {
-    // Signal 0 does no actual signalling — it just probes whether the pid exists
+    // Signal 0 does no actual signalling - it just probes whether the pid exists
     // and is ours to signal, throwing (ESRCH/EPERM) if not.
     process.kill(pid, 0);
     return true;
@@ -38,7 +38,7 @@ export interface AcquireResult {
 
 /** Attempts to exclusively create the lock file. Succeeds outright when no lock
  * exists. When one does, reads it: if its owning pid is no longer alive, or it was
- * started more than 10 minutes ago, the lock is considered abandoned — it's broken
+ * started more than 10 minutes ago, the lock is considered abandoned - it's broken
  * (removed and recreated for this process) and `brokeStale` is set. Otherwise the
  * lock is genuinely held and `acquired: false` is returned so the caller can retry
  * later. */
@@ -67,7 +67,7 @@ export function acquireLock(root: string): AcquireResult {
   try {
     unlinkSync(path);
   } catch {
-    // already gone — fine, another process may have just released it
+    // already gone - fine, another process may have just released it
   }
   try {
     writeFileSync(path, content, { flag: "wx" });
@@ -93,7 +93,7 @@ const RETRY_DELAY_MS = 2000;
 /** Runs `fn` while holding the sync lock, releasing it in a `finally`. Retries
  * acquisition a few times with a short delay (a stale lock is broken automatically by
  * `acquireLock`). If the lock is genuinely held after every attempt, prints a message
- * naming `label` and exits(1) — a concurrent holder owns the data repo. Shared by the
+ * naming `label` and exits(1) - a concurrent holder owns the data repo. Shared by the
  * sync and `landed --apply` CLIs so their overlapping BOARD.md/item-file writes can't
  * interleave. */
 export async function withLock<T>(root: string, fn: () => T, label = "sync run"): Promise<T> {
@@ -112,7 +112,7 @@ export async function withLock<T>(root: string, fn: () => T, label = "sync run")
     }
   }
   console.error(
-    `could not acquire ${LOCK_NAME} after ${MAX_ATTEMPTS} attempts — another ${label} appears to be in progress`,
+    `could not acquire ${LOCK_NAME} after ${MAX_ATTEMPTS} attempts - another ${label} appears to be in progress`,
   );
   process.exit(1);
 }

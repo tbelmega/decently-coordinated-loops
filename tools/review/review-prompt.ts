@@ -1,4 +1,4 @@
-import type {ReviewAuditPass} from "../config.ts";
+import type {ReviewPersonaName} from "../config.ts";
 import type {ReviewObligation} from "./review-ledger.ts";
 import type {ReviewManifest} from "./review-manifest.ts";
 
@@ -9,7 +9,7 @@ export interface ReviewContextDocument {
 }
 
 /** The persisted doc file a documentation obligation names, read at the HEAD under
- * review — the exact artifact the confirmation pass must verify. */
+ * review - the exact artifact the confirmation pass must verify. */
 export interface ReviewDocArtifact {
   findingId: string;
   path: string;
@@ -26,7 +26,7 @@ export interface ReviewClassGuidance {
 }
 
 export interface ReviewPromptInput {
-  pass: ReviewAuditPass;
+  pass: ReviewPersonaName;
   manifest: ReviewManifest;
   contextDocuments: ReviewContextDocument[];
   priorNotes: string[];
@@ -36,12 +36,51 @@ export interface ReviewPromptInput {
   classGuidance?: ReviewClassGuidance[];
   remediationBaseSha?: string;
   baseDeltaRange?: {baseSha: string; headSha: string};
+  /** Emit the P0-P3 definitions: on whenever any resolved key depends on the
+   * taxonomy (config.ts taxonomyEnabled), so a dependent feature never runs
+   * against undefined priorities. */
+  taxonomy?: boolean;
+  /** The C1 severity floor is active for THIS round: only new P0/P1 are findings;
+   * P2/P3 observations go to the non-blocking notes array. */
+  severityFloorActive?: boolean;
+  /** C4: the previous round rejected a P0/P1 finding; this confirmation round must
+   * treat each such rejection (reason among the prior notes) as a claim to refute
+   * or affirm with factual evidence. */
+  refuteRejections?: boolean;
+  /** C2: the persona engine's sharpened briefs (interactions-only integration,
+   * security-sharpened adversarial). Off for legacy auditPasses runs. */
+  personaBriefs?: boolean;
 }
 
-const passInstructions: Record<ReviewAuditPass, string> = {
+/** The four priority definitions, load-bearing for the severity floor, terminal
+ * rejection, and cap exits. One source; the spec's wording verbatim. */
+export const priorityDefinitions = [
+  "Priority definitions - apply them exactly:",
+  "P0: data loss, security exposure, or a broken load-bearing invariant on a path the change makes reachable.",
+  "P1: wrong behavior on a realistic path, or an acceptance criterion of the linked item or spec left unmet.",
+  "P2: robustness on an unrealistic or adversarial path, a missing test for an implemented behavior, or a maintainability defect that does not change what a person or machine does next.",
+  "P3: prose, comment, or consistency defects, and anything the reviewer would call a preference.",
+].join("\n");
+
+const passInstructions: Record<ReviewPersonaName, string> = {
   diff: "Audit local correctness of every changed hunk, including boundary behavior, compatibility, and tests that should require the change.",
   integration: "Audit callers, consumers, tests, contracts, and architecture. Trace the changed behavior through relevant call paths rather than judging files in isolation.",
   adversarial: "Audit security, data loss, concurrency, failure handling, accessibility, compatibility, and documentation consistency. Look deliberately for interactions the other passes may miss.",
+  confirmation: "You are the unified confirmation reviewer for this round. Classify every open obligation against the artifact it names, and scan the fix delta for new defects, with the full reviewed range as context.",
+};
+
+/** The C2 persona-engine briefs: diff unchanged; adversarial keeps documentation
+ * consistency and gains a security sharpening; integration is rebriefed to
+ * interactions only (93% of its unique findings previously anchored inside the diff
+ * manifest - the perspective was not materializing). Selected by `personaBriefs`,
+ * so a legacy auditPasses configuration keeps today's briefs untouched. */
+const personaPassInstructions: Record<ReviewPersonaName, string> = {
+  diff: passInstructions.diff,
+  integration:
+    "Audit integration only: report a finding only when its defect arises from the interaction between the reviewed delta and code outside it (a caller, consumer, contract, or test). A defect provable within the changed hunks alone belongs to another pass and must not be reported here.",
+  adversarial:
+    "Audit security, data loss, concurrency, failure handling, accessibility, compatibility, and documentation consistency. For security: name the trust boundaries this delta touches, then check the changed entry points for authn/authz gaps, injection and path traversal on new inputs, secret handling and logging, unsafe exec or deserialization, and TOCTOU or symlink races on new file operations. A security finding must state a concrete attack path, not a category.",
+  confirmation: passInstructions.confirmation,
 };
 
 export function reviewPrompt(input: ReviewPromptInput): string {
@@ -72,7 +111,7 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     `AUDIT_PASS=${input.pass}`,
     `AUDIT_INPUT=${JSON.stringify(auditInput)}`,
     `Review exactly the committed change ${input.manifest.baseSha}..${input.manifest.headSha}.`,
-    passInstructions[input.pass],
+    (input.personaBriefs ? personaPassInstructions : passInstructions)[input.pass],
     "Return coverage for every manifest file and exact hunk list. Missing coverage invalidates the entire logical round.",
     "coverage.instructionFiles must repeat every path in the manifest's instructionFiles, including files you judged irrelevant to this change. It records that you considered the repository's instructions, so any deviation from that exact set invalidates the round.",
     ...(input.manifest.instructionFilesUnderRevision?.length
@@ -80,11 +119,18 @@ export function reviewPrompt(input: ReviewPromptInput): string {
           `This change is authorized to rewrite these instruction files: ${input.manifest.instructionFilesUnderRevision.join(", ")}. For them the diff's new text is the proposed rule under review: audit it as subject (internal coherence, contradictions with rules not under revision, correctness of embedded commands), and do not report its deviation from these files' prior text, or a conflict with a rule inside these same files, as a defect. Rules in instruction files not listed here remain authority.`,
         ]
       : []),
+    ...(input.taxonomy ? [priorityDefinitions] : []),
+    ...(input.severityFloorActive
+      ? [
+          "The severity floor is active for this round: report as findings ONLY new P0/P1 defects (plus the obligation classifications requested of this pass). Every P2/P3 observation belongs in the notes array instead - a note is non-blocking, creates no obligation, and needs no disposition. Do not grade a P2/P3 up to keep it blocking; the priority definitions above are the contract.",
+        ]
+      : ["Return an empty notes array; the notes channel is not in use for this round."]),
     "Report every actionable correctness, security, data-loss, concurrency, compatibility, accessibility, or material maintainability defect; omit style preferences.",
     "Classify each finding origin as original, remediation, base-delta, or unknown.",
+    "Classify each finding causality as introduced, worsened, unmet-obligation, pre-existing, or unknown. Inspect the base, diff, and relevant surrounding code already needed for this review. Pre-existing findings are contextual observations, not directions to expand the current workstream. A remediation-created regression is introduced or worsened even when related production debt already exists. Do not begin a separate reproduction effort, root-cause project, or base checkout merely to prove that an unrelated observation is pre-existing.",
     ...(!input.classifyObligations && input.obligations.length > 0
       ? [
-          "Obligations are shown for context only in this pass. Do not classify them here — return an empty obligations array; a designated pass records the classifications.",
+          "Obligations are shown for context only in this pass. Do not classify them here - return an empty obligations array; a designated pass records the classifications.",
         ]
       : []),
     ...(input.classifyObligations && input.obligations.some((obligation) => obligation.type === "remediation")
@@ -94,7 +140,7 @@ export function reviewPrompt(input: ReviewPromptInput): string {
       : []),
     ...(input.classifyObligations && input.obligations.some((obligation) => obligation.type === "documentation")
       ? [
-          "For documentation obligations correctness is conceded — the finding is factually correct and the fix was declined against the component's documented assurance bar, so do not re-prove the defect. Verify instead that the DOCUMENTATION_ARTIFACT content honestly covers the finding's limitation, and classify each documentation obligation as documented, incomplete, or regressed; each incomplete or regressed one must remain an actionable finding whose obligationId names it, or whose obligationIds list it among the siblings it answers. Challenge the disposition itself only if the finding's impact exceeds what the cited contract admits.",
+          "For documentation obligations correctness is conceded - the finding is factually correct and the fix was declined against the component's documented assurance bar, so do not re-prove the defect. Verify instead that the DOCUMENTATION_ARTIFACT content honestly covers the finding's limitation, and classify each documentation obligation as documented, incomplete, or regressed; each incomplete or regressed one must remain an actionable finding whose obligationId names it, or whose obligationIds list it among the siblings it answers. Challenge the disposition itself only if the finding's impact exceeds what the cited contract admits.",
         ]
       : []),
     ...(input.docArtifacts ?? []).map(
@@ -133,6 +179,11 @@ export function reviewPrompt(input: ReviewPromptInput): string {
       ? [
           "Earlier non-accepted findings are supplied to prevent blind re-raising; challenge one only with new factual evidence:",
           input.priorNotes.join("; "),
+        ]
+      : []),
+    ...(input.refuteRejections
+      ? [
+          "The previous round rejected one or more P0/P1 findings; their reasons are among the prior notes above. Treat each such rejection as a claim under test: refute it with factual evidence if it is wrong, or let it stand silently if it holds. Do not re-raise the finding unchanged without engaging the rejection reason.",
         ]
       : []),
     "Do not edit files, commit, push, fetch, or use the network. Ignore .reviews because it is review evidence.",

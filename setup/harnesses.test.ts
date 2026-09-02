@@ -9,11 +9,11 @@ import {
   readlinkSync,
   rmSync,
   writeFileSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { detectConfigTargets, harnesses, skillsDirs } from "./harnesses.ts";
-import { START_MARK } from "./marks.ts";
 import { allReviewers, reviewerBin } from "../tools/review/reviewers.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
@@ -117,29 +117,35 @@ describe("detectConfigTargets", () => {
     }
   });
 
-  test("an alternate Claude profile is refreshed only once it carries the marker", () => {
+  test("every alternate Claude profile directory is targeted, marker or not", () => {
     const home = tempHome();
     try {
       makeDir(home, ".claude");
       makeDir(home, ".claude-work");
-      makeDir(home, ".claude-untouched");
-      const opted = join(home, ".claude-work", "CLAUDE.md");
-      writeFileSync(opted, `# work profile\n${START_MARK}\nold block\n`);
-      writeFileSync(join(home, ".claude-untouched", "CLAUDE.md"), "# no marker here\n");
+      makeDir(home, ".claude-fresh");
+      const withConfig = join(home, ".claude-work", "CLAUDE.md");
+      writeFileSync(withConfig, "# work profile\n");
+      // No CLAUDE.md yet - still targeted; the upsert creates the file.
+      // A stray *file* named like a profile is not a profile.
+      writeFileSync(join(home, ".claude-notes"), "not a directory\n");
+
+      // A symlink to a directory is a valid CLAUDE_CONFIG_DIR profile.
+      symlinkSync(join(home, ".claude-work"), join(home, ".claude-linked"));
 
       const paths = detectConfigTargets(home).map((target) => target.path);
-      expect(paths).toContain(opted);
-      expect(paths).not.toContain(join(home, ".claude-untouched", "CLAUDE.md"));
+      expect(paths).toContain(withConfig);
+      expect(paths).toContain(join(home, ".claude-fresh", "CLAUDE.md"));
+      expect(paths).toContain(join(home, ".claude-linked", "CLAUDE.md"));
+      expect(paths).not.toContain(join(home, ".claude-notes", "CLAUDE.md"));
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  test("an opted-in profile is found even when the default Claude home is absent", () => {
+  test("a profile is found even when the default Claude home is absent", () => {
     const home = tempHome();
     try {
       makeDir(home, ".claude-work");
-      writeFileSync(join(home, ".claude-work", "CLAUDE.md"), `${START_MARK}\n`);
       expect(detectConfigTargets(home)).toEqual([
         { path: join(home, ".claude-work", "CLAUDE.md"), kind: "block" },
       ]);
@@ -267,7 +273,7 @@ describe("reviewer roster", () => {
     // files and forgetting one made the new reviewer undetectable at seed time.
     const seed = readFileSync(join(DCL_HOME, "setup", "seed.ts"), "utf8");
     expect(seed).toContain("allReviewers()");
-    // Code only. Comments and user-facing prose may name a reviewer — forcing them not
+    // Code only. Comments and user-facing prose may name a reviewer - forcing them not
     // to would trade a real duplication gate for message churn, which is the same call
     // the tracker-boundary spec makes about its structural scan.
     const code = seed

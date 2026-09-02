@@ -11,7 +11,7 @@ const ACTIVE_TABLE_HEADER = `| Item | Project | State | Next-actor | Awaiting | 
 function priorityLine(priorityProjects: string[]): string {
   if (priorityProjects.length === 0) return "most recent activity first.";
   const ranked = priorityProjects.map((project, i) => `${i + 1}. ${project}`);
-  return `${ranked.join(" — ")} — ${priorityProjects.length + 1}. everything else by most recent activity.`;
+  return `${ranked.join(" - ")} - ${priorityProjects.length + 1}. everything else by most recent activity.`;
 }
 
 function header(config: LoopsConfig): string {
@@ -48,7 +48,7 @@ export function replaceActiveRow(boardText: string, item: ItemFile): string {
 
 /** Render BOARD.md text from parsed item files, normalized to the configured
  * priority order (see priority.ts), then most recent `updated`. Only items whose
- * state keeps them in items/ are rendered — for-delivery (tested/delivered) and
+ * state keeps them in items/ are rendered - for-delivery (tested/delivered) and
  * terminal (accepted/dropped) items belong in for-delivery/ and ARCHIVE.md
  * respectively, which the caller moves them to before regenerating BOARD.md. This
  * filter is defense-in-depth, not the primary move mechanism. */

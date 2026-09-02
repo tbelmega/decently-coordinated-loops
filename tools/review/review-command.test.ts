@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { addReviewRound, createReviewLedger, recordDisposition } from "./review-ledger.ts";
+import { DEFAULT_REVIEW_MAX_ROUNDS } from "../config.ts";
+import {
+  addReviewRound,
+  carryForwardDispositions,
+  createReviewLedger,
+  recordDisposition,
+  supersedeLedgerBase,
+} from "./review-ledger.ts";
 import { reviewEvidencePaths } from "./review-status.ts";
 
 const CLI = resolve(import.meta.dirname, "cli-review.ts");
@@ -87,6 +94,31 @@ function createReviewDataRepo(maxRounds: number, metadataPaths: string[] = []): 
   return dataRepo;
 }
 
+function createPersonaDataRepo(extraReview: Record<string, unknown> = {}): string {
+  const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-personas-`);
+  writeFileSync(
+    `${dataRepo}/loops.json`,
+    `${JSON.stringify({
+      review: {
+        reviewer: "codex",
+        maxRounds: 5,
+        personas: [
+          {name: "diff", fromRound: 1, toRound: 1, model: "sol-model", effort: "high"},
+          {name: "adversarial", fromRound: 1, toRound: 1, model: "sol-model", effort: "high"},
+          {name: "confirmation", fromRound: 2, model: "terra-model", effort: "medium"},
+        ],
+        ...extraReview,
+      },
+    })}\n`,
+  );
+  return dataRepo;
+}
+
+function readItemLedger(repository: string, item: string): any {
+  const paths = reviewEvidencePaths(repository, git(repository, ["branch", "--show-current"]), item);
+  return JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+}
+
 function createFakeCodex(): string {
   const directory = mkdtempSync(`${tmpdir()}/loops-fake-codex-`);
   const executable = `${directory}/codex`;
@@ -100,7 +132,7 @@ function createFakeCodex(): string {
       'if (outputIndex < 0 || !args[outputIndex + 1]) throw new Error("missing output path");',
       // Faithful to the real contract: codex takes `-` and reads instructions from stdin,
       // so the prompt never appears in argv. Asserting the `-` here keeps this fake from
-      // silently passing if the caller ever puts the prompt back on the command line —
+      // silently passing if the caller ever puts the prompt back on the command line -
       // which is what hit MAX_ARG_STRLEN (E2BIG) on a large diff.
       'if (args.at(-1) !== "-") throw new Error("expected the stdin sentinel as the last arg");',
       "const prompt = await Bun.stdin.text();",
@@ -108,6 +140,9 @@ function createFakeCodex(): string {
       'if (!inputLine) throw new Error("missing audit input");',
       'const audit = JSON.parse(inputLine.slice("AUDIT_INPUT=".length));',
       'if (process.env.FAKE_CODEX_LOG) appendFileSync(process.env.FAKE_CODEX_LOG, `${audit.pass}\\n`);',
+      'if (process.env.FAKE_CODEX_TRACE) appendFileSync(process.env.FAKE_CODEX_TRACE, `${audit.pass} start ${Date.now()}\\n`);',
+      'if (process.env.FAKE_CODEX_SLEEP_MS) await new Promise((done) => setTimeout(done, Number(process.env.FAKE_CODEX_SLEEP_MS)));',
+      'if (process.env.FAKE_FAIL_PASS && process.env.FAKE_FAIL_PASS === audit.pass) { if (process.env.FAKE_CODEX_TRACE) appendFileSync(process.env.FAKE_CODEX_TRACE, `${audit.pass} failed ${Date.now()}\\n`); process.exit(1); }',
       'let covered = process.env.FAKE_SKIP_FILE ? audit.manifest.files.slice(0, -1) : audit.manifest.files;',
       // Faithful to a compliant reviewer on a remediation round: the prompt embeds
       // remediationFiles and instructs auditing that range, so coverage comes back with
@@ -115,14 +150,16 @@ function createFakeCodex(): string {
       'if (process.env.FAKE_UNION_REMEDIATION) covered = covered.map((file) => { const extra = (audit.manifest.remediationFiles ?? []).find((r) => r.path === file.path); return extra ? { path: file.path, hunks: [...new Set([...extra.hunks, ...file.hunks])] } : file; });',
       // Faithful to a compliant reviewer: the prompt names every metadata file and asks for
       // it to be inspected, so coverage comes back including them. The validator must permit
-      // that — rejecting it invalidated rounds that had found nothing wrong.
+      // that - rejecting it invalidated rounds that had found nothing wrong.
       'const files = [...covered, ...(audit.manifest.metadataFiles ?? [])];',
       // Typed statuses mirror a compliant reviewer: remediation obligations classify
       // fixed, documentation obligations documented, unless a test overrides either.
       'const obligationStatusFor = (obligation) => obligation.type === "documentation" ? (process.env.FAKE_DOC_STATUS ?? "documented") : (process.env.FAKE_OBLIGATION_STATUS ?? "fixed");',
       'const obligations = audit.requiredObligationIds.length > 0 ? audit.obligations.map((obligation) => ({ findingId: obligation.findingId, status: obligationStatusFor(obligation), evidence: "verified" })) : [];',
       'const findings = process.env.FAKE_FINDINGS_JSON ? JSON.parse(process.env.FAKE_FINDINGS_JSON) : [];',
-      'await Bun.write(args[outputIndex + 1], JSON.stringify({ pass: audit.pass, summary: "clean", coverage: { files, instructionFiles: audit.manifest.instructionFiles, callsites: [] }, obligations, findings }));',
+      'const notes = process.env.FAKE_NOTES_JSON ? JSON.parse(process.env.FAKE_NOTES_JSON) : [];',
+      'await Bun.write(args[outputIndex + 1], JSON.stringify({ pass: audit.pass, summary: "clean", coverage: { files, instructionFiles: audit.manifest.instructionFiles, callsites: [] }, obligations, findings, notes }));',
+      'if (process.env.FAKE_CODEX_TRACE) appendFileSync(process.env.FAKE_CODEX_TRACE, `${audit.pass} end ${Date.now()}\\n`);',
       "",
     ].join("\n"),
   );
@@ -168,8 +205,14 @@ function writeItemWithLinks(dataRepo: string, item: string, links: Record<string
   );
 }
 
-function runStatus(repository: string, item?: string, cwd = repository) {
-  return spawnSync("bun", ["run", CLI, "status", ...(item ? ["--item", item] : [])], {
+function runStatus(repository: string, item?: string, cwd = repository, dataRepo?: string) {
+  return spawnSync("bun", [
+    "run",
+    CLI,
+    "status",
+    ...(item ? ["--item", item] : []),
+    ...(dataRepo ? ["--data-repo", dataRepo] : []),
+  ], {
     cwd,
     encoding: "utf8",
   });
@@ -182,11 +225,12 @@ function runDisposition(
   status: string,
   reason: string,
   extraArgs: string[] = [],
+  extraEnv: Record<string, string> = {},
 ) {
   return spawnSync(
     "bun",
     ["run", CLI, "disposition", "--item", item, "--finding", findingId, "--status", status, "--reason", reason, ...extraArgs],
-    { cwd: repository, encoding: "utf8" },
+    { cwd: repository, encoding: "utf8", env: {...process.env, ...extraEnv} },
   );
 }
 
@@ -202,9 +246,36 @@ function fakeFinding(overrides: Record<string, unknown> = {}): Record<string, un
     direction: "document or fix the recovery path",
     confidence: "high",
     origin: "original",
+    causality: "introduced",
     obligationId: null,
+    obligationIds: null,
     ...overrides,
   };
+}
+
+function followUpItemText(sourceItem: string, findingId: string, state = "idea", includeContext = true): string {
+  return (
+    `---\ntitle: Repair the crash lock\nproject: test\nstate: ${state}\nassignee: "-"\nautonomy: auto\n` +
+    `next-actor: agent\nnext-step: Investigate the review finding\nupdated: 2026-08-23\n---\n\n` +
+    `Review source: \`${sourceItem}#${findingId}\`\n` +
+    (includeContext
+      ? "Review finding: Lock loss on crash\n" +
+        "Review location: `change.txt:1`\n" +
+        "Review evidence: lock file survives a crash\n" +
+        "Review impact: next writer waits forever\n" +
+        "Review direction: document or fix the recovery path\n"
+      : "")
+  );
+}
+
+function commitDataRepo(dataRepo: string, message: string): void {
+  if (!existsSync(`${dataRepo}/.git`)) {
+    git(dataRepo, ["init", "-q", "-b", "master"]);
+    git(dataRepo, ["config", "user.email", "test@example.com"]);
+    git(dataRepo, ["config", "user.name", "Test"]);
+  }
+  git(dataRepo, ["add", "."]);
+  git(dataRepo, ["commit", "-q", "-m", message]);
 }
 
 function readLedgerJson(repository: string, item: string): any {
@@ -232,7 +303,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=passed model="codex (default)" rounds=1 head=${headSha} ledger=${relative(repository, paths.markdownPath)}`,
+      `REVIEW_STATUS=passed model="codex (default)" epoch=1 rounds=1 total_rounds=1 residual_notes=0 head=${headSha} ledger=${relative(repository, paths.markdownPath)}`,
     );
   });
 
@@ -262,7 +333,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=passed item="second-item" model="codex (default)" rounds=1 head=${headSha} ledger=${relative(repository, secondPaths.markdownPath)}`,
+      `REVIEW_STATUS=passed item="second-item" model="codex (default)" epoch=1 rounds=1 total_rounds=1 residual_notes=0 head=${headSha} ledger=${relative(repository, secondPaths.markdownPath)}`,
     );
   });
 
@@ -441,7 +512,7 @@ describe("cli-review start", () => {
 
   test("completes a round when the range's diff exceeds spawnSync's default output buffer", () => {
     // spawnSync's default maxBuffer is 1 MiB. A review range outgrows that long before anything
-    // else strains, and when it does spawnSync returns status=null with an EMPTY stderr — so the
+    // else strains, and when it does spawnSync returns status=null with an EMPTY stderr - so the
     // failure surfaced as "git <args> failed" with no cause, while running the same `git diff` by
     // hand succeeded. A whole round died on it 2026-08-08 at a diff of 1,093,049 bytes.
     const {repository} = createLargeDiffRepository();
@@ -500,13 +571,13 @@ describe("cli-review start", () => {
     ).toBe(0);
 
     expect(readdirSync(dumpDirectory).sort()).toEqual([
-      "dump-on-round1-adversarial.prompt.txt",
-      "dump-on-round1-diff.prompt.txt",
-      "dump-on-round1-integration.prompt.txt",
+      "dump-on-epoch1-round1-adversarial.prompt.txt",
+      "dump-on-epoch1-round1-diff.prompt.txt",
+      "dump-on-epoch1-round1-integration.prompt.txt",
     ]);
     // The dump is the reviewer's actual input, so a rejected round can be reproduced by
     // hand rather than reconstructed from this tool's source.
-    const dumped = readFileSync(`${dumpDirectory}/dump-on-round1-diff.prompt.txt`, "utf8");
+    const dumped = readFileSync(`${dumpDirectory}/dump-on-epoch1-round1-diff.prompt.txt`, "utf8");
     expect(dumped).toContain("AUDIT_PASS=diff");
     expect(dumped).toContain("change.txt");
   });
@@ -541,15 +612,24 @@ describe("cli-review start", () => {
   test("fails the logical attempt when one pass omits manifest coverage", () => {
     const { repository } = createReviewRepository();
     const item = "incomplete-coverage";
+    const dataRepo = createReviewDataRepo(5);
 
-    const result = runStart(repository, createReviewDataRepo(5), item, "master", {FAKE_SKIP_FILE: "1"});
+    const result = runStart(repository, dataRepo, item, "master", {FAKE_SKIP_FILE: "1"});
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("coverage is incomplete for change.txt");
     const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
     const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
     expect(ledger.rounds).toHaveLength(0);
-    expect(ledger.failures).toHaveLength(1);
+    expect(ledger.failures).toMatchObject([{epoch: 1, logicalRound: 1, attempt: "a"}]);
+
+    expect(runStart(repository, dataRepo, item, "master", {FAKE_SKIP_FILE: "1"}).status).toBe(1);
+    const retried = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    expect(retried.rounds).toHaveLength(0);
+    expect(retried.failures).toMatchObject([
+      {epoch: 1, logicalRound: 1, attempt: "a"},
+      {epoch: 1, logicalRound: 1, attempt: "b"},
+    ]);
   });
 
   test("uses the configured five-round cap", () => {
@@ -575,7 +655,7 @@ describe("cli-review start", () => {
           }],
         },
       });
-      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not an actionable defect");
+      ledger = recordDisposition(ledger, `E1-R${roundNumber}-F1`, "rejected", "Not an actionable defect");
     }
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
 
@@ -611,7 +691,7 @@ describe("cli-review start", () => {
         }],
       },
     });
-    ledger = recordDisposition(ledger, "R1-F1", "rejected", "Not an actionable defect");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "rejected", "Not an actionable defect");
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
     const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-data-`);
     writeFileSync(
@@ -647,14 +727,14 @@ describe("cli-review start", () => {
     });
     expect(first.status).toBe(0);
 
-    const unauthorized = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+    const unauthorized = runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
       "coordination-prose",
     ]);
     expect(unauthorized.status).not.toBe(0);
     expect(unauthorized.stderr).toContain("waiver is not authorized: no data repo resolved");
 
-    const waived = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+    const waived = runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
       "coordination-prose",
       "--data-repo",
@@ -713,7 +793,7 @@ describe("cli-review start", () => {
     );
     expect(foreignStatus.status).not.toBe(0);
     expect(foreignStatus.stdout).toContain("not authorized");
-    const foreignWaiver = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+    const foreignWaiver = runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
       "coordination-prose",
       "--data-repo",
@@ -756,7 +836,7 @@ describe("cli-review start", () => {
     // Unregistering that project would otherwise fall the resolution through to the
     // global block; the recorded authority has to refuse instead.
     writeConfig({});
-    const unregistered = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+    const unregistered = runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
       "coordination-prose",
       "--data-repo",
@@ -771,7 +851,7 @@ describe("cli-review start", () => {
         review: { classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2"] }] },
       },
     });
-    const waived = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+    const waived = runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
       "coordination-prose",
       "--data-repo",
@@ -801,7 +881,7 @@ describe("cli-review start", () => {
     );
     expect(repointedStatus.status).not.toBe(0);
     expect(repointedStatus.stdout).toContain("not authorized");
-    const repointedWaiver = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+    const repointedWaiver = runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
       "coordination-prose",
       "--data-repo",
@@ -823,7 +903,7 @@ describe("cli-review start", () => {
         review: { classes: [{ name: "coordination-prose", match: ["change.txt"], waivablePriorities: ["P2"] }] },
       },
     });
-    const uncheckable = runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+    const uncheckable = runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
       "--class",
       "coordination-prose",
       "--data-repo",
@@ -855,7 +935,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "waived-by-policy", "Prose nit", [
+      runDisposition(repository, item, "E1-R1-F1", "waived-by-policy", "Prose nit", [
         "--class",
         "coordination-prose",
         "--data-repo",
@@ -898,7 +978,7 @@ describe("cli-review start", () => {
         FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
       }).status,
     ).toBe(0);
-    expect(runDisposition(repository, item, "R1-F1", "rejected", "Not a defect").status).toBe(0);
+    expect(runDisposition(repository, item, "E1-R1-F1", "rejected", "Not a defect").status).toBe(0);
     writeFileSync(`${repository}/change.txt`, "review me\nagain\n");
     git(repository, ["add", "change.txt"]);
     git(repository, ["commit", "-q", "-m", "Touch the file again"]);
@@ -1136,7 +1216,7 @@ describe("cli-review start", () => {
           }],
         },
       });
-      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not an actionable defect");
+      ledger = recordDisposition(ledger, `E1-R${roundNumber}-F1`, "rejected", "Not an actionable defect");
     }
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
 
@@ -1189,7 +1269,7 @@ describe("cli-review start", () => {
         }]},
       },
     );
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix", {causality: "introduced"});
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
     writeFileSync(`${repository}/change.txt`, "review me\nfix attempt\n");
     git(repository, ["add", "change.txt"]);
@@ -1197,7 +1277,7 @@ describe("cli-review start", () => {
 
     const result = runStart(repository, dataRepo, item, baseSha, {FAKE_OBLIGATION_STATUS: "incomplete"});
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("R1-F1 must remain an actionable finding");
+    expect(result.stderr).toContain("E1-R1-F1 must remain an actionable finding");
   });
 
   test("keeps sibling obligations answered by one finding that names them all", () => {
@@ -1228,8 +1308,10 @@ describe("cli-review start", () => {
         review: {summary: "fix", findings: [finding("Defect as the diff pass saw it"), finding("Defect as the adversarial pass saw it")]},
       },
     );
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
-    ledger = recordDisposition(ledger, "R1-F2", "accepted", "same defect, will fix with R1-F1");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix", {causality: "introduced"});
+    ledger = recordDisposition(ledger, "E1-R1-F2", "accepted", "same defect, will fix with E1-R1-F1", {
+      causality: "introduced",
+    });
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
     writeFileSync(`${repository}/change.txt`, "review me\nfix attempt\n");
     git(repository, ["add", "change.txt"]);
@@ -1245,7 +1327,8 @@ describe("cli-review start", () => {
       direction: "make the write conditional",
       confidence: "high",
       origin: "remediation",
-      obligationIds: ["R1-F1", "R1-F2"],
+      causality: "introduced",
+      obligationIds: ["E1-R1-F1", "E1-R1-F2"],
     };
     const result = runStart(repository, dataRepo, item, baseSha, {
       FAKE_OBLIGATION_STATUS: "incomplete",
@@ -1255,16 +1338,16 @@ describe("cli-review start", () => {
     expect(result.status).toBe(0);
     const recorded = readLedgerJson(repository, item);
     expect(recorded.rounds).toHaveLength(2);
-    expect(recorded.rounds[1].findings[0].obligationIds).toEqual(["R1-F1", "R1-F2"]);
+    expect(recorded.rounds[1].findings[0].obligationIds).toEqual(["E1-R1-F1", "E1-R1-F2"]);
 
     // The first write is not the test: any later command reloads and rewrites the whole
     // ledger, and a decoder that drops the set would silently reduce the audit record to
     // the primary id from then on.
-    expect(runDisposition(repository, item, "R2-F1", "accepted", "fix the root cause").status).toBe(0);
+    expect(runDisposition(repository, item, "E1-R2-F1", "accepted", "fix the root cause").status).toBe(0);
     const afterRewrite = readLedgerJson(repository, item);
-    expect(afterRewrite.rounds[1].findings[0].obligationIds).toEqual(["R1-F1", "R1-F2"]);
+    expect(afterRewrite.rounds[1].findings[0].obligationIds).toEqual(["E1-R1-F1", "E1-R1-F2"]);
     expect(readFileSync(reviewEvidencePaths(repository, "feature/review-receipt", item).markdownPath, "utf8"))
-      .toContain("R1-F1, R1-F2");
+      .toContain("E1-R1-F1, E1-R1-F2");
   });
 
   test("names the pass whose classification left an obligation unanswered", () => {
@@ -1289,7 +1372,7 @@ describe("cli-review start", () => {
         }]},
       },
     );
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix", {causality: "introduced"});
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
     writeFileSync(`${repository}/change.txt`, "review me\nfix attempt\n");
     git(repository, ["add", "change.txt"]);
@@ -1322,7 +1405,7 @@ describe("cli-review start", () => {
         }]},
       },
     );
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix", {causality: "introduced"});
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
     writeFileSync(`${repository}/change.txt`, "review me\nfix applied\n");
     git(repository, ["add", "change.txt"]);
@@ -1368,8 +1451,8 @@ describe("cli-review start", () => {
   });
 
   // Enforcement contract rule 5 replaced the fresh-ledger restart this test used to
-  // assert: a changed patch series now supersedes the base IN the same ledger — round
-  // mechanics reset while every round and decision stays — with a snapshot of the
+  // assert: a changed patch series now supersedes the base IN the same ledger - round
+  // mechanics reset while every round and decision stays - with a snapshot of the
   // pre-supersession evidence left beside it.
   test("supersedes the base in place when the rebased patch series changes", () => {
     const {repository, baseSha} = createReviewRepository();
@@ -1388,13 +1471,16 @@ describe("cli-review start", () => {
     git(repository, ["commit", "-q", "-m", "Change reviewed patch"]);
     const newBaseSha = git(repository, ["rev-parse", "master"]);
 
-    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const restarted = runStart(repository, dataRepo, item);
+    expect(restarted.status).toBe(0);
+    expect(restarted.stdout).toContain("Review round 1 (epoch 2)");
     const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
     const superseded = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
     expect(superseded.rounds).toHaveLength(2);
     expect(superseded.baseSha).toBe(newBaseSha);
     expect(superseded.supersessions).toHaveLength(1);
     expect(superseded.supersessions[0]).toMatchObject({afterRound: 1, baseSha});
+    expect(superseded.rounds[1]).toMatchObject({epoch: 2, logicalRound: 1});
     expect(superseded.rounds[1].audit.kind).toBe("full");
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
   });
@@ -1408,7 +1494,7 @@ describe("cli-review start", () => {
         FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
       }).status,
     ).toBe(0);
-    expect(runDisposition(repository, item, "R1-F1", "accepted", "will fix").status).toBe(0);
+    expect(runDisposition(repository, item, "E1-R1-F1", "accepted", "will fix").status).toBe(0);
 
     git(repository, ["switch", "-q", "master"]);
     writeFileSync(`${repository}/base-two.txt`, "new base\n");
@@ -1426,7 +1512,7 @@ describe("cli-review start", () => {
     expect(ledger.rounds).toHaveLength(2);
     expect(ledger.rounds[1].audit.kind).toBe("remediation");
     expect(ledger.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "fixed", evidence: "verified", type: "remediation"},
+      {findingId: "E1-R1-F1", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
   });
 
@@ -1440,7 +1526,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1465,7 +1551,7 @@ describe("cli-review start", () => {
     expect(ledger.supersessions).toHaveLength(1);
     expect(ledger.rounds).toHaveLength(2);
     expect(ledger.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "documented", evidence: "verified", type: "documentation"},
+      {findingId: "E1-R1-F1", status: "documented", evidence: "verified", type: "documentation"},
     ]);
   });
 
@@ -1479,7 +1565,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1490,7 +1576,7 @@ describe("cli-review start", () => {
     git(repository, ["commit", "-q", "-m", "Document the limitation"]);
     expect(runStart(repository, dataRepo, item).status).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted", "owner ruled: fix it", ["--owner"]).status,
+      runDisposition(repository, item, "E1-R1-F1", "accepted", "owner ruled: fix it", ["--owner"]).status,
     ).toBe(0);
 
     git(repository, ["switch", "-q", "master"]);
@@ -1507,7 +1593,7 @@ describe("cli-review start", () => {
     const ledger = readLedgerJson(repository, item);
     expect(ledger.supersessions).toHaveLength(1);
     expect(ledger.rounds.at(-1).audit.obligations).toEqual([
-      {findingId: "R1-F1#2", status: "fixed", evidence: "verified", type: "remediation"},
+      {findingId: "E1-R1-F1#2", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
   });
 
@@ -1527,7 +1613,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1538,7 +1624,7 @@ describe("cli-review start", () => {
     git(repository, ["commit", "-q", "-m", "Document the limitation"]);
     expect(runStart(repository, dataRepo, item).status).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted", "owner ruled: fix it", ["--owner"]).status,
+      runDisposition(repository, item, "E1-R1-F1", "accepted", "owner ruled: fix it", ["--owner"]).status,
     ).toBe(0);
 
     const midSeriesBase = git(repository, ["rev-parse", "HEAD~1"]);
@@ -1563,7 +1649,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1581,7 +1667,7 @@ describe("cli-review start", () => {
     expect(ledger.supersessions ?? []).toHaveLength(0);
     expect(ledger.rounds.at(-1).audit.kind).toBe("base-delta");
     expect(ledger.rounds.at(-1).audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "documented", evidence: "verified", type: "documentation"},
+      {findingId: "E1-R1-F1", status: "documented", evidence: "verified", type: "documentation"},
     ]);
   });
 
@@ -1616,7 +1702,7 @@ describe("cli-review start", () => {
           }],
         },
       });
-      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not reproducible on re-check");
+      ledger = recordDisposition(ledger, `E1-R${roundNumber}-F1`, "rejected", "Not reproducible on re-check");
     }
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
 
@@ -1659,7 +1745,7 @@ describe("cli-review start", () => {
       runStart(repository, dataRepo, item, "master", {FAKE_FINDINGS_JSON: JSON.stringify(findings)}).status,
     ).toBe(0);
 
-    const limited = runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the documented bar", [
+    const limited = runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the documented bar", [
       "--doc",
       "docs/limits.md",
     ]);
@@ -1669,10 +1755,11 @@ describe("cli-review start", () => {
       kind: "accepted-as-limitation",
       reason: "below the documented bar",
       doc: "docs/limits.md",
+      causality: "introduced",
       decidedAfterRound: 1,
     });
 
-    const withoutOwner = runDisposition(repository, item, "R1-F2", "accepted-as-limitation", "too costly", [
+    const withoutOwner = runDisposition(repository, item, "E1-R1-F2", "accepted-as-limitation", "too costly", [
       "--doc",
       "docs/limits.md",
     ]);
@@ -1681,13 +1768,197 @@ describe("cli-review start", () => {
     const withOwner = runDisposition(
       repository,
       item,
-      "R1-F2",
+      "E1-R1-F2",
       "accepted-as-limitation",
       "owner ruled 2026-08-14: below the bar",
       ["--doc", "docs/limits.md", "--owner"],
     );
     expect(withOwner.status).toBe(0);
     expect(readLedgerJson(repository, item).rounds[0].findings[1].disposition.owner).toBe(true);
+  });
+
+  test("delegates only to an authority-bound, active, committed item that preserves the finding", () => {
+    const {repository} = createReviewRepository();
+    const item = "causal-delegation";
+    const dataRepo = createReviewDataRepo(9);
+    expect(
+      runStart(repository, dataRepo, item, "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({causality: "pre-existing"})]),
+      }).status,
+    ).toBe(0);
+
+    const missing = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", "follow-up-item", "--urgency", "normal", "--data-repo", dataRepo],
+    );
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("follow-up-item");
+
+    const followUpPath = `${dataRepo}/items/follow-up-item.md`;
+    writeFileSync(
+      followUpPath,
+      followUpItemText(item, "E1-R1-F1"),
+    );
+    const untracked = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", "follow-up-item", "--urgency", "normal", "--data-repo", dataRepo],
+    );
+    expect(untracked.status).toBe(1);
+    expect(untracked.stderr).toContain("committed");
+
+    writeFileSync(followUpPath, followUpItemText(item, "E1-R1-F1", "idea", false));
+    commitDataRepo(dataRepo, "Add incomplete follow-up");
+    const incomplete = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", "follow-up-item", "--urgency", "normal", "--data-repo", dataRepo],
+    );
+    expect(incomplete.status).toBe(1);
+    expect(incomplete.stderr).toContain("Review finding:");
+
+    writeFileSync(followUpPath, followUpItemText(item, "E1-R1-F1", "dropped"));
+    commitDataRepo(dataRepo, "Make follow-up terminal");
+    const terminal = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", "follow-up-item", "--urgency", "normal", "--data-repo", dataRepo],
+    );
+    expect(terminal.status).toBe(1);
+    expect(terminal.stderr).toContain("active");
+
+    writeFileSync(`${dataRepo}/items/follow-up-target.md`, followUpItemText(item, "E1-R1-F1"));
+    unlinkSync(followUpPath);
+    symlinkSync("follow-up-target.md", followUpPath);
+    commitDataRepo(dataRepo, "Make follow-up a symlink");
+    const symlinked = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", "follow-up-item", "--urgency", "normal", "--data-repo", dataRepo],
+    );
+    expect(symlinked.status).toBe(1);
+    expect(symlinked.stderr).toContain("regular file");
+
+    unlinkSync(followUpPath);
+    writeFileSync(followUpPath, followUpItemText(item, "E1-R1-F1"));
+    commitDataRepo(dataRepo, "Activate follow-up");
+
+    writeFileSync(`${dataRepo}/items/${item}.md`, followUpItemText(item, "E1-R1-F1"));
+    commitDataRepo(dataRepo, "Add review context to source item");
+    const selfDelegated = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", item, "--urgency", "normal", "--data-repo", dataRepo],
+    );
+    expect(selfDelegated.status).toBe(1);
+    expect(selfDelegated.stderr).toContain("separate");
+
+    const otherDataRepo = createReviewDataRepo(9);
+    mkdirSync(`${otherDataRepo}/items`, {recursive: true});
+    writeFileSync(`${otherDataRepo}/items/follow-up-item.md`, followUpItemText(item, "E1-R1-F1"));
+    commitDataRepo(otherDataRepo, "Add follow-up to wrong board");
+    const wrongBoard = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", "follow-up-item", "--urgency", "normal", "--data-repo", otherDataRepo],
+    );
+    expect(wrongBoard.status).toBe(1);
+    expect(wrongBoard.stderr).toContain("policy authority");
+
+    const delegated = runDisposition(
+      repository,
+      item,
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      ["--tracks", "follow-up-item", "--urgency", "normal"],
+      {LOOPS_DATA_REPO: dataRepo},
+    );
+    expect(delegated.status).toBe(0);
+    expect(runStatus(repository, item, repository, dataRepo).stdout).toContain("REVIEW_STATUS=passed");
+    expect(readLedgerJson(repository, item).rounds[0].findings[0].disposition).toMatchObject({
+      kind: "delegated-follow-up",
+      causality: "pre-existing",
+      tracks: "follow-up-item",
+      urgency: "normal",
+    });
+
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const repeatedLedger = carryForwardDispositions(addReviewRound(readLedgerJson(repository, item), {
+      headSha: git(repository, ["rev-parse", "HEAD"]),
+      model: "codex (default)",
+      reviewedAt: "2026-08-23T14:00:00Z",
+      review: {
+        summary: "Repeated contextual finding",
+        findings: [{
+          priority: "P2",
+          title: "Lock loss on crash",
+          file: "change.txt",
+          line: 1,
+          evidence: "lock file survives a crash",
+          impact: "next writer waits forever",
+          direction: "document or fix the recovery path",
+          confidence: "high",
+          origin: "original",
+          causality: "pre-existing",
+          repeatedFrom: ["E1-R1-F1"],
+        }],
+      },
+    }));
+    writeFileSync(paths.jsonPath, `${JSON.stringify(repeatedLedger)}\n`);
+    const carriedStatus = runStatus(repository, item, repository, dataRepo);
+    expect(carriedStatus.status).toBe(0);
+    expect(carriedStatus.stdout).toContain("REVIEW_STATUS=passed");
+
+    const supersededLedger = addReviewRound(
+      supersedeLedgerBase(repeatedLedger, {
+        baseRef: "master",
+        baseSha: "new-base",
+        archivedAt: "2026-08-23T14:30:00Z",
+      }),
+      {
+        headSha: git(repository, ["rev-parse", "HEAD"]),
+        model: "codex (default)",
+        reviewedAt: "2026-08-23T15:00:00Z",
+        review: {summary: "Clean current epoch", findings: []},
+      },
+    );
+    writeFileSync(paths.jsonPath, `${JSON.stringify(supersededLedger)}\n`);
+    expect(runStatus(repository, item, repository, dataRepo).stdout).toContain("REVIEW_STATUS=passed");
+
+    writeFileSync(followUpPath, followUpItemText(item, "E1-R1-F1", "dropped"));
+    commitDataRepo(dataRepo, "Drop delegated follow-up");
+    const droppedStatus = runStatus(repository, item, repository, dataRepo);
+    expect(droppedStatus.status).toBe(1);
+    expect(droppedStatus.stdout).toContain("must remain active");
+
+    writeFileSync(followUpPath, followUpItemText(item, "E1-R1-F1", "idea", false));
+    commitDataRepo(dataRepo, "Erase delegated follow-up context");
+    const incompleteStatus = runStatus(repository, item, repository, dataRepo);
+    expect(incompleteStatus.status).toBe(1);
+    expect(incompleteStatus.stdout).toContain("must contain Review finding:");
   });
 
   test("rejects an absolute or traversal doc path at recording time", () => {
@@ -1701,7 +1972,7 @@ describe("cli-review start", () => {
     ).toBe(0);
 
     for (const doc of ["/etc/limits.md", "../outside.md"]) {
-      const result = runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      const result = runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         doc,
       ]);
@@ -1720,7 +1991,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1741,7 +2012,7 @@ describe("cli-review start", () => {
     expect(ledger.rounds).toHaveLength(2);
     expect(ledger.rounds[1].findings).toEqual([]);
     expect(ledger.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "documented", evidence: "verified", type: "documentation"},
+      {findingId: "E1-R1-F1", status: "documented", evidence: "verified", type: "documentation"},
     ]);
     const status = runStatus(repository, item);
     expect(status.status).toBe(0);
@@ -1758,7 +2029,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1785,7 +2056,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs",
       ]).status,
@@ -1810,7 +2081,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1838,7 +2109,7 @@ describe("cli-review start", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -1850,19 +2121,26 @@ describe("cli-review start", () => {
     expect(runStart(repository, dataRepo, item).status).toBe(0);
     expect(runStatus(repository, item).stdout).toContain("REVIEW_STATUS=passed");
 
-    const withoutOwner = runDisposition(repository, item, "R1-F1", "accepted", "changed my mind");
+    const withoutOwner = runDisposition(repository, item, "E1-R1-F1", "accepted", "changed my mind");
     expect(withoutOwner.status).toBe(1);
-    const reversal = runDisposition(repository, item, "R1-F1", "accepted", "owner ruled: fix it", ["--owner"]);
+    const reversal = runDisposition(repository, item, "E1-R1-F1", "accepted", "owner ruled: fix it", ["--owner"]);
     expect(reversal.status).toBe(0);
     const reversed = readLedgerJson(repository, item);
     expect(reversed.rounds[0].findings[0].disposition).toEqual({
       kind: "accepted",
       reason: "owner ruled: fix it",
+      causality: "introduced",
       owner: true,
       decidedAfterRound: 2,
     });
     expect(reversed.rounds[0].findings[0].history).toEqual([
-      {kind: "accepted-as-limitation", reason: "below the bar", doc: "docs/limits.md", decidedAfterRound: 1},
+      {
+        kind: "accepted-as-limitation",
+        reason: "below the bar",
+        doc: "docs/limits.md",
+        causality: "introduced",
+        decidedAfterRound: 1,
+      },
     ]);
 
     const unchangedHead = runStart(repository, dataRepo, item);
@@ -1879,7 +2157,7 @@ describe("cli-review start", () => {
     const confirmed = readLedgerJson(repository, item);
     expect(confirmed.rounds).toHaveLength(3);
     expect(confirmed.rounds[2].audit.obligations).toEqual([
-      {findingId: "R1-F1#2", status: "fixed", evidence: "verified", type: "remediation"},
+      {findingId: "E1-R1-F1#2", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
     expect(runStatus(repository, item).stdout).toContain("REVIEW_STATUS=passed");
   });
@@ -1908,7 +2186,7 @@ describe("cli-review start", () => {
           }],
         },
       });
-      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "Not reproducible on re-check");
+      ledger = recordDisposition(ledger, `E1-R${roundNumber}-F1`, "rejected", "Not reproducible on re-check");
     }
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
   }
@@ -1921,7 +2199,7 @@ describe("cli-review start", () => {
 
     const refused = runStart(repository, dataRepo, item);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain("rounds 1 and 2");
+    expect(refused.stderr).toContain("rounds E1-R1 and E1-R2");
     expect(refused.stderr).toContain("1/1");
     expect(refused.stderr).toContain("--step-back");
   });
@@ -1938,11 +2216,11 @@ describe("cli-review start", () => {
 
     const stale = runStart(repository, dataRepo, item, "master", {}, ["--step-back", "step-back.md"]);
     expect(stale.status).toBe(1);
-    expect(stale.stderr).toContain("unchanged from round 2");
+    expect(stale.stderr).toContain("unchanged from round E1-R2");
 
     writeFileSync(
       `${repository}/step-back.md`,
-      "Invariants: lock identity, release-on-crash. Decision: rewrite from the invariant list. Covers R1-F1, R2-F1.\n",
+      "Invariants: lock identity, release-on-crash. Decision: rewrite from the invariant list. Covers E1-R1-F1, E1-R2-F1.\n",
     );
     git(repository, ["add", "step-back.md"]);
     git(repository, ["commit", "-q", "-m", "Step back after rounds 1 and 2"]);
@@ -1951,7 +2229,11 @@ describe("cli-review start", () => {
     expect(accepted.status).toBe(0);
     const ledger = readLedgerJson(repository, item);
     expect(ledger.rounds).toHaveLength(3);
-    expect(ledger.rounds[2].stepBack).toEqual({path: "step-back.md", triggerRounds: [1, 2]});
+    expect(ledger.rounds[2].stepBack).toEqual({
+      path: "step-back.md",
+      triggerRounds: [1, 2],
+      triggerRoundIds: ["E1-R1", "E1-R2"],
+    });
   });
 
   test("fails closed when the triggering round's reviewed tree is unavailable", () => {
@@ -1961,7 +2243,7 @@ describe("cli-review start", () => {
     seedTripwireLedger(repository, item, baseSha, "0123456789abcdef0123456789abcdef01234567");
     writeFileSync(
       `${repository}/step-back.md`,
-      "Invariants: lock identity. Decision: rewrite. Covers R1-F1, R2-F1.\n",
+      "Invariants: lock identity. Decision: rewrite. Covers E1-R1-F1, E1-R2-F1.\n",
     );
     git(repository, ["add", "step-back.md"]);
     git(repository, ["commit", "-q", "-m", "Fresh step-back note"]);
@@ -2016,7 +2298,7 @@ describe("cli-review start", () => {
         },
       },
     );
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "Will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "Will fix", {causality: "introduced"});
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
 
     git(repository, ["switch", "-q", "master"]);
@@ -2033,7 +2315,7 @@ describe("cli-review start", () => {
     expect(refreshed.rounds).toHaveLength(2);
     expect(refreshed.rounds[1].audit.kind).toBe("base-delta");
     expect(refreshed.rounds[1].audit.obligations).toEqual([
-      {findingId: "R1-F1", status: "fixed", evidence: "verified", type: "remediation"},
+      {findingId: "E1-R1-F1", status: "fixed", evidence: "verified", type: "remediation"},
     ]);
     expect(refreshed.rounds[1].findings).toEqual([]);
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(false);
@@ -2093,7 +2375,7 @@ describe("cli-review scoped confirmation", () => {
         },
       },
     );
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix", {causality: "introduced"});
     writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
     writeFileSync(`${repository}/change.txt`, "review me\nfix applied\n");
     git(repository, ["add", "change.txt"]);
@@ -2192,7 +2474,7 @@ describe("cli-review scoped confirmation", () => {
       }).status,
     ).toBe(0);
     expect(
-      runDisposition(repository, item, "R1-F1", "accepted-as-limitation", "below the bar", [
+      runDisposition(repository, item, "E1-R1-F1", "accepted-as-limitation", "below the bar", [
         "--doc",
         "docs/limits.md",
       ]).status,
@@ -2212,5 +2494,626 @@ describe("cli-review scoped confirmation", () => {
     const ledger = readLedgerJson(repository, item);
     expect(ledger.rounds[1].audit.scope).toBeUndefined();
     expect(ledger.rounds[1].audit.manifest.baseSha).toBe(baseSha);
+  });
+});
+
+describe("cli-review persona engine (C2/C3)", () => {
+  const finding = (priority: string) => JSON.stringify([{
+    priority,
+    title: "boundary defect",
+    file: "change.txt",
+    line: 1,
+    evidence: "off by one",
+    impact: "wrong result",
+    direction: "fix the boundary",
+    confidence: "high",
+    origin: "original",
+    causality: "introduced",
+  }]);
+
+  test("round 1 runs the covering personas concurrently with per-pass model and effort", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = createPersonaDataRepo();
+    const trace = `${mkdtempSync(`${tmpdir()}/loops-trace-`)}/trace.log`;
+    const result = runStart(repository, dataRepo, "persona-item", "master", {
+      FAKE_CODEX_TRACE: trace,
+      FAKE_CODEX_SLEEP_MS: "400",
+    });
+    expect(result.status).toBe(0);
+    const ledger = readItemLedger(repository, "persona-item");
+    const passes = ledger.rounds[0].audit.passes;
+    expect(passes.map((pass: any) => pass.pass).sort()).toEqual(["adversarial", "diff"]);
+    for (const pass of passes) {
+      expect(pass.model).toBe("sol-model");
+      expect(pass.effort).toBe("high");
+      expect(typeof pass.elapsedMs).toBe("number");
+    }
+    // Wall time is the round's own clock, not the sum of the passes: with two 400ms
+    // passes overlapping, the round costs about one pass, and the summed reviewer
+    // compute is the larger number recorded beside it.
+    const metrics = ledger.rounds[0].audit.metrics;
+    expect(metrics.reviewerMs).toBeGreaterThan(metrics.elapsedMs);
+    expect(metrics.elapsedMs).toBeLessThan(
+      passes.reduce((total: number, pass: any) => total + pass.elapsedMs, 0),
+    );
+    // Concurrency: with each fake pass sleeping 400ms, a sequential engine would
+    // start the second pass only after the first ended; overlap proves parallelism.
+    const lines = readFileSync(trace, "utf8").trim().split("\n");
+    const at = (pass: string, event: string) =>
+      Number(lines.find((line) => line.startsWith(`${pass} ${event}`))!.split(" ")[2]);
+    expect(Math.max(at("diff", "start"), at("adversarial", "start"))).toBeLessThan(
+      Math.min(at("diff", "end"), at("adversarial", "end")),
+    );
+  });
+
+  test("a pass failure fails the attempt while the sibling pass still completes", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = createPersonaDataRepo();
+    const trace = `${mkdtempSync(`${tmpdir()}/loops-trace-`)}/trace.log`;
+    const result = runStart(repository, dataRepo, "persona-item", "master", {
+      FAKE_CODEX_TRACE: trace,
+      FAKE_FAIL_PASS: "adversarial",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("adversarial pass failed");
+    const ledger = readItemLedger(repository, "persona-item");
+    expect(ledger.rounds).toHaveLength(0);
+    expect(ledger.failures).toHaveLength(1);
+    const lines = readFileSync(trace, "utf8");
+    expect(lines).toContain("diff end");
+    expect(lines).toContain("adversarial failed");
+  });
+
+  test("an explicit --reviewer and --model outrank every persona's own choice", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = createPersonaDataRepo();
+    // The configured personas name sol-model; the run asks for one override instead.
+    const result = runStart(repository, dataRepo, "persona-item", "master", {}, [
+      "--reviewer",
+      "codex",
+      "--model",
+      "flag-model",
+      "--effort",
+      "low",
+    ]);
+    expect(result.status).toBe(0);
+    for (const pass of readItemLedger(repository, "persona-item").rounds[0].audit.passes) {
+      expect(pass.model).toBe("flag-model");
+      expect(pass.effort).toBe("low");
+    }
+  });
+
+  test("round 2 is the single confirmation persona on its own model and effort", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = createPersonaDataRepo();
+    expect(
+      runStart(repository, dataRepo, "persona-item", "master", {FAKE_FINDINGS_JSON: finding("P1")}).status,
+    ).toBe(0);
+    expect(
+      runDisposition(repository, "persona-item", "E1-R1-F1", "accepted", "fix it", ["--data-repo", dataRepo]).status,
+    ).toBe(0);
+    writeFileSync(`${repository}/change.txt`, "review me, fixed\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+    const second = runStart(repository, dataRepo, "persona-item", "master");
+    expect(second.status).toBe(0);
+    const ledger = readItemLedger(repository, "persona-item");
+    const passes = ledger.rounds[1].audit.passes;
+    expect(passes.map((pass: any) => pass.pass)).toEqual(["confirmation"]);
+    expect(passes[0].model).toBe("terra-model");
+    expect(passes[0].effort).toBe("medium");
+  });
+
+  describe("scoped confirmation with widening (C2)", () => {
+    function scopedSetup(priority: string): { repository: string; dataRepo: string } {
+      const { repository } = createReviewRepository();
+      const dataRepo = createPersonaDataRepo({confirmation: "scoped"});
+      expect(
+        runStart(repository, dataRepo, "persona-item", "master", {FAKE_FINDINGS_JSON: finding(priority)}).status,
+      ).toBe(0);
+      expect(
+        runDisposition(repository, "persona-item", "E1-R1-F1", "accepted", "fix it", ["--data-repo", dataRepo]).status,
+      ).toBe(0);
+      return { repository, dataRepo };
+    }
+
+    test("a small P1 fix keeps the scoped remediation range", () => {
+      const { repository, dataRepo } = scopedSetup("P1");
+      writeFileSync(`${repository}/change.txt`, "review me, fixed\n");
+      git(repository, ["add", "change.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+      expect(runStart(repository, dataRepo, "persona-item", "master").status).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(round.audit.scope).toBe("remediation-range");
+      expect(round.audit.passes.map((pass: any) => pass.pass)).toEqual(["confirmation"]);
+    });
+
+    test("a fix delta touching more files than the original range widens back to full", () => {
+      const { repository, dataRepo } = scopedSetup("P1");
+      writeFileSync(`${repository}/change.txt`, "review me, fixed\n");
+      writeFileSync(`${repository}/second.txt`, "collateral\n");
+      writeFileSync(`${repository}/third.txt`, "more collateral\n");
+      git(repository, ["add", "change.txt", "second.txt", "third.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix boundary widely"]);
+      expect(runStart(repository, dataRepo, "persona-item", "master").status).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(round.audit.scope).toBe("full-widened");
+      expect(round.audit.manifest.files.length).toBeGreaterThan(1);
+    });
+
+    test("an open P0 obligation widens back to full whatever the fix size", () => {
+      const { repository, dataRepo } = scopedSetup("P0");
+      writeFileSync(`${repository}/change.txt`, "review me, fixed\n");
+      git(repository, ["add", "change.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+      expect(runStart(repository, dataRepo, "persona-item", "master").status).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(round.audit.scope).toBe("full-widened");
+    });
+
+    test("--shadow-full records the round-1 personas non-blockingly, failures included", () => {
+      const { repository, dataRepo } = scopedSetup("P1");
+      writeFileSync(`${repository}/change.txt`, "review me, fixed\n");
+      git(repository, ["add", "change.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+      const result = runStart(
+        repository,
+        dataRepo,
+        "persona-item",
+        "master",
+        {FAKE_FAIL_PASS: "adversarial"},
+        ["--shadow-full"],
+      );
+      expect(result.status).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(round.audit.scope).toBe("remediation-range");
+      expect(round.audit.shadow).toBeDefined();
+      expect(round.audit.shadow.passes.map((pass: any) => pass.pass)).toEqual(["diff"]);
+      expect(round.audit.shadow.errors).toHaveLength(1);
+      expect(round.audit.shadow.errors[0]).toContain("adversarial");
+    });
+
+    test("a shadowed round's own cost is measured, not folded into the blocking round", () => {
+      const { repository, dataRepo } = scopedSetup("P1");
+      writeFileSync(`${repository}/change.txt`, "review me, fixed\n");
+      git(repository, ["add", "change.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+      expect(
+        runStart(repository, dataRepo, "persona-item", "master", {}, ["--shadow-full"]).status,
+      ).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      // The blocking wall clock stops before the shadow passes start, so the shadow's
+      // cost has to be recorded separately or it vanishes from the C2 comparison.
+      expect(round.audit.metrics.shadowElapsedMs).toBeGreaterThanOrEqual(0);
+      expect(round.audit.metrics.shadowReviewerMs).toBeGreaterThanOrEqual(0);
+      expect(round.audit.shadow.passes.length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("cli-review taxonomy, floor, and cap wiring (C1/C7)", () => {
+  /** A data repo whose review block is exactly the given keys plus a codex reviewer. */
+  function keyedDataRepo(review: Record<string, unknown>): string {
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-keys-`);
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review: {reviewer: "codex", ...review}})}\n`);
+    return dataRepo;
+  }
+
+  function promptsFrom(directory: string): string {
+    return readdirSync(directory)
+      .map((entry) => readFileSync(join(directory, entry), "utf8"))
+      .join("\n");
+  }
+
+  test("capExit alone still emits the priority definitions it grades against", () => {
+    const { repository } = createReviewRepository();
+    const dump = mkdtempSync(`${tmpdir()}/loops-prompt-`);
+    const result = runStart(repository, keyedDataRepo({maxRounds: 2, capExit: true}), "cap-item", "master", {
+      LOOPS_REVIEW_DUMP_PROMPT: dump,
+    });
+    expect(result.status).toBe(0);
+    expect(promptsFrom(dump)).toContain("Priority definitions");
+  });
+
+  test("scoped confirmation under personas emits them for its P0 widening rule", () => {
+    const { repository } = createReviewRepository();
+    const dump = mkdtempSync(`${tmpdir()}/loops-prompt-`);
+    const dataRepo = createPersonaDataRepo({confirmation: "scoped"});
+    expect(runStart(repository, dataRepo, "persona-item", "master", {LOOPS_REVIEW_DUMP_PROMPT: dump}).status).toBe(0);
+    expect(promptsFrom(dump)).toContain("Priority definitions");
+  });
+
+  test("no dependent key leaves the prompt as it was before the taxonomy existed", () => {
+    const { repository } = createReviewRepository();
+    const dump = mkdtempSync(`${tmpdir()}/loops-prompt-`);
+    expect(runStart(repository, keyedDataRepo({maxRounds: 2}), "plain-item", "master", {
+      LOOPS_REVIEW_DUMP_PROMPT: dump,
+    }).status).toBe(0);
+    expect(promptsFrom(dump)).not.toContain("Priority definitions");
+  });
+
+  test("a P2 the reviewer misroutes into findings is demoted to a note under the floor", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 3, severityFloor: "all-rounds"});
+    const result = runStart(repository, dataRepo, "floored-item", "master", {
+      FAKE_FINDINGS_JSON: JSON.stringify([
+        fakeFinding({priority: "P2", title: "Missing regression test"}),
+        fakeFinding({priority: "P1", title: "Wrong result on the realistic path"}),
+      ]),
+    });
+    expect(result.status).toBe(0);
+    const round = readItemLedger(repository, "floored-item").rounds[0];
+    // The P1 blocks; the P2 becomes a non-blocking note that owes no disposition, and
+    // its evidence and impact survive the move. Demotion happens after the passes are
+    // combined, so three passes reporting one observation leave one note.
+    expect(round.findings.map((finding: any) => finding.priority)).toEqual(["P1"]);
+    expect(round.notes.map((note: any) => note.pass)).toEqual(["diff"]);
+    expect(round.notes[0].priority).toBe("P2");
+    expect(round.notes[0].title).toBe("Missing regression test");
+    expect(round.notes[0].detail).toContain("lock file survives a crash");
+  });
+
+  test("round 1 keeps a P2 blocking while the floor starts at round 2", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 3, severityFloor: "round-2-plus"});
+    expect(
+      runStart(repository, dataRepo, "floored-later", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({priority: "P2"})]),
+      }).status,
+    ).toBe(0);
+    const round = readItemLedger(repository, "floored-later").rounds[0];
+    expect(round.findings.map((finding: any) => finding.priority)).toEqual(["P2"]);
+    expect(round.notes ?? []).toHaveLength(0);
+  });
+
+  test("naming an obligation the round closed does not exempt a new low-priority finding", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 4, severityFloor: "round-2-plus"});
+    expect(
+      runStart(repository, dataRepo, "closed-obl-item", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({priority: "P2"})]),
+      }).status,
+    ).toBe(0);
+    runDisposition(repository, "closed-obl-item", "E1-R1-F1", "accepted", "worth fixing", ["--data-repo", dataRepo]);
+    writeFileSync(`${repository}/change.txt`, "fixed\n");
+    git(repository, ["commit", "-qam", "Fix the nit"]);
+    // The obligation is classified fixed, and a new P2 rides along on its id. With the
+    // obligation closed nothing needs an actionable finding, so the floor demotes it.
+    expect(
+      runStart(repository, dataRepo, "closed-obl-item", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([
+          fakeFinding({
+            priority: "P2",
+            title: "Unrelated nit riding on a closed obligation",
+            obligationId: "E1-R1-F1",
+            obligationIds: ["E1-R1-F1"],
+          }),
+        ]),
+      }).status,
+    ).toBe(0);
+    const round = readItemLedger(repository, "closed-obl-item").rounds[1];
+    expect(round.findings).toHaveLength(0);
+    expect(round.notes.map((note: any) => note.title)).toEqual(["Unrelated nit riding on a closed obligation"]);
+  });
+
+  test("an owner-raised round cap outlives the invocation that authorized it", () => {
+    const { repository } = createReviewRepository();
+    // Configured cap 1, owner-authorized 2: the raise is what lets round 2 run at all,
+    // and `status` must read the authorized cap rather than the configured one.
+    const dataRepo = keyedDataRepo({maxRounds: 1, capExit: true, severityFloor: "all-rounds"});
+    expect(
+      runStart(repository, dataRepo, "capped-item", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({priority: "P2", title: "Nit worth tracking"})]),
+      }, ["--max-rounds", "2"]).status,
+    ).toBe(0);
+    const ledger = readItemLedger(repository, "capped-item");
+    expect(ledger.maxRoundsOverride).toBe(2);
+    const paths = reviewEvidencePaths(repository, git(repository, ["branch", "--show-current"]), "capped-item");
+    expect(readFileSync(paths.markdownPath, "utf8")).toContain("- Max rounds (owner-authorized): 2");
+    // One live round of an authorized two: the cap is not reached, so no cap exit.
+    const status = runStatus(repository, "capped-item", repository, dataRepo);
+    expect(status.stdout).not.toContain("cap_exit=true");
+  });
+
+  test("a round records the effective cap even when no cap was configured", () => {
+    const { repository } = createReviewRepository();
+    // `capExit` with no `maxRounds`: the built-in default governs. A measurement that
+    // only recorded an explicitly configured number would later read this round's cap
+    // exit as a stall, undercounting exactly the exit C7 exists to make cheap.
+    const dataRepo = keyedDataRepo({capExit: true});
+    expect(runStart(repository, dataRepo, "default-cap-item", "master").status).toBe(0);
+    const round = readItemLedger(repository, "default-cap-item").rounds[0];
+    expect(round.audit.policy.maxRounds).toBe(DEFAULT_REVIEW_MAX_ROUNDS);
+    expect(round.audit.policy.capExit).toBe(true);
+  });
+
+  test("a later, lower --max-rounds cannot retract an authorization already given", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 1, capExit: true});
+    expect(
+      runStart(repository, dataRepo, "capped-item", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({priority: "P1"})]),
+      }, ["--max-rounds", "4"]).status,
+    ).toBe(0);
+    expect(readItemLedger(repository, "capped-item").maxRoundsOverride).toBe(4);
+    runDisposition(repository, "capped-item", "E1-R1-F1", "accepted", "the defect is real", ["--data-repo", dataRepo]);
+    writeFileSync(`${repository}/change.txt`, "fixed\n");
+    git(repository, ["commit", "-qam", "Address the finding"]);
+    // A second round asked for a cap of 2. The recorded authorization stays 4, so the
+    // rounds the owner allowed are still there to be used.
+    expect(runStart(repository, dataRepo, "capped-item", "master", {}, ["--max-rounds", "2"]).status).toBe(0);
+    expect(readItemLedger(repository, "capped-item").maxRoundsOverride).toBe(4);
+  });
+
+  test("an invented obligation reference cannot keep a low-priority finding blocking", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 3, severityFloor: "all-rounds"});
+    // No obligation is open in round 1, so the id names nothing: the floor holds and
+    // the observation lands as a note rather than costing another round.
+    expect(
+      runStart(repository, dataRepo, "invented-item", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([
+          fakeFinding({priority: "P2", title: "Nit with a made-up reference", obligationId: "invented", obligationIds: ["invented"]}),
+        ]),
+      }).status,
+    ).toBe(0);
+    const round = readItemLedger(repository, "invented-item").rounds[0];
+    expect(round.findings).toHaveLength(0);
+    expect(round.notes.map((note: any) => note.title)).toEqual(["Nit with a made-up reference"]);
+  });
+
+  test("a floored round keeps the finding an open low-priority obligation needs", () => {
+    const { repository } = createReviewRepository();
+    // round-2-plus: the P2 blocks in round 1 and becomes an obligation, and the floored
+    // round 2 must still be able to report that obligation incomplete.
+    const dataRepo = keyedDataRepo({maxRounds: 4, severityFloor: "round-2-plus"});
+    expect(
+      runStart(repository, dataRepo, "obliged-item", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({priority: "P2"})]),
+      }).status,
+    ).toBe(0);
+    runDisposition(repository, "obliged-item", "E1-R1-F1", "accepted", "worth fixing", ["--data-repo", dataRepo]);
+    writeFileSync(`${repository}/change.txt`, "attempted\n");
+    git(repository, ["commit", "-qam", "Attempt the fix"]);
+    const round2 = runStart(repository, dataRepo, "obliged-item", "master", {
+      FAKE_OBLIGATION_STATUS: "incomplete",
+      FAKE_FINDINGS_JSON: JSON.stringify([
+        fakeFinding({
+          priority: "P2",
+          title: "Fix is still incomplete",
+          origin: "remediation",
+          causality: "unmet-obligation",
+          obligationId: "E1-R1-F1",
+          obligationIds: ["E1-R1-F1"],
+        }),
+        fakeFinding({priority: "P2", title: "A free-standing nit", file: "change.txt"}),
+      ]),
+    });
+    expect(round2.status).toBe(0);
+    const round = readItemLedger(repository, "obliged-item").rounds[1];
+    // The obligation carrier survives the floor; the free-standing P2 demotes.
+    expect(round.findings.map((finding: any) => finding.title)).toEqual(["Fix is still incomplete"]);
+    expect(round.findings[0].obligationIds).toEqual(["E1-R1-F1"]);
+    expect(round.notes.map((note: any) => note.title)).toEqual(["A free-standing nit"]);
+  });
+});
+
+describe("cli-review profiles (C8)", () => {
+  const MVP_PROFILE = {
+    maxRounds: 2,
+    severityFloor: "all-rounds",
+    terminalRejection: true,
+    capExit: true,
+    personas: [
+      {name: "diff", fromRound: 1, toRound: 1, model: "sol-model", effort: "high"},
+      {name: "adversarial", fromRound: 1, toRound: 1, model: "sol-model", effort: "medium"},
+      {name: "confirmation", fromRound: 2, model: "terra-model", effort: "medium"},
+    ],
+  };
+
+  function profileDataRepo(review: Record<string, unknown>): string {
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-profile-`);
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review})}\n`);
+    return dataRepo;
+  }
+
+  function itemWithProfile(dataRepo: string, item: string, specLine: string | null, body = ""): void {
+    mkdirSync(`${dataRepo}/items`, {recursive: true});
+    writeFileSync(
+      `${dataRepo}/items/${item}.md`,
+      `---\ntitle: Review test\nproject: test\nstate: in-progress\nowner: test\nautonomy: autonomous\nnext-actor: agent\nnext-step: Review\nupdated: 2026-08-23\nreview:\n  profile: mvp\n${specLine ? `links:\n  spec: ${specLine}\n` : ""}---\n${body}`,
+    );
+  }
+
+  /** Commits the item alongside the spec: the C8 gate honors an item-level selection
+   * only when the item's own `review.profile` and `links.spec` are what HEAD holds. */
+  function commitSelection(dataRepo: string): void {
+    git(dataRepo, ["add", "-A"]);
+    git(dataRepo, ["commit", "-q", "-m", "Record the item's profile selection"]);
+  }
+
+  function trackedSpec(dataRepo: string, front: string): string {
+    git(dataRepo, ["init", "-q"]);
+    git(dataRepo, ["config", "user.email", "test@example.com"]);
+    git(dataRepo, ["config", "user.name", "Test"]);
+    mkdirSync(`${dataRepo}/docs/specs`, {recursive: true});
+    writeFileSync(`${dataRepo}/docs/specs/feature.md`, `---\n${front}\n---\n\nThe spec.\n`);
+    git(dataRepo, ["add", "-A"]);
+    git(dataRepo, ["commit", "-q", "-m", "Spec"]);
+    return "docs/specs/feature.md";
+  }
+
+  test("an owner-approved spec authorizes the item's profile; the ledger and status carry it", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", maxRounds: 5, profiles: {mvp: MVP_PROFILE}});
+    const specPath = trackedSpec(dataRepo, "review-profile: mvp");
+    itemWithProfile(dataRepo, "profiled-item", specPath);
+    commitSelection(dataRepo);
+    const result = runStart(repository, dataRepo, "profiled-item", "master", {
+      FAKE_NOTES_JSON: JSON.stringify([{priority: "P2", title: "minor nit", file: null, line: null, detail: "note"}]),
+    });
+    expect(result.status).toBe(0);
+    const ledger = readItemLedger(repository, "profiled-item");
+    expect(ledger.profile).toBe("mvp");
+    // The mvp personas govern round 1, and all-rounds floors it: the P2 lands as a note.
+    expect(ledger.rounds[0].audit.passes.map((pass: any) => pass.pass).sort()).toEqual(["adversarial", "diff"]);
+    expect(ledger.rounds[0].notes).toHaveLength(2);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", "profiled-item");
+    expect(readFileSync(paths.markdownPath, "utf8")).toContain("- Profile: `mvp`");
+    const status = spawnSync(
+      "bun",
+      ["run", CLI, "status", "--item", "profiled-item", "--data-repo", dataRepo],
+      {cwd: repository, encoding: "utf8"},
+    );
+    expect(status.stdout).toContain('profile="mvp"');
+    expect(status.stdout).toContain("residual_notes=2");
+  });
+
+  test("item-level selection is refused without the spec's authorization", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", profiles: {mvp: MVP_PROFILE}});
+    // No spec linked at all.
+    itemWithProfile(dataRepo, "profiled-item", null);
+    let result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("links no spec");
+    // Spec present and tracked but not naming the profile.
+    const specPath = trackedSpec(dataRepo, "status: draft");
+    itemWithProfile(dataRepo, "profiled-item", specPath);
+    result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("does not name review-profile");
+    // Spec naming it but not tracked at HEAD.
+    writeFileSync(`${dataRepo}/docs/specs/untracked.md`, "---\nreview-profile: mvp\n---\n");
+    itemWithProfile(dataRepo, "profiled-item", "docs/specs/untracked.md");
+    result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("not a tracked file");
+  });
+
+  test("a committed symlink is not the regular spec the gate requires", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", maxRounds: 5, profiles: {mvp: MVP_PROFILE}});
+    const specPath = trackedSpec(dataRepo, "review-profile: mvp");
+    // A tracked symlink is a blob whose bytes are the link target, and `git show`
+    // prints them happily. The linked spec must be a regular committed file.
+    symlinkSync("feature.md", `${dataRepo}/docs/specs/link.md`);
+    itemWithProfile(dataRepo, "profiled-item", "docs/specs/link.md");
+    commitSelection(dataRepo);
+    const result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("not a tracked file");
+  });
+
+  test("an uncommitted item edit cannot select a profile the owner never recorded", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", maxRounds: 5, profiles: {mvp: MVP_PROFILE}});
+    // The spec is genuinely approved for mvp; only the item's selection is local.
+    const specPath = trackedSpec(dataRepo, "review-profile: mvp");
+    itemWithProfile(dataRepo, "profiled-item", specPath);
+    const result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("in the worktree only");
+    commitSelection(dataRepo);
+    expect(runStart(repository, dataRepo, "profiled-item", "master").status).toBe(0);
+  });
+
+  test("status blocks when the ledger's bound profile no longer resolves", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", maxRounds: 5, profiles: {mvp: MVP_PROFILE}});
+    const specPath = trackedSpec(dataRepo, "review-profile: mvp");
+    itemWithProfile(dataRepo, "profiled-item", specPath);
+    commitSelection(dataRepo);
+    expect(runStart(repository, dataRepo, "profiled-item", "master").status).toBe(0);
+    expect(runStatus(repository, "profiled-item", repository, dataRepo).stdout).toContain("REVIEW_STATUS=passed");
+    // The profile the review is bound to vanishes: the loop controls it ran under are
+    // now unknown, so the clean round must not keep certifying.
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review: {reviewer: "codex", maxRounds: 5}})}\n`);
+    const status = runStatus(repository, "profiled-item", repository, dataRepo);
+    expect(status.stdout).toContain("REVIEW_STATUS=blocked");
+    expect(status.stdout).toContain("no longer resolves");
+  });
+
+  test("a profile selected after the review started cannot certify an unbound ledger", () => {
+    const { repository } = createReviewRepository();
+    // Round 1 runs unprofiled under a cap of 1 and leaves an accepted P2 obligation.
+    const dataRepo = profileDataRepo({reviewer: "codex", maxRounds: 1});
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review: {reviewer: "codex", maxRounds: 1}})}\n`);
+    expect(
+      runStart(repository, dataRepo, "unbound-item", "master", {
+        FAKE_FINDINGS_JSON: JSON.stringify([{
+          priority: "P2",
+          title: "Nit worth tracking",
+          file: "change.txt",
+          line: 1,
+          evidence: "small thing",
+          impact: "minor",
+          direction: "tidy it",
+          confidence: "high",
+          origin: "original",
+          causality: "introduced",
+          obligationId: null,
+          obligationIds: null,
+        }]),
+      }).status,
+    ).toBe(0);
+    runDisposition(repository, "unbound-item", "E1-R1-F1", "accepted", "worth fixing", ["--data-repo", dataRepo]);
+    expect(runStatus(repository, "unbound-item", repository, dataRepo).stdout).toContain("REVIEW_STATUS=blocked");
+    // The project now selects a cap-exiting profile. The unbound review must not
+    // inherit it and certify the open obligation it never ran under.
+    writeFileSync(
+      `${dataRepo}/loops.json`,
+      `${JSON.stringify({review: {reviewer: "codex", maxRounds: 1, profile: "mvp", profiles: {mvp: {maxRounds: 1, capExit: true}}}})}\n`,
+    );
+    const status = runStatus(repository, "unbound-item", repository, dataRepo);
+    expect(status.stdout).toContain("REVIEW_STATUS=blocked");
+    expect(status.stdout).not.toContain("cap_exit=true");
+  });
+
+  test("an uncommitted spec edit cannot authorize a profile", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", maxRounds: 5, profiles: {mvp: MVP_PROFILE}});
+    // Committed spec says nothing about profiles; the worktree copy claims mvp. The
+    // authorization reads HEAD, so the local edit buys nothing.
+    const specPath = trackedSpec(dataRepo, "status: draft");
+    itemWithProfile(dataRepo, "profiled-item", specPath);
+    writeFileSync(`${dataRepo}/${specPath}`, "---\nreview-profile: mvp\n---\n\nThe spec.\n");
+    const result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("does not name review-profile");
+    // Committing the same content is what authorizes it.
+    git(dataRepo, ["add", "-A"]);
+    git(dataRepo, ["commit", "-q", "-m", "Approve mvp for this feature"]);
+    expect(runStart(repository, dataRepo, "profiled-item", "master").status).toBe(0);
+    expect(readItemLedger(repository, "profiled-item").profile).toBe("mvp");
+  });
+
+  test("an unknown profile fails the start by name", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", profiles: {mvp: MVP_PROFILE}});
+    const specPath = trackedSpec(dataRepo, "review-profile: turbo");
+    mkdirSync(`${dataRepo}/items`, {recursive: true});
+    writeFileSync(
+      `${dataRepo}/items/profiled-item.md`,
+      `---\ntitle: T\nproject: test\nstate: in-progress\nowner: test\nautonomy: autonomous\nnext-actor: agent\nnext-step: R\nupdated: 2026-08-23\nreview:\n  profile: turbo\nlinks:\n  spec: ${specPath}\n---\n`,
+    );
+    commitSelection(dataRepo);
+    const result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('review profile "turbo" is not defined');
+  });
+
+  test("a mid-review profile change is refused like a policy change", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = profileDataRepo({reviewer: "codex", maxRounds: 5, profiles: {mvp: MVP_PROFILE}});
+    // Round 1 without any profile.
+    expect(runStart(repository, dataRepo, "profiled-item", "master").status).toBe(0);
+    // Now the item selects mvp with full authorization - still refused mid-review.
+    const specPath = trackedSpec(dataRepo, "review-profile: mvp");
+    itemWithProfile(dataRepo, "profiled-item", specPath);
+    commitSelection(dataRepo);
+    const result = runStart(repository, dataRepo, "profiled-item", "master");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("mid-review profile change is refused");
   });
 });

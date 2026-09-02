@@ -1,11 +1,11 @@
 // Dependency readiness: resolve each item's `depends-on` targets against the known
-// item universe (items/, for-delivery/, archive/) and classify. Pure — no IO.
+// item universe (items/, for-delivery/, archive/) and classify. Pure - no IO.
 //
 // The satisfaction rule is the loops-board "Dependencies & readiness" contract, and
 // this module implements the *board-state* half of it: a target counts as satisfied
 // once its work is on the integration branch, which its recorded state proves for
 // `merged`/`tested`/`delivered`/`accepted`. In-flight states (`implemented`,
-// `spec-filed`, …) are NOT satisfied here — an `implemented` target means review
+// `spec-filed`, …) are NOT satisfied here - an `implemented` target means review
 // requested, not landed. Confirm real landed status for in-flight targets with
 // `bun run landed` before claiming (loops-pickup dependency gate); that dynamic check
 // is deliberately out of this pure module.
@@ -28,7 +28,7 @@ export interface DepResolution {
   /** The depends-on target slug, verbatim. */
   target: string;
   status: DepStatus;
-  /** The target's state — present only when the target resolves to a known item. */
+  /** The target's state - present only when the target resolves to a known item. */
   targetState?: string;
 }
 
@@ -77,7 +77,7 @@ export function computeReadiness(
     .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-/** A `depends-on` target that resolves to no known item — a data-integrity error the
+/** A `depends-on` target that resolves to no known item - a data-integrity error the
  *  check command reports (an item can never become eligible while a target is dangling). */
 export interface DanglingDep {
   slug: string;

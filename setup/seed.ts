@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
-// `bun setup/seed.ts <target-dir>` — stand up a loops data repo.
+// `bun setup/seed.ts <target-dir>` - stand up a loops data repo.
 //
 // Two modes:
-//   - new (default): scaffold a fresh data repo from setup/templates/ — board,
-//     queues, registries, loops.json, package.json, version stamp — and install
+//   - new (default): scaffold a fresh data repo from setup/templates/ - board,
+//     queues, registries, loops.json, package.json, version stamp - and install
 //     the agent-config block into this machine's harness configs.
 //   - join (--join, or auto-detected when the target already has a BOARD.md):
 //     the target is an existing data repo (e.g. cloned onto a second machine).
 //     Fills in package.json / .loops-version if missing, adds any generated script an
 //     older package.json lacks, and refreshes this machine's config block. Touches
-//     board data never, and loops.json only on an explicit reviewer answer — that one
+//     board data never, and loops.json only on an explicit reviewer answer - that one
 //     write is repo-global, so it retargets the review gate for every clone.
 //
 // Join is also what the seeded repo's `bun run setup` runs against itself, which is
@@ -50,7 +50,7 @@ interface Options {
 }
 
 /** The review adapters whose CLI is actually installed on this machine. The roster and
- * each adapter's binary come from tools/review/reviewers.ts — the seeder used to carry
+ * each adapter's binary come from tools/review/reviewers.ts - the seeder used to carry
  * its own copy, which is one list too many for a fact that changes whenever an adapter
  * is added. */
 function detectReviewers(): string[] {
@@ -133,7 +133,7 @@ async function promptIdentity(opts: Options): Promise<void> {
 }
 
 /** Both modes: resolve the review adapter, prompting only when there is a human to
- * ask. Returns undefined for "leave whatever is configured alone" — the answer an
+ * ask. Returns undefined for "leave whatever is configured alone" - the answer an
  * unattended run must get, since join is what automation invokes and a dispatcher
  * that inherited a TTY would otherwise block on the question forever. */
 async function promptReviewer(opts: Options, current?: string): Promise<string | undefined> {
@@ -142,7 +142,7 @@ async function promptReviewer(opts: Options, current?: string): Promise<string |
 
   const detected = detectReviewers();
   if (!detected.length) {
-    console.log("no supported review CLI (codex/claude/cursor-agent) detected — skipping review activation");
+    console.log("no supported review CLI (codex/claude/cursor-agent) detected - skipping review activation");
     return current ? undefined : "";
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -168,7 +168,7 @@ async function promptReviewer(opts: Options, current?: string): Promise<string |
  * through `LoopsConfig` would silently drop any key a hand edit or a newer version
  * added. Only the one field is touched. */
 /** True only for a plain object. An array passes `typeof x === "object"`, and assigning
- * `.reviewer` to one lands a non-index property that JSON.stringify silently drops — the
+ * `.reviewer` to one lands a non-index property that JSON.stringify silently drops - the
  * command would report success and persist nothing. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -242,7 +242,7 @@ function dclCommit(): string {
 /** Writes `content` to `path` unless the file already exists. */
 function writeNew(path: string, content: string): boolean {
   if (existsSync(path)) {
-    console.log(`  = ${basename(path)} exists — left untouched`);
+    console.log(`  = ${basename(path)} exists - left untouched`);
     return false;
   }
   writeFileSync(path, content);
@@ -271,7 +271,7 @@ function packageJsonText(root: string): string {
         ready: scriptFor("cli-ready"),
         restamp: scriptFor("cli-restamp"),
         // Join mode against this repo: refresh this machine's harness config and set
-        // the review adapter. `.` is safe — bun and npm both run scripts from the
+        // the review adapter. `.` is safe - bun and npm both run scripts from the
         // package.json directory, whatever the caller's cwd.
         setup: `bun "\${DCL_HOME:-${DCL_HOME}}/setup/seed.ts" --join .`,
       },
@@ -283,7 +283,7 @@ function packageJsonText(root: string): string {
 
 /** Adds generated scripts that an existing package.json is missing, and nothing else.
  *
- * Every other join write is `writeNew`, which leaves an existing file alone — correct
+ * Every other join write is `writeNew`, which leaves an existing file alone - correct
  * for data files, wrong for this one: a repo seeded before a script existed would never
  * receive it, so a command the docs promise (`bun run setup` above all) fails on exactly
  * the repos it was added for. Only absent keys are added: a customised script, a
@@ -294,18 +294,18 @@ function addMissingScripts(root: string): void {
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    console.log(`  ! ${basename(path)} is not readable JSON (${(error as Error).message}) — left untouched`);
+    console.log(`  ! ${basename(path)} is not readable JSON (${(error as Error).message}) - left untouched`);
     return;
   }
   if (!isPlainObject(parsed)) {
-    console.log(`  ! ${basename(path)} is not a JSON object — left untouched`);
+    console.log(`  ! ${basename(path)} is not a JSON object - left untouched`);
     return;
   }
   const generated = JSON.parse(packageJsonText(root)).scripts as Record<string, string>;
   const scripts = isPlainObject(parsed.scripts) ? parsed.scripts : {};
   const added = Object.keys(generated).filter((name) => scripts[name] === undefined);
   if (!added.length) {
-    console.log(`  = ${basename(path)} exists — every generated script present`);
+    console.log(`  = ${basename(path)} exists - every generated script present`);
     return;
   }
   for (const name of added) scripts[name] = generated[name]!;
@@ -322,7 +322,7 @@ function installConfigBlock(opts: Options, root: string): void {
   const cursorRule = renderCursorRule(params);
   const targets = detectConfigTargets(opts.home);
   if (!targets.length) {
-    console.log("no harness config directories detected — config block not installed");
+    console.log("no harness config directories detected - config block not installed");
     return;
   }
   for (const target of targets) {
@@ -330,8 +330,12 @@ function installConfigBlock(opts: Options, root: string): void {
       const action = writeCursorRule(target.path, cursorRule);
       console.log(`  cursor rule ${action}: ${target.path}`);
     } else {
-      const action = upsertConfigBlock(target.path, block);
-      console.log(`  config block ${action}: ${target.path}`);
+      const outcome = upsertConfigBlock(target.path, block);
+      if (outcome.action === "skipped") {
+        console.log(`  ! config block skipped: ${target.path} - ${outcome.reason}; fix the tags and re-run`);
+      } else {
+        console.log(`  config block ${outcome.action}: ${target.path}`);
+      }
     }
   }
 }
@@ -343,7 +347,7 @@ const joinMode = opts.join || existsSync(join(root, "BOARD.md"));
 if (joinMode) {
   console.log(`joining existing data repo at ${root}`);
   if (!existsSync(join(root, "BOARD.md"))) {
-    console.error(`--join: ${root} has no BOARD.md — not a loops data repo`);
+    console.error(`--join: ${root} has no BOARD.md - not a loops data repo`);
     process.exit(2);
   }
   // Owner for the config block: prefer the repo's own loops.json over prompting.
@@ -352,7 +356,7 @@ if (joinMode) {
       const config = JSON.parse(readFileSync(join(root, "loops.json"), "utf8"));
       if (typeof config.owner === "string" && config.owner) opts.owner = config.owner;
     } catch {
-      // no loops.json or unreadable — block falls back to "the owner"
+      // no loops.json or unreadable - block falls back to "the owner"
     }
   }
   if (existsSync(join(root, "package.json"))) addMissingScripts(root);
@@ -362,13 +366,13 @@ if (joinMode) {
 
   // The one data field join may change, and only on an explicit answer. Before this,
   // the reviewer prompt was reachable only during the first seed, so a joining machine
-  // — and anyone who once answered "none" — had no route back but a hand edit.
+  // - and anyone who once answered "none" - had no route back but a hand edit.
   let current: string | undefined;
   try {
     const config = JSON.parse(readFileSync(join(root, "loops.json"), "utf8"));
     if (typeof config.review?.reviewer === "string") current = config.review.reviewer;
   } catch {
-    // no loops.json or unreadable — treated as "nothing configured"
+    // no loops.json or unreadable - treated as "nothing configured"
   }
   const chosen = await promptReviewer(opts, current);
   if (chosen != null && chosen !== (current ?? "")) applyReviewer(root, chosen);
@@ -377,7 +381,7 @@ if (joinMode) {
   process.exit(0);
 }
 
-// New mode scaffolds into `root` and (on a fresh git init) `git add -A` — so a
+// New mode scaffolds into `root` and (on a fresh git init) `git add -A` - so a
 // non-empty target would sweep unrelated user files into the seed commit. Refuse it:
 // seed into a new or empty directory, or pass --join to wire an existing data repo.
 if (existsSync(root) && readdirSync(root).length > 0) {
@@ -471,7 +475,7 @@ if (inited) {
     { encoding: "utf8" },
   );
   if (add.status !== 0 || commit.status !== 0) {
-    console.log("  ! initial commit failed — commit manually");
+    console.log("  ! initial commit failed - commit manually");
   } else {
     console.log("  + initial commit");
   }
@@ -480,12 +484,12 @@ if (inited) {
 console.log(
   reviewer
     ? `  review adapter: ${reviewer} (loops.json → review.reviewer; drive it per the loops-review skill)`
-    : `  review adapter: none — activate later with \`bun run setup\` (see loops-review)`,
+    : `  review adapter: none - activate later with \`bun run setup\` (see loops-review)`,
 );
 
 console.log(`
 seed complete. Next steps:
   1. Fill in the TODO sections of HOUSE-RULES.md (roster, review mechanism).
   2. Register your projects' gates in PROJECTS.md.
-  3. Add a git remote and push — origin is the source of truth across machines.
+  3. Add a git remote and push - origin is the source of truth across machines.
   4. Try it: cd ${root} && bun run check`);

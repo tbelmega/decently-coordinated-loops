@@ -1,6 +1,6 @@
 # House rules
 
-Cross-project local policy for this instance — the owner-specific half of every DCL
+Cross-project local policy for this instance: the owner-specific half of every DCL
 skill's extension points. Skills defer to the sections below wherever behavior is
 owner- or environment-specific; per-project specifics belong in
 [PROJECTS.md](PROJECTS.md) instead. Keep entries short and imperative; agents read
@@ -27,13 +27,13 @@ this file before any unattended work.
      deliver/iterate steps are written against this section. -->
 
 - Bundled option: DCL ships a local, forge-independent reviewer (an independent
-  model — Codex/Claude/Cursor — reviews the branch read-only). Activate it by setting
+  model, Codex/Claude/Cursor, reviews the branch read-only). Activate it by setting
   `review.reviewer` in `loops.json` (`bun run setup` offers this); agents then drive
   it automatically for the final handoff of attended and unattended tracked items per
   the loops-review skill after all internal tasks and final verification are complete.
   A logical round defaults to validated diff, integration, and adversarial passes.
-  The terminal signal is a review round covering the current HEAD that owes nothing -
-  clean, or every finding carrying a non-blocking disposition - or a descendant whose
+  The terminal signal is a review round covering the current HEAD that owes nothing
+  (clean, or every finding carrying a non-blocking disposition), or a descendant whose
   intervening commits touch only configured `review.metadataPaths`. Optionally set the
   positive integer `review.maxRounds` (public default 3), a non-empty
   `review.auditPasses` subset, safe repo-relative landing metadata patterns,
@@ -51,7 +51,7 @@ this file before any unattended work.
 - An agent that concludes the review *mechanism* rather than its own change is what
   keeps a round from going clean escalates instead of grinding to the round cap: a
   written diagnosis, a tracked item for the suspected defect, and the work left
-  `blocked` for the owner to rule on - the exit is never an unreviewed landing. The
+  `blocked` for the owner to rule on; the exit is never an unreviewed landing. The
   loops-review skill carries the protocol.
 - TODO: keep the bundled reviewer, or define your own mechanism here.
 
@@ -93,7 +93,7 @@ this file before any unattended work.
 <!-- Obligations that follow an action, not a directory: they apply regardless of
      which repo you're in, so they are exempt from the project-participation gate
      (loops-board → Project participation). Example: "after refreshing the design
-     export archive, file board items for newly-buildable work — even when invoked
+     export archive, file board items for newly-buildable work, even when invoked
      from another repo." List them here, or leave empty. -->
 
 - TODO: none, or list cwd-independent obligations.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// `bun run check` — report-only integrity check. No write, no OUTBOX append.
+// `bun run check` - report-only integrity check. No write, no OUTBOX append.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "./config.ts";
@@ -13,7 +13,7 @@ import { dclHead, stampedVersion } from "./version.ts";
 const ROOT = process.cwd();
 
 if (!existsSync(join(ROOT, "BOARD.md"))) {
-  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) — run from the data repo root`);
+  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) - run from the data repo root`);
   process.exit(2);
 }
 
@@ -54,7 +54,7 @@ if (stamped) {
   const current = dclHead();
   if (current && stamped !== "unknown" && stamped !== current) {
     console.log(
-      `\nNote: this data repo was seeded from DCL ${stamped.slice(0, 12)}, but the DCL clone is now at ${current.slice(0, 12)} — review the changes and run \`bun run restamp\` to acknowledge.`,
+      `\nNote: this data repo was seeded from DCL ${stamped.slice(0, 12)}, but the DCL clone is now at ${current.slice(0, 12)} - review the changes and run \`bun run restamp\` to acknowledge.`,
     );
   }
 }

@@ -17,7 +17,7 @@ machine's harnesses to the DCL clone, then create or join a data repo.
   Join fills in `package.json` / `.loops-version` if missing, adds any generated
   script an older `package.json` lacks, and installs this machine's agent-config
   block. It touches board data never, and `loops.json` only on an explicit reviewer
-  answer — `--reviewer <id>|none`, or the prompt when a human is present. An
+  answer: `--reviewer <id>|none`, or the prompt when a human is present. An
   unattended join, or one you decline, leaves it alone. That one write is
   repo-global: it retargets the review gate for every clone, not just this machine.
 
@@ -34,26 +34,30 @@ From the DCL clone root (`bun` required; install from bun.sh if missing):
 Gather `--owner` (how agents should address the user), `--branch` (default
 integration branch, default `master`), optionally the initial projects
 (name=repo-path pairs), and optionally `--reviewer` (activate the bundled local code
-reviewer — see loops-review) from the user before running — the script prompts
+reviewer; see loops-review) from the user before running; the script prompts
 interactively otherwise (including which detected reviewer CLI to activate), which an
 agent can't answer. If you seed non-interactively with `--owner`, offer the reviewer
 choice explicitly so the user doesn't miss it.
 
-The seeding installs a markered `LOOPS:START/END` block into each detected harness
-global config (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`) carrying the data-repo
-path and owner name. Existing files are never overwritten; re-running is safe.
+The seeding installs a `<DECENTLY-COORDINATED-LOOPS>` section (inside the shared
+`<GENERATED>` wrapper) into each detected harness global config (`~/.claude/CLAUDE.md`,
+`~/.codex/AGENTS.md`, and **every** alternate profile `~/.claude-*/CLAUDE.md`, created
+if absent), carrying the data-repo path and owner name; a legacy `LOOPS:START/END`
+block is migrated into that grammar on refresh. Content outside the tags is never
+touched; re-running is safe. Warn the user that all alternate Claude profiles are
+written, so they can rename any `.claude-*` directory that is not really a profile.
 
 ## 3. After seeding
 
 1. Verify: `cd <data-repo> && bun run check` (expect a green preflight).
-2. Offer to fill in the seeded TODOs interactively — this is where the instance
+2. Offer to fill in the seeded TODOs interactively. This is where the instance
    becomes real:
    - `HOUSE-RULES.md`: harness/model roster, review mechanism, merge policy,
      guardrail additions.
    - `PROJECTS.md`: each project's quality gate, verify gate, tracker locations
      (and matching `loops.json` entries: repo path, integration branch, landed
      adapter).
-3. For a new repo: have the user add a git remote and push — origin is the source
+3. For a new repo: have the user add a git remote and push; origin is the source
    of truth across machines.
 4. Point the user at the other skills: loops-board (contract), loops-queues
    (inbox/outbox), loops-pickup (unattended work), loops-dispatch (standing a session

@@ -27,7 +27,7 @@ describe("stampedVersion", () => {
 
 describe("dclHome / dclHead", () => {
   test("dclHome resolves to this DCL checkout (the parent of tools/)", () => {
-    // version.ts lives in tools/, so its home is the repo root — where package.json is.
+    // version.ts lives in tools/, so its home is the repo root - where package.json is.
     expect(dclHome().endsWith("/tools")).toBe(false);
   });
 

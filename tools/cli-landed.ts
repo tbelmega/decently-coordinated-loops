@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// `bun run landed` — check every board item that carries a work ref (a review URL
+// `bun run landed` - check every board item that carries a work ref (a review URL
 // or a branch) against whether its work has landed on the project's integration
 // branch, so agents don't have to reason per-item about which repo/ref to look at.
 //
@@ -9,12 +9,12 @@
 //     for squash- and rebase-merges). Needs a `links.pr`.
 //   - git:    patch-id equivalence of the item's immutable `links.base-sha..head-sha`
 //     range, falling back to its whole `links.branch` for legacy items (see
-//     git-landed.ts) — for flows that don't go through a forge API. Correct for
+//     git-landed.ts) - for flows that don't go through a forge API. Correct for
 //     rebase landings; a squash-with-edits landing reads as PENDING (record those by
 //     hand).
 //
 // Default (read-only): never mutates item files or the board. `--apply`
-// additionally records observed landings — it flips `implemented -> merged` for
+// additionally records observed landings - it flips `implemented -> merged` for
 // any item whose work is reported landed, writing the auto-set fields (next-actor:
 // agent, autonomy: auto, next-step) and updating the board row. Recording a
 // landing is a fact, not the landing itself: merging (and deploying) stays the
@@ -44,7 +44,7 @@ import {
 const ROOT = process.cwd();
 
 if (!existsSync(join(ROOT, "BOARD.md"))) {
-  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) — run from the data repo root`);
+  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) - run from the data repo root`);
   process.exit(2);
 }
 
@@ -115,7 +115,7 @@ const fetchedRepos = new Set<string>();
 const fetchedItemBranches = new Set<string>();
 
 /** IO boundary, git adapter: refresh the integration branch's remote-tracking ref
- *  (best effort — offline is fine, the check then runs on the last-known state),
+ *  (best effort - offline is fine, the check then runs on the last-known state),
  *  then compare the item's branch by patch-id. A recorded base/head range also
  *  fetches the item's branch first: the range SHAs may exist only on origin in a
  *  checkout that never had the agent branch, and unlike the legacy whole-branch
@@ -160,7 +160,7 @@ const items = loadItemsDir(join(ROOT, "items"));
 const checkable = items.filter((i) => workRef(i) !== null);
 
 if (checkable.length === 0) {
-  console.log("No items carry a links.pr or links.branch — nothing to check.");
+  console.log("No items carry a links.pr or links.branch - nothing to check.");
   process.exit(0);
 }
 
@@ -168,7 +168,7 @@ console.log(`Checking ${checkable.length} item(s)…\n`);
 
 const statusByKey = new Map<string, PrStatus>();
 for (const item of checkable) {
-  // Key by statusKey(item) — project + workRef — so two projects sharing a branch
+  // Key by statusKey(item) - project + workRef - so two projects sharing a branch
   // name (git adapter: workRef is the bare branch) don't collide on one cached
   // result. buildMergeReport / itemsToFlipMerged look up under the same key.
   const key = statusKey(item);
@@ -242,10 +242,10 @@ if (apply) {
 
 if (report.stale.length) {
   console.log(
-    `\n${report.stale.length} item(s) have landed work but are still awaiting review-merge — record with \`bun run landed --apply\`:`,
+    `\n${report.stale.length} item(s) have landed work but are still awaiting review-merge - record with \`bun run landed --apply\`:`,
   );
   for (const row of report.stale) {
-    console.log(`  - ${row.slug} (landed ${row.mergedAt ?? "?"}) — ${row.ref}`);
+    console.log(`  - ${row.slug} (landed ${row.mergedAt ?? "?"}) - ${row.ref}`);
   }
   process.exit(1);
 }

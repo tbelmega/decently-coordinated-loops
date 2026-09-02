@@ -16,7 +16,7 @@ export function expandHome(path: string, home: string): string {
 /**
  * Returns the name of the registered project whose `repo` path matches any of the
  * candidate roots, or null if none match. `candidateRoots` are the checkout roots to
- * test (a worktree resolves to two: its own root and its main checkout root — see
+ * test (a worktree resolves to two: its own root and its main checkout root - see
  * cli-registered.ts); passing both is what makes a linked worktree of a registered
  * repo count as registered. Both sides are run through `canonicalize` so the
  * comparison is symmetric (tilde-expansion, symlink resolution) regardless of how the

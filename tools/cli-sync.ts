@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// `bun run sync` — headless board regen: preflight (routes orphan rows to
+// `bun run sync` - headless board regen: preflight (routes orphan rows to
 // OUTBOX.md), moves item files between items/ <-> for-delivery/ <-> archive/ as
 // their state dictates, appends ARCHIVE.md rows, then regenerates BOARD.md.
 // Guarded by a lock file so two runs (e.g. a scheduled tick overlapping a manual
@@ -21,11 +21,11 @@ const ROOT = process.cwd();
 const BOARD_PATH = join(ROOT, "BOARD.md");
 
 if (!existsSync(BOARD_PATH)) {
-  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) — run from the data repo root`);
+  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) - run from the data repo root`);
   process.exit(2);
 }
 
-/** A deliberate, message-only abort from inside the locked section — thrown (not
+/** A deliberate, message-only abort from inside the locked section - thrown (not
  * process.exit) so withLock's finally still releases the lock, then caught below to
  * exit non-zero without a stack trace. */
 class SyncAborted extends Error {}
@@ -48,7 +48,7 @@ try {
 
     // Fail before any write on a duplicate slug: a move writes `<slug>.md`, so a slug
     // shared across folders would let one item's file overwrite another's, and
-    // depends-on would resolve to the wrong target. Include archive/ — an accept-move
+    // depends-on would resolve to the wrong target. Include archive/ - an accept-move
     // into a slug already archived is exactly the overwrite we must stop.
     const duplicateSlugs = findDuplicateSlugs([...allItems, ...archiveItems]);
     if (duplicateSlugs.length) {
@@ -72,7 +72,7 @@ try {
       // Under the same `OUTBOX.md.lock` the other writers of this file take: sync's own
       // `.loops-sync.lock` serializes sync against sync, not against a board server or an
       // editor. A row that did not reach the outbox aborts the run BEFORE any move or
-      // board regeneration — the row has no item file, so the board is its only remaining
+      // board regeneration - the row has no item file, so the board is its only remaining
       // copy, and regenerating without it would destroy the very thing the routing exists
       // to preserve.
       const routing = routeOrphanRows(OUTBOX_PATH, report.orphanRows);
@@ -99,10 +99,10 @@ try {
     // Reconcile ARCHIVE.md against the archive/ folder's actual contents (derived,
     // idempotent) rather than only appending the just-moved batch. If a previous run
     // crashed after moving a file but before indexing it, the missing row is added
-    // here on the next run — the move and the index are recoverable as one derived
+    // here on the next run - the move and the index are recoverable as one derived
     // operation. Reload the folder so freshly-moved files are included.
     // Unconditionally, not only when this run planned an archive move. The reconciliation
-    // is derived and idempotent — it returns the text unchanged when nothing is missing —
+    // is derived and idempotent - it returns the text unchanged when nothing is missing -
     // so gating it bought nothing and cost the one case that needs it most: an item
     // hand-moved into archive/ is invisible to planMoves, so the guard was false exactly
     // when its ARCHIVE.md row was missing, leaving the item in neither derived index.

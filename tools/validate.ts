@@ -2,7 +2,7 @@
 // The `state:`/`next-actor:`/`autonomy:`/`awaiting:` fields are free text in the
 // item files, so typos ("review-merge" as a state, "done", "nobody") would
 // otherwise be bucketed silently. This turns any out-of-set value into a visible
-// anomaly — surfaced by the CLI and failing the check command. Pure: no IO.
+// anomaly - surfaced by the CLI and failing the check command. Pure: no IO.
 import { currentFolder, targetFolder } from "./archive.ts";
 import { DEFAULT_PROJECT_LIFECYCLE, projectLifecycle } from "./config.ts";
 import type { LoopsConfig, ProjectLifecycle } from "./config.ts";
@@ -27,7 +27,7 @@ export const CANONICAL_NEXT_ACTORS = new Set(["owner", "agent"]);
 /** "-" is the accepted sentinel for "unset" (legacy items and freshly-filed ideas). */
 export const CANONICAL_AUTONOMY = new Set(["auto", "supervised", "-"]);
 
-/** The only valid value of the optional `spec:` field — the owner's explicit waiver
+/** The only valid value of the optional `spec:` field - the owner's explicit waiver
  * of the loops-pickup spec gate. A typo fails closed (no waiver), so this check is
  * about surfacing the ignored intent, not about closing a bypass. */
 export const CANONICAL_SPEC = new Set(["waived"]);
@@ -64,7 +64,7 @@ function isCrossPlatformAbsolutePath(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\]+\\[^\\]+/.test(path);
 }
 
-/** Pure: every schema violation on one item, as human-readable messages — a blank
+/** Pure: every schema violation on one item, as human-readable messages - a blank
  * mandatory field, or a closed-set enum value outside its canonical set. Empty array =
  * the item is well-formed. Empty required fields are reported first; the enum checks
  * then skip empty values so a blank field isn't also flagged as "not canonical".
@@ -136,7 +136,7 @@ export function validateItem(item: ItemFile, lifecycle: ProjectLifecycle = DEFAU
 
   if (item.state.trim() !== "" && !CANONICAL_STATES.has(item.state)) {
     const hint = CANONICAL_AWAITING.has(item.state)
-      ? ` — looks like an awaiting sub-bucket, not a state; did you mean \`awaiting: ${item.state}\`?`
+      ? ` - looks like an awaiting sub-bucket, not a state; did you mean \`awaiting: ${item.state}\`?`
       : "";
     messages.push(`state "${item.state}" is not a canonical state${hint}`);
   }
@@ -157,7 +157,7 @@ export function validateItem(item: ItemFile, lifecycle: ProjectLifecycle = DEFAU
     messages.push(`spec "${item.spec}" is not canonical (expected waived, or omit the field)`);
   }
 
-  // `spec-filed` claims an approved spec exists — without links.spec the claim is
+  // `spec-filed` claims an approved spec exists - without links.spec the claim is
   // unauditable and the pickup spec gate can't resolve it (loops-board → Specs vs.
   // items). Presence-only: the validator can't verify approval or reachability.
   if (item.state === "spec-filed" && !item.links.spec) {
@@ -189,7 +189,7 @@ export function validateItem(item: ItemFile, lifecycle: ProjectLifecycle = DEFAU
   // project a standing integrity anomaly.
   if (currentFolder(item.path) === "archive" && targetFolder(item.state, lifecycle) !== "archive") {
     messages.push(
-      `state "${item.state}" belongs in ${targetFolder(item.state, lifecycle)}/, but the file is in archive/, which sync never moves a file out of — move it back by hand`,
+      `state "${item.state}" belongs in ${targetFolder(item.state, lifecycle)}/, but the file is in archive/, which sync never moves a file out of - move it back by hand`,
     );
   }
 
@@ -225,8 +225,8 @@ export interface DuplicateSlug {
 }
 
 /** Pure: slugs that occur on more than one item file across the loaded folders
- * (items/, for-delivery/, archive/). A slug is a file identity — the folder move
- * writes `<slug>.md`, and depends-on resolves by slug — so a collision means one
+ * (items/, for-delivery/, archive/). A slug is a file identity - the folder move
+ * writes `<slug>.md`, and depends-on resolves by slug - so a collision means one
  * item's file can overwrite another's on a move, and a dependency can resolve to the
  * wrong target. An integrity error: sync must stop before writing, and check must
  * fail. Sorted by slug; each entry's paths sorted for deterministic output. */

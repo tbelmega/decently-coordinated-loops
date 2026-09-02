@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, projectLifecycle, resolveReviewConfig } from "./config.ts";
+import { loadConfig, projectLifecycle, resolveReviewConfig, taxonomyEnabled } from "./config.ts";
 import type { LoopsConfig } from "./config.ts";
 
 function tempRoot(): string {
@@ -413,5 +413,272 @@ describe("loadConfig project review blocks", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("severityFloor (C1)", () => {
+  function config(review: LoopsConfig["review"], projects: LoopsConfig["projects"] = {}): LoopsConfig {
+    return {
+      owner: "casey",
+      priorityProjects: [],
+      integrationBranch: "master",
+      landedAdapter: "git",
+      githubTokens: {},
+      projects,
+      review,
+    };
+  }
+
+  test("resolves per project like every other review field", () => {
+    const loops = config(
+      { reviewer: "codex", severityFloor: "round-2-plus" },
+      { atlas: { repo: "~/atlas", review: { severityFloor: "all-rounds" } } },
+    );
+    expect(resolveReviewConfig(loops).severityFloor).toBe("round-2-plus");
+    expect(resolveReviewConfig(loops, "atlas").severityFloor).toBe("all-rounds");
+  });
+
+  test("taxonomyEnabled derives from the resolved keys, not a separate switch", () => {
+    expect(taxonomyEnabled({})).toBe(false);
+    expect(taxonomyEnabled({ severityFloor: false })).toBe(false);
+    expect(taxonomyEnabled({ severityFloor: "round-2-plus" })).toBe(true);
+    expect(taxonomyEnabled({ severityFloor: "all-rounds" })).toBe(true);
+  });
+});
+
+describe("terminalRejection (C4)", () => {
+  test("resolves per project, validates as boolean, and joins the taxonomy predicate", () => {
+    const loops: LoopsConfig = {
+      owner: "casey",
+      priorityProjects: [],
+      integrationBranch: "master",
+      landedAdapter: "git",
+      githubTokens: {},
+      projects: { atlas: { repo: "~/atlas", review: { terminalRejection: true } } },
+      review: { reviewer: "codex" },
+    };
+    expect(resolveReviewConfig(loops).terminalRejection).toBeUndefined();
+    expect(resolveReviewConfig(loops, "atlas").terminalRejection).toBe(true);
+    expect(taxonomyEnabled({ terminalRejection: true })).toBe(true);
+    expect(taxonomyEnabled({ terminalRejection: false })).toBe(false);
+    expect(taxonomyEnabled({ capExit: true })).toBe(true);
+    expect(taxonomyEnabled({ capExit: false })).toBe(false);
+  });
+
+  test("scoped confirmation under personas needs the taxonomy for its P0 widening", () => {
+    const personas = [
+      { name: "diff" as const, fromRound: 1, toRound: 1 },
+      { name: "confirmation" as const, fromRound: 2 },
+    ];
+    expect(taxonomyEnabled({ personas, confirmation: "scoped" })).toBe(true);
+    expect(taxonomyEnabled({ personas, confirmation: "full" })).toBe(false);
+    // Scoped without personas is the legacy engine, which has no widening rule.
+    expect(taxonomyEnabled({ confirmation: "scoped" })).toBe(false);
+  });
+});
+
+describe("resolved engine selection (C3)", () => {
+  function config(review: LoopsConfig["review"], projects: LoopsConfig["projects"] = {}): LoopsConfig {
+    return {
+      owner: "casey",
+      priorityProjects: [],
+      integrationBranch: "master",
+      landedAdapter: "git",
+      githubTokens: {},
+      projects,
+      review,
+    };
+  }
+  const personas = [
+    { name: "diff" as const, fromRound: 1, toRound: 1 },
+    { name: "confirmation" as const, fromRound: 2 },
+  ];
+
+  test("a project's auditPasses override replaces an inherited personas block, not joins it", () => {
+    const resolved = resolveReviewConfig(
+      config({ reviewer: "codex", personas }, { atlas: { repo: "~/atlas", review: { auditPasses: ["diff"] } } }),
+      "atlas",
+    );
+    expect(resolved.auditPasses).toEqual(["diff"]);
+    expect(resolved.personas).toBeUndefined();
+  });
+
+  test("a project's personas override replaces an inherited auditPasses list", () => {
+    const resolved = resolveReviewConfig(
+      config({ reviewer: "codex", auditPasses: ["diff", "integration"] }, {
+        atlas: { repo: "~/atlas", review: { personas } },
+      }),
+      "atlas",
+    );
+    expect(resolved.personas).toEqual(personas);
+    expect(resolved.auditPasses).toBeUndefined();
+  });
+
+  test("a project's personas override is validated as the resolved policy", () => {
+    expect(() =>
+      resolveReviewConfig(
+        config({ reviewer: "codex", maxRounds: 4 }, {
+          atlas: {
+            repo: "~/atlas",
+            // No persona covers round 3 or 4 of this project's own cap.
+            review: { personas: [{ name: "diff", fromRound: 1, toRound: 1 }, { name: "confirmation", fromRound: 2, toRound: 2 }] },
+          },
+        }),
+        "atlas",
+      ),
+    ).toThrow(/resolved review\.personas/);
+  });
+
+  test("a project's auditPasses override replaces a profile's personas too", () => {
+    const resolved = resolveReviewConfig(
+      config(
+        { reviewer: "codex", profiles: { mvp: { personas } } },
+        { atlas: { repo: "~/atlas", review: { profile: "mvp", auditPasses: ["adversarial"] } } },
+      ),
+      "atlas",
+    );
+    expect(resolved.auditPasses).toEqual(["adversarial"]);
+    expect(resolved.personas).toBeUndefined();
+  });
+});
+
+describe("personas validation (C3)", () => {
+  function config(review: Record<string, unknown>): unknown {
+    return { owner: "casey", projects: {}, review };
+  }
+  function load(review: Record<string, unknown>): void {
+    const dir = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "loops-cfg-"));
+    require("node:fs").writeFileSync(require("node:path").join(dir, "loops.json"), JSON.stringify(config(review)));
+    loadConfig(dir);
+  }
+  const base = () => [
+    { name: "diff", fromRound: 1, toRound: 1 },
+    { name: "confirmation", fromRound: 2 },
+  ];
+
+  test("a well-formed personas block loads, overlapping ranges included", () => {
+    load({ reviewer: "codex", personas: [
+      { name: "diff", fromRound: 1, toRound: 1 },
+      { name: "adversarial", fromRound: 1, toRound: 2 },
+      { name: "confirmation", fromRound: 2 },
+    ]});
+  });
+
+  test("every malformed persona shape fails closed", () => {
+    expect(() => load({ personas: base(), auditPasses: ["diff"] })).toThrow(/mutually exclusive/);
+    expect(() => load({ personas: [] })).toThrow(/non-empty/);
+    expect(() => load({ personas: [{ name: "sniper", fromRound: 1 }, base()[1]] })).toThrow(/name must be one of/);
+    expect(() => load({ personas: [{ name: "diff", fromRound: 1, reviewer: "gpt" }, base()[1]] })).toThrow(/reviewer must be one of/);
+    expect(() => load({ personas: [{ name: "diff", fromRound: 0 }, base()[1]] })).toThrow(/fromRound/);
+    expect(() => load({ personas: [{ name: "diff", fromRound: 2, toRound: 1 }, base()[1]] })).toThrow(/toRound/);
+    expect(() => load({ personas: [{ name: "diff", fromRound: 1 }] })).toThrow(/exactly one confirmation/);
+    expect(() => load({ personas: [...base(), { name: "confirmation", fromRound: 2 }] })).toThrow(/exactly one confirmation/);
+    expect(() => load({ personas: [base()[0], { name: "confirmation", fromRound: 3 }] })).toThrow(/every round from 2 up/);
+    expect(() => load({ personas: [base()[0], { name: "confirmation", fromRound: 2, toRound: 4 }] })).toThrow(/every round from 2 up/);
+    expect(() => load({ personas: [{ name: "diff", fromRound: 2, toRound: 2 }, { name: "confirmation", fromRound: 2 }] })).toThrow(/no persona covers round 1/);
+  });
+
+  test("personas resolve per project wholesale, like every list field", () => {
+    const loops: LoopsConfig = {
+      owner: "casey",
+      priorityProjects: [],
+      integrationBranch: "master",
+      landedAdapter: "git",
+      githubTokens: {},
+      projects: { atlas: { repo: "~/atlas", review: { personas: [
+        { name: "adversarial", fromRound: 1 },
+        { name: "confirmation", fromRound: 2 },
+      ] } } },
+      review: { reviewer: "codex", personas: [
+        { name: "diff", fromRound: 1, toRound: 1 },
+        { name: "confirmation", fromRound: 2 },
+      ] },
+    };
+    expect(resolveReviewConfig(loops, "atlas").personas!.map((persona) => persona.name)).toEqual([
+      "adversarial",
+      "confirmation",
+    ]);
+  });
+});
+
+describe("review profiles (C8)", () => {
+  function loops(review: Record<string, unknown>, projects: Record<string, unknown> = {}): LoopsConfig {
+    return {
+      owner: "casey",
+      priorityProjects: [],
+      integrationBranch: "master",
+      landedAdapter: "git",
+      githubTokens: {},
+      projects: projects as LoopsConfig["projects"],
+      review: review as LoopsConfig["review"],
+    };
+  }
+  const mvp = {
+    maxRounds: 2,
+    severityFloor: "all-rounds" as const,
+    terminalRejection: true,
+    capExit: true,
+    personas: [
+      {name: "diff" as const, fromRound: 1, toRound: 1, model: "sol", effort: "high"},
+      {name: "adversarial" as const, fromRound: 1, toRound: 1, model: "sol", effort: "medium"},
+      {name: "confirmation" as const, fromRound: 2, model: "terra", effort: "medium"},
+    ],
+  };
+
+  test("resolution order: global block, then the profile, then project field overrides", () => {
+    const config = loops(
+      {reviewer: "codex", model: "terra", effort: "high", maxRounds: 5, profiles: {mvp}},
+      {atlas: {repo: "~/atlas", review: {profile: "mvp", effort: "low"}}},
+    );
+    const resolved = resolveReviewConfig(config, "atlas");
+    expect(resolved.maxRounds).toBe(2);
+    expect(resolved.severityFloor).toBe("all-rounds");
+    expect(resolved.terminalRejection).toBe(true);
+    expect(resolved.capExit).toBe(true);
+    expect(resolved.personas!.map((persona) => persona.name)).toEqual(["diff", "adversarial", "confirmation"]);
+    // The project's remaining field override lands on top of the profile...
+    expect(resolved.effort).toBe("low");
+    // ...and the untouchable base fields pass through unchanged.
+    expect(resolved.reviewer).toBe("codex");
+    expect(resolved.model).toBe("terra");
+  });
+
+  test("a profile that sets personas drops an inherited legacy auditPasses", () => {
+    const config = loops({reviewer: "codex", auditPasses: ["diff"], profiles: {mvp}, profile: "mvp"});
+    const resolved = resolveReviewConfig(config);
+    expect(resolved.personas).toBeDefined();
+    expect(resolved.auditPasses).toBeUndefined();
+  });
+
+  test("an unknown profile fails resolution closed", () => {
+    const config = loops({reviewer: "codex", profiles: {mvp}}, {atlas: {repo: "~/atlas", review: {profile: "turbo"}}});
+    expect(() => resolveReviewConfig(config, "atlas")).toThrow(/review profile "turbo" is not defined/);
+  });
+
+  test("a profile is loop controls only: every governance field fails closed by name", () => {
+    for (const [key, value] of [
+      ["classes", [{name: "x", match: ["a/**"], waivablePriorities: ["P2"]}]],
+      ["metadataPaths", [".reviews/**"]],
+      ["rewrites", ["AGENTS.md"]],
+      ["reviewer", "claude"],
+      ["model", "cheap-model"],
+      ["somethingNew", 1],
+    ] as const) {
+      const dir = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "loops-prof-"));
+      require("node:fs").writeFileSync(
+        require("node:path").join(dir, "loops.json"),
+        JSON.stringify({review: {reviewer: "codex", profiles: {bad: {[key]: value}}}}),
+      );
+      expect(() => loadConfig(dir)).toThrow(/not an allowed profile field/);
+    }
+  });
+
+  test("profiles are defined on the global review block only", () => {
+    const dir = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "loops-prof-"));
+    require("node:fs").writeFileSync(
+      require("node:path").join(dir, "loops.json"),
+      JSON.stringify({review: {reviewer: "codex"}, projects: {atlas: {repo: "~/a", review: {profiles: {mvp: {}}}}}}),
+    );
+    expect(() => loadConfig(dir)).toThrow(/global review block only/);
   });
 });

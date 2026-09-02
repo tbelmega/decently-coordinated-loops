@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
-// `bun run ready` — the dependency gate for pickup. Reports which active items have all
+// `bun run ready` - the dependency gate for pickup. Reports which active items have all
 // their `depends-on` targets satisfied (work on the integration branch) and which are
 // blocked by an unsatisfied or missing target, so a dispatcher doesn't claim an item
 // whose foundation hasn't landed.
 //
 // Board-state only: an `implemented` target counts as unsatisfied here (review
 // requested ≠ landed). When any dependency rides on an in-flight target, confirm its
-// real landed status with `bun run landed` before claiming (loops-pickup). Read-only —
+// real landed status with `bun run landed` before claiming (loops-pickup). Read-only -
 // mutates nothing. Always exits 0; a dangling target is an integrity error reported by
 // `bun run check`, not here.
 import { existsSync } from "node:fs";
@@ -17,7 +17,7 @@ import { buildUniverse, computeReadiness } from "./readiness.ts";
 const ROOT = process.cwd();
 
 if (!existsSync(join(ROOT, "BOARD.md"))) {
-  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) — run from the data repo root`);
+  console.error(`not a loops data repo (no BOARD.md in ${ROOT}) - run from the data repo root`);
   process.exit(2);
 }
 
@@ -33,7 +33,7 @@ const ready = readiness.filter((r) => r.eligible);
 const blocked = readiness.filter((r) => !r.eligible);
 
 console.log(
-  `Dependency readiness: ${readiness.length} active item(s) — ${ready.length} ready, ${blocked.length} blocked.\n`,
+  `Dependency readiness: ${readiness.length} active item(s) - ${ready.length} ready, ${blocked.length} blocked.\n`,
 );
 
 console.log("Ready (dependencies satisfied):");
@@ -61,6 +61,6 @@ if (blocked.length) {
 
 if (readiness.some((r) => r.deps.some((d) => d.targetState === "implemented"))) {
   console.log(
-    "\nNote: an `implemented` target is not satisfied by board state alone (review requested ≠ landed) — confirm real landed status with `bun run landed` before claiming.",
+    "\nNote: an `implemented` target is not satisfied by board state alone (review requested ≠ landed) - confirm real landed status with `bun run landed` before claiming.",
   );
 }

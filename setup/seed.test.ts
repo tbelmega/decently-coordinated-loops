@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
   existsSync,
 } from "node:fs";
@@ -14,11 +15,16 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
-  END_MARK,
-  START_MARK,
+  GENERATED_OPEN,
+  GENERATED_CLOSE,
+  SECTION_OPEN,
+  SECTION_CLOSE,
+  LEGACY_END_MARK,
+  LEGACY_START_MARK,
   detectConfigTargets,
   renderConfigBlock,
   renderCursorRule,
+  upsertConfigBlock,
 } from "./config-block.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
@@ -33,7 +39,7 @@ function run(args: string[], opts: { cwd?: string; home?: string } = {}): SpawnS
 }
 
 /** Whether mode bits actually stop this process from listing a directory. False
- * under root, which ignores them — so a permission-based test proves nothing there. */
+ * under root, which ignores them - so a permission-based test proves nothing there. */
 const PERMISSIONS_ARE_ENFORCED = (() => {
   const probe = mkdtempSync(join(tmpdir(), "loops-perm-probe-"));
   chmodSync(probe, 0o000);
@@ -109,7 +115,7 @@ describe("seed: new mode", () => {
     expect(log.stdout).toContain("Seed loops data repo");
   });
 
-  test("is idempotent — re-running never overwrites existing files", () => {
+  test("is idempotent - re-running never overwrites existing files", () => {
     const dir = seedNewRepo(["--skip-harness"]);
     const marker = "user content that must survive\n";
     writeFileSync(join(dir, "INBOX.md"), marker);
@@ -237,8 +243,8 @@ describe("seed: join mode", () => {
 
 // `bun run setup` is join mode aimed at the repo it lives in. Five docs sites plus
 // cli-review's error message promise this command; before it existed, the reviewer
-// prompt was reachable only during the very first seed, so a second machine — and
-// anyone who answered "none" — had no way to it but hand-editing loops.json.
+// prompt was reachable only during the very first seed, so a second machine - and
+// anyone who answered "none" - had no way to it but hand-editing loops.json.
 describe("seed: bun run setup (reviewer activation after the first seed)", () => {
   const readConfig = (dir: string) => JSON.parse(readFileSync(join(dir, "loops.json"), "utf8"));
 
@@ -333,7 +339,7 @@ describe("seed: bun run setup (reviewer activation after the first seed)", () =>
 
   // R1-F1/R1-F6: the audience for `bun run setup` is repos that already exist. Join's
   // writeNew never touches an existing package.json, so without this the command reaches
-  // only repos seeded after it was added — the exact inverse of who needs it.
+  // only repos seeded after it was added - the exact inverse of who needs it.
   test("join adds missing generated scripts to an existing package.json", () => {
     const dir = seedNewRepo(["--skip-harness"]);
     const legacy = {
@@ -381,7 +387,7 @@ describe("seed: bun run setup (reviewer activation after the first seed)", () =>
   });
 
   // R1-F5: assigning `.reviewer` onto an array lands a non-index property that
-  // JSON.stringify drops — the command would print success and persist nothing.
+  // JSON.stringify drops - the command would print success and persist nothing.
   test.each([
     ["an array review block", "[]"],
     ["a string review block", '"codex"'],
@@ -447,7 +453,7 @@ describe("generated receipt contract", () => {
 
   test.each(wrappers)("%s puts the receipt at the end of the handoff", (_name, rendered) => {
     expect(flatten(rendered)).toContain(
-      "**End** that final item handoff with this receipt — the last lines you print, " +
+      "**End** that final item handoff with this receipt - the last lines you print, " +
         "below the prose summary, so the status is visible without scrolling.",
     );
   });
@@ -458,18 +464,18 @@ describe("generated receipt contract", () => {
       const flat = flatten(rendered);
 
       expect(flat).toContain(
-        "authorize rounds past the cap (`--max-rounds`, logged on the item) — until the " +
+        "authorize rounds past the cap (`--max-rounds`, logged on the item) - until the " +
           "owner rules, the item sits `blocked` / `next-actor: owner` / `awaiting: approve`",
       );
       expect(flat).toContain(
         "disposition the outstanding finding `deferred-to-human` and hand over " +
-          "`REVIEW: BLOCKED` — `blocked` / `next-actor: owner` / `awaiting: decide`",
+          "`REVIEW: BLOCKED` - `blocked` / `next-actor: owner` / `awaiting: decide`",
       );
       expect(flat).toContain(
-        "land as-is under the owner's explicit `WAIVED` opt-out — only the owner can give " +
+        "land as-is under the owner's explicit `WAIVED` opt-out - only the owner can give " +
           "it; once given the item is `implemented` / `next-actor: owner` / `awaiting: review-merge`",
       );
-      expect(flat).toContain("drop the change — `dropped`");
+      expect(flat).toContain("drop the change - `dropped`");
       expect(flat).toContain(
         'Never make "approve more rounds" the only option the owner can see.',
       );
@@ -479,12 +485,18 @@ describe("generated receipt contract", () => {
   test.each(wrappers)(
     "%s keeps reviewer failure and staleness out of the owner's hands",
     (_name, rendered) => {
-      expect(flatten(rendered)).toContain(
+      const flat = flatten(rendered);
+
+      expect(flat).toContain(
         "A failed or incomplete review attempt is yours to recover from, not the owner's: " +
-          "fix the cause and run the review again, leaving the item where it is — the attempt " +
-          "is recorded separately and costs no round. A stale review is not free: a fresh " +
-          "round consumes one, and `start` refuses a same-base rerun when the last round was " +
-          "clean. Escalate only a round cap or an outstanding `deferred-to-human` finding,",
+          "fix the cause and run the review again, leaving the item where it is - the attempt " +
+          "is recorded separately as the pending logical round with an alphabetic suffix, such " +
+          "as `1-a`, and costs no round.",
+      );
+      expect(flat).toContain(
+        "When a changed patch series supersedes the review base, the active review epoch starts " +
+          "again at round 1; prior epochs remain append-only audit history and do not consume the " +
+          "new epoch's configured round cap.",
       );
     },
   );
@@ -492,7 +504,7 @@ describe("generated receipt contract", () => {
   test.each(wrappers)("%s keeps the owner-no-reply rule intact", (_name, rendered) => {
     expect(flatten(rendered)).toContain(
       "**Before printing the receipt, leave the item in a state that is still accurate if " +
-        "the owner never replies** — state, next-actor, awaiting, next-step, and the recorded " +
+        "the owner never replies** - state, next-actor, awaiting, next-step, and the recorded " +
         "`base-sha`/`head-sha` all true as of that moment, committed and pushed. Never park an " +
         "item in a state that presumes an approval you have not received. The owner must be " +
         "able to close the conversation at that point without leaving the board stale.",
@@ -509,7 +521,8 @@ describe("config block", () => {
     const dir = seedNewRepo([], home);
     const claudeMd = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
     expect(claudeMd).toContain("# My rules");
-    expect(claudeMd).toContain("LOOPS:START");
+    expect(claudeMd).toContain(`${GENERATED_OPEN}\n${SECTION_OPEN}\n`);
+    expect(claudeMd).toContain(`${SECTION_CLOSE}\n${GENERATED_CLOSE}\n`);
     expect(claudeMd).toContain(dir);
     expect(claudeMd).toContain("casey");
     expect(claudeMd).toContain("IMPLEMENTATION: COMPLETE|INCOMPLETE");
@@ -521,21 +534,22 @@ describe("config block", () => {
     const rerun = run(["run", SEED, dir, "--join", "--owner", "casey"], { home });
     expect(rerun.status).toBe(0);
     const after = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
-    expect(after.split("LOOPS:START").length).toBe(2);
-    // No .codex dir in this fake home — must not have been created.
+    expect(after.split(SECTION_OPEN).length).toBe(2);
+    expect(after.split(GENERATED_OPEN).length).toBe(2);
+    // No .codex dir in this fake home - must not have been created.
     expect(existsSync(join(home, ".codex"))).toBe(false);
   });
 
-  test("refreshes marker-bearing alternate Claude profiles but never seeds them", () => {
+  test("seeds every alternate Claude profile, migrating legacy blocks", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-home-"));
     mkdirSync(join(home, ".claude"), { recursive: true });
-    // Opted in: already carries the markered block.
+    // Still carries the legacy markered block - migrated on refresh.
     mkdirSync(join(home, ".claude-work"), { recursive: true });
     writeFileSync(
       join(home, ".claude-work", "CLAUDE.md"),
-      `# Work rules\n${START_MARK}\nold block\n${END_MARK}\n`,
+      `# Work rules\n${LEGACY_START_MARK}\nold block\n${LEGACY_END_MARK}\n`,
     );
-    // Not opted in: no marker — must be left untouched.
+    // No marker: targeted all the same, custom content preserved above the wrapper.
     mkdirSync(join(home, ".claude-scratch"), { recursive: true });
     writeFileSync(join(home, ".claude-scratch", "CLAUDE.md"), "# Scratch rules\n");
 
@@ -545,7 +559,13 @@ describe("config block", () => {
     expect(optedIn).toContain("# Work rules");
     expect(optedIn).toContain(dir);
     expect(optedIn).not.toContain("old block");
-    expect(readFileSync(join(home, ".claude-scratch", "CLAUDE.md"), "utf8")).toBe("# Scratch rules\n");
+    // The refresh migrated the legacy markers into the tag grammar.
+    expect(optedIn).not.toContain("LOOPS:START");
+    expect(optedIn).toContain(GENERATED_OPEN);
+    const scratch = readFileSync(join(home, ".claude-scratch", "CLAUDE.md"), "utf8");
+    expect(scratch.startsWith("# Scratch rules\n")).toBe(true);
+    expect(scratch).toContain(GENERATED_OPEN);
+    expect(scratch).toContain(dir);
   });
 
   test("writes a Cursor .mdc rule when ~/.cursor exists, and refreshes idempotently", () => {
@@ -560,10 +580,11 @@ describe("config block", () => {
     expect(rule).toContain("## Work-stream board (decently-coordinated-loops)");
     expect(rule).toContain(dir);
     expect(rule).toContain("casey");
-    // Cursor rules use YAML frontmatter, not the HTML markers.
+    // Cursor rules use YAML frontmatter, not the tag grammar.
     expect(rule).not.toContain("LOOPS:START");
+    expect(rule).not.toContain(GENERATED_OPEN);
 
-    // Re-running refreshes the whole file — one frontmatter, no duplication.
+    // Re-running refreshes the whole file - one frontmatter, no duplication.
     const rerun = run(["run", SEED, dir, "--join", "--owner", "casey"], { home });
     expect(rerun.status).toBe(0);
     expect(readFileSync(rulePath, "utf8").split("alwaysApply: true").length).toBe(2);
@@ -595,7 +616,7 @@ describe("config block", () => {
   });
 
   // Permission bits do not stop a privileged runner, and a test that quietly
-  // returns there would report a pass it never earned. Skip visibly instead —
+  // returns there would report a pass it never earned. Skip visibly instead -
   // the non-directory case above still covers the failed listing.
   test.skipIf(PERMISSIONS_ARE_ENFORCED === false)(
     "an unreadable home detects no targets instead of throwing",
@@ -614,5 +635,182 @@ describe("config block", () => {
     const missing = join(mkdtempSync(join(tmpdir(), "loops-home-")), "never-created");
     const dir = seedNewRepo([], missing);
     expect(existsSync(join(dir, "BOARD.md"))).toBe(true);
+  });
+});
+
+describe("upsertConfigBlock tag pairing", () => {
+  const params = { owner: "casey", dataRepo: "/tmp/board", dclHome: "/tmp/dcl" };
+  const section = renderConfigBlock(params);
+
+  function upsertInto(initial: string | null): { outcome: ReturnType<typeof upsertConfigBlock>; content: string } {
+    const dir = mkdtempSync(join(tmpdir(), "loops-upsert-"));
+    const target = join(dir, "CLAUDE.md");
+    if (initial !== null) writeFileSync(target, initial);
+    const outcome = upsertConfigBlock(target, section);
+    const content = existsSync(target) ? readFileSync(target, "utf8") : "";
+    rmSync(dir, { recursive: true, force: true });
+    return { outcome, content };
+  }
+
+  test("creates a wrapped section for an absent file", () => {
+    const { outcome, content } = upsertInto(null);
+    expect(outcome).toEqual({ action: "created" });
+    expect(content).toBe(`${GENERATED_OPEN}\n${section}${GENERATED_CLOSE}\n`);
+  });
+
+  test("appends below custom content, preserving it byte for byte", () => {
+    const custom = "# My rules\n\nkeep this exactly.\n";
+    const { outcome, content } = upsertInto(custom);
+    expect(outcome).toEqual({ action: "appended" });
+    expect(content.startsWith(custom)).toBe(true);
+    expect(content).toContain(`${GENERATED_OPEN}\n${SECTION_OPEN}\n`);
+  });
+
+  test("replaces its own section in place, preserving a sibling section and outside content", () => {
+    const sibling = "<DECENTLY-CAPABLE-POWERS>\nsibling content\n</DECENTLY-CAPABLE-POWERS>";
+    const initial = `# head\n${GENERATED_OPEN}\n${sibling}\n${SECTION_OPEN}\nOLD-SECTION-BODY\n${SECTION_CLOSE}\n${GENERATED_CLOSE}\n# tail\n`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({ action: "replaced" });
+    expect(content).toContain("sibling content");
+    expect(content).not.toContain("OLD-SECTION-BODY");
+    expect(content.startsWith("# head\n")).toBe(true);
+    expect(content.endsWith("# tail\n")).toBe(true);
+    expect(content.split(GENERATED_OPEN).length).toBe(2);
+    expect(content).toContain("casey");
+  });
+
+  test("inserts its section into a wrapper another tool created", () => {
+    const sibling = "<DECENTLY-CAPABLE-POWERS>\nsibling content\n</DECENTLY-CAPABLE-POWERS>";
+    const initial = `${GENERATED_OPEN}\n${sibling}\n${GENERATED_CLOSE}\n`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({ action: "appended" });
+    expect(content).toContain("sibling content");
+    expect(content.indexOf(SECTION_OPEN)).toBeGreaterThan(content.indexOf("</DECENTLY-CAPABLE-POWERS>"));
+    expect(content.indexOf(SECTION_CLOSE)).toBeLessThan(content.indexOf(GENERATED_CLOSE));
+    expect(content.split(GENERATED_OPEN).length).toBe(2);
+  });
+
+  test("migrates a legacy markered block in place, idempotently", () => {
+    const initial = `# head\n${LEGACY_START_MARK}\nold body\n${LEGACY_END_MARK}\n# tail\n`;
+    const first = upsertInto(initial);
+    expect(first.outcome).toEqual({ action: "migrated" });
+    expect(first.content).not.toContain("LOOPS:START");
+    expect(first.content).not.toContain("old body");
+    expect(first.content.startsWith("# head\n")).toBe(true);
+    expect(first.content.endsWith("# tail\n")).toBe(true);
+    // Second run replaces the now-current section and is byte-identical.
+    const second = upsertInto(first.content);
+    expect(second.outcome).toEqual({ action: "replaced" });
+    expect(second.content).toBe(first.content);
+  });
+
+  test("migrates a leftover legacy block when the wrapper already exists", () => {
+    const sibling = "<DECENTLY-CAPABLE-POWERS>\nsibling content\n</DECENTLY-CAPABLE-POWERS>";
+    const initial = `${GENERATED_OPEN}\n${sibling}\n${GENERATED_CLOSE}\n\n${LEGACY_START_MARK}\nold body\n${LEGACY_END_MARK}\n`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({ action: "migrated" });
+    expect(content).not.toContain("LOOPS:START");
+    expect(content).not.toContain("old body");
+    expect(content).toContain("sibling content");
+    expect(content.split(SECTION_OPEN).length).toBe(2);
+    expect(content.indexOf(SECTION_CLOSE)).toBeLessThan(content.indexOf(GENERATED_CLOSE));
+  });
+
+  test("a prose mention of a tag is not a tag", () => {
+    const custom = `# notes\nthe ${GENERATED_OPEN} wrapper and the ${SECTION_OPEN} tag are discussed here\n`;
+    const { outcome, content } = upsertInto(custom);
+    expect(outcome).toEqual({ action: "appended" });
+    expect(content.startsWith(custom)).toBe(true);
+  });
+
+  test("an unpaired wrapper tag fails closed", () => {
+    const initial = `# head\n${GENERATED_OPEN}\nnever closed\n`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({ action: "skipped", reason: `${GENERATED_OPEN} is never closed` });
+    expect(content).toBe(initial);
+  });
+
+  test("more than one wrapper fails closed", () => {
+    const initial = `${GENERATED_OPEN}\na\n${GENERATED_CLOSE}\n${GENERATED_OPEN}\nb\n${GENERATED_CLOSE}\n`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({ action: "skipped", reason: `more than one ${GENERATED_OPEN} block` });
+    expect(content).toBe(initial);
+  });
+
+  test("an unpaired section tag inside the wrapper fails closed", () => {
+    const initial = `${GENERATED_OPEN}\n${SECTION_OPEN}\nnever closed\n${GENERATED_CLOSE}\n`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({ action: "skipped", reason: `${SECTION_OPEN} is never closed` });
+    expect(content).toBe(initial);
+  });
+
+  test("an orphan closing tag fails closed at either level", () => {
+    const wrapperOrphan = `# notes\n${GENERATED_CLOSE}\n`;
+    const first = upsertInto(wrapperOrphan);
+    expect(first.outcome).toEqual({
+      action: "skipped",
+      reason: `${GENERATED_CLOSE} without a matching ${GENERATED_OPEN}`,
+    });
+    expect(first.content).toBe(wrapperOrphan);
+    const sectionOrphan = `${GENERATED_OPEN}\n${SECTION_CLOSE}\n${GENERATED_CLOSE}\n`;
+    const second = upsertInto(sectionOrphan);
+    expect(second.outcome).toEqual({
+      action: "skipped",
+      reason: `${SECTION_CLOSE} without a matching ${SECTION_OPEN}`,
+    });
+    expect(second.content).toBe(sectionOrphan);
+  });
+
+  test("a section outside the wrapper fails closed", () => {
+    const besideWrapper = `${SECTION_OPEN}\nloose\n${SECTION_CLOSE}\n${GENERATED_OPEN}\n${GENERATED_CLOSE}\n`;
+    const first = upsertInto(besideWrapper);
+    expect(first.outcome).toEqual({
+      action: "skipped",
+      reason: `${SECTION_OPEN} section outside the ${GENERATED_OPEN} wrapper`,
+    });
+    expect(first.content).toBe(besideWrapper);
+    const noWrapper = `${SECTION_OPEN}\nloose\n${SECTION_CLOSE}\n`;
+    const second = upsertInto(noWrapper);
+    expect(second.outcome).toEqual({
+      action: "skipped",
+      reason: `${SECTION_OPEN} section outside any ${GENERATED_OPEN} wrapper`,
+    });
+    expect(second.content).toBe(noWrapper);
+  });
+
+  test("duplicated legacy markers are ambiguous and fail closed", () => {
+    const initial = `${LEGACY_START_MARK}\na\n${LEGACY_END_MARK}\n${LEGACY_START_MARK}\nb\n${LEGACY_END_MARK}\n`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({
+      action: "skipped",
+      reason: "unmatched, duplicated, or reversed legacy LOOPS markers",
+    });
+    expect(content).toBe(initial);
+  });
+
+  test("CRLF content and a missing final newline outside the tags survive byte for byte", () => {
+    const head = "# head\r\nwindows line\r\n";
+    const tail = "# tail without final newline";
+    const initial = `${head}${GENERATED_OPEN}\n${SECTION_OPEN}\nOLD-SECTION-BODY\n${SECTION_CLOSE}\n${GENERATED_CLOSE}\n${tail}`;
+    const { outcome, content } = upsertInto(initial);
+    expect(outcome).toEqual({ action: "replaced" });
+    expect(content.startsWith(head)).toBe(true);
+    expect(content.endsWith(`${GENERATED_CLOSE}\n${tail}`)).toBe(true);
+    expect(content).not.toContain("OLD-SECTION-BODY");
+  });
+
+  test("a singleton or reversed legacy marker fails closed", () => {
+    for (const initial of [
+      `# head\n${LEGACY_START_MARK}\nnever ended\n`,
+      `# head\n${LEGACY_END_MARK}\n`,
+      `${LEGACY_END_MARK}\nreversed\n${LEGACY_START_MARK}\n`,
+    ]) {
+      const { outcome, content } = upsertInto(initial);
+      expect(outcome).toEqual({
+        action: "skipped",
+        reason: "unmatched, duplicated, or reversed legacy LOOPS markers",
+      });
+      expect(content).toBe(initial);
+    }
   });
 });

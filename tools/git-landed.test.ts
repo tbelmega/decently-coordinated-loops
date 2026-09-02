@@ -103,7 +103,7 @@ describe("gitLandedStatus", () => {
 
   test("prefers the remote-tracking integration ref when one exists", () => {
     // Clone the fixture so origin/master exists, then land the branch only on the
-    // clone's local master — origin/master (stale) must be what's checked.
+    // clone's local master - origin/master (stale) must be what's checked.
     const upstream = fixtureRepo();
     const clone = join(mkdtempSync(join(tmpdir(), "loops-git-")), "clone");
     git(upstream, "worktree", "prune"); // no-op, keeps upstream tidy

@@ -66,7 +66,7 @@ describe("performMoves", () => {
       };
       const logs = performMoves(root, [move]);
       expect(logs).toEqual([{ slug: "widget", message: "already moved (items -> for-delivery)" }]);
-      // destination content is untouched — no accidental overwrite
+      // destination content is untouched - no accidental overwrite
       expect(readFileSync(join(root, "for-delivery", "widget.md"), "utf8")).toContain("Already there.");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -107,7 +107,7 @@ describe("performMoves", () => {
 
       expect(existsSync(join(root, "for-delivery", "widget.md"))).toBe(false);
       expect(existsSync(join(root, "archive", "widget.md"))).toBe(true);
-      // Staged as a rename (R…), not delete-plus-untracked-add — so `git log --follow`
+      // Staged as a rename (R…), not delete-plus-untracked-add - so `git log --follow`
       // keeps the item's history.
       const status = spawnSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8" }).stdout;
       expect(status).toMatch(/^R/m);

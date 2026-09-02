@@ -5,7 +5,7 @@ import { expandHome, matchProject, type Canonicalize } from "./registration.ts";
 const HOME = "/home/casey";
 
 // A deterministic, existence-free stand-in for the CLI's realpath-based canonicalizer:
-// tilde-expand, then resolve — the faithful analog of the CLI's `resolve()` on this
+// tilde-expand, then resolve - the faithful analog of the CLI's `resolve()` on this
 // platform (strips trailing slashes, normalizes) without touching the filesystem.
 const canonicalize: Canonicalize = (path) => posix.resolve(expandHome(path, HOME));
 
@@ -25,7 +25,7 @@ describe("matchProject", () => {
   const projects = {
     app: { repo: "~/workspace/app" },
     api: { repo: "/srv/api" },
-    docs: {}, // registered but no repo path — never matches
+    docs: {}, // registered but no repo path - never matches
   };
 
   test("matches when the checkout root is a registered repo", () => {

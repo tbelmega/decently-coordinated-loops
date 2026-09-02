@@ -1,10 +1,12 @@
 // The review ledger: the validated, append-only record of review rounds and the
 // agent's per-finding dispositions. The JSON ledger is machine state; the Markdown
-// render is the human surface. Model-agnostic — a reviewer adapter (reviewers.ts)
+// render is the human surface. The invariant inventory and churn decision live in
+// docs/review-ledger-invariants.md. Model-agnostic - a reviewer adapter (reviewers.ts)
 // produces a Review; everything here is pure.
 
-import type {ReviewAuditPass, ReviewClassConfig} from "../config.ts";
+import {DEFAULT_REVIEW_MAX_ROUNDS, type ReviewClassConfig, type ReviewPersonaName} from "../config.ts";
 import type {
+  CombinedAuditNote,
   FindingOrigin,
   ReviewCoverage,
   ReviewMetrics,
@@ -15,6 +17,13 @@ import type {ReviewManifest} from "./review-manifest.ts";
 
 export const priorities = ["P0", "P1", "P2", "P3"] as const;
 export const confidenceLevels = ["high", "medium", "low"] as const;
+export const findingCausalities = [
+  "introduced",
+  "worsened",
+  "unmet-obligation",
+  "pre-existing",
+  "unknown",
+] as const;
 export const dispositionKinds = [
   "accepted",
   "rejected",
@@ -23,10 +32,12 @@ export const dispositionKinds = [
   "accepted-as-limitation",
   "waived-by-policy",
   "tracked-elsewhere",
+  "delegated-follow-up",
 ] as const;
 
 export type Priority = (typeof priorities)[number];
 export type Confidence = (typeof confidenceLevels)[number];
+export type FindingCausality = (typeof findingCausalities)[number];
 export type DispositionKind = (typeof dispositionKinds)[number];
 
 export interface Finding {
@@ -38,8 +49,11 @@ export interface Finding {
   impact: string;
   direction: string;
   confidence: Confidence;
+  /** Whether the reviewed range owns this defect. Optional only for legacy ledgers
+   * written before causal classification became part of reviewer output. */
+  causality?: FindingCausality;
   origin?: FindingOrigin;
-  passes?: ReviewAuditPass[];
+  passes?: ReviewPersonaName[];
   identity?: string;
   firstSeenRound?: number;
   obligationId?: string;
@@ -80,16 +94,23 @@ export interface ReviewDisposition {
    * inside this repository's reviewed range because the counterpart lands separately.
    * No pointer, no disposition. */
   tracks?: string;
+  /** Effective causality confirmed by the implementer. Required for a delegated
+   * follow-up and recorded when an unknown reviewer classification is resolved. */
+  causality?: FindingCausality;
+  /** Follow-up urgency. Only valid on delegated-follow-up. */
+  urgency?: "normal" | "urgent";
+  /** Chat or owner-queue pointer required when urgency is urgent. */
+  escalation?: string;
   /** The prior finding id whose terminal decision this one repeats. Set only by the
    * automatic carry for an exact identity repeat of a terminally dispositioned
    * finding; a carried decision creates no new obligation (the original decision's
    * obligation still governs) and may be superseded by any fresh disposition. */
   carriedFrom?: string;
-  /** Owner attribution — required for accepted-as-limitation on P0/P1 findings and for
+  /** Owner attribution - required for accepted-as-limitation on P0/P1 findings and for
    * the accepted disposition that reverses a limitation. */
   owner?: boolean;
   /** Completed-round count when this decision was recorded. An obligation result can
-   * only close the obligation from a round after its creating decision — a terminal
+   * only close the obligation from a round after its creating decision - a terminal
    * result that pre-dates the decision proves nothing about it. Absent on legacy
    * dispositions, where the finding's own round is the fallback lower bound. */
   decidedAfterRound?: number;
@@ -106,19 +127,37 @@ export interface LedgerFinding extends Finding {
 
 export interface ReviewStepBack {
   path: string;
-  /** The remediation-dominated round pair that armed the tripwire this note answers. */
+  /** Append-only round sequence used to resolve the historical reviewed trees. */
   triggerRounds: [number, number];
+  /** Epoch-qualified identities for the same rounds. Optional only for legacy ledgers. */
+  triggerRoundIds?: [string, string];
 }
 
 export interface ReviewRound {
+  /** Append-only sequence retained for legacy pointers and audit ordering. */
   number: number;
+  /** Review epoch and round number within that epoch. New ledgers always persist both;
+   * old ledgers derive them from supersession boundaries. */
+  epoch?: number;
+  logicalRound?: number;
   headSha: string;
   model: string;
   reviewedAt: string;
   summary: string;
   findings: LedgerFinding[];
+  /** Non-blocking P2/P3 observations returned under the severity floor (C1). They
+   * carry no disposition and no obligation; absent on rounds run without the notes
+   * channel. */
+  notes?: CombinedAuditNote[];
   audit?: ReviewRoundAudit;
   stepBack?: ReviewStepBack;
+}
+
+/** Token usage one pass reported, recorded only when its reviewer CLI exposed it. */
+export interface ReviewPassTokens {
+  input?: number;
+  output?: number;
+  total?: number;
 }
 
 export interface ReviewRoundAudit {
@@ -128,11 +167,48 @@ export interface ReviewRoundAudit {
    * and only the obligation-classifying pass. Absent means the round covered the whole
    * `manifest.baseSha..headSha` range with every configured pass. Recorded because the
    * narrower round is exactly the one whose clean result proves less. */
-  scope?: "remediation-range";
+  scope?: "remediation-range" | "full-widened";
   manifest: ReviewManifest;
-  passes: {pass: ReviewAuditPass; summary: string; coverage: ReviewCoverage}[];
+  passes: ReviewRoundAuditPass[];
   obligations: ReviewObligationResult[];
   metrics: ReviewMetrics;
+  /** The loop controls this round actually ran under (C0: "records the resolved
+   * policy"). Recorded per round because they are what the terminal predicate reads,
+   * and a measurement window that cannot tell a cap exit from a stall is not a
+   * measurement. Absent on rounds recorded before the keys existed. */
+  policy?: ReviewRoundPolicy;
+  /** C2 shadow instrument: on a scoped round started with --shadow-full, the
+   * round-1 personas also ran over the full range; their results are recorded here
+   * and never block. Absent otherwise. */
+  shadow?: {
+    passes: ReviewRoundAuditPass[];
+    findings: Finding[];
+    /** Shadow pass failures, recorded instead of blocking. */
+    errors?: string[];
+  };
+}
+
+/** The resolved loop controls of one round, as the ledger keeps them. */
+export interface ReviewRoundPolicy {
+  maxRounds?: number;
+  severityFloor?: "round-2-plus" | "all-rounds";
+  terminalRejection?: boolean;
+  capExit?: boolean;
+  confirmation?: "full" | "scoped";
+}
+
+export interface ReviewRoundAuditPass {
+  pass: ReviewPersonaName;
+  summary: string;
+  coverage: ReviewCoverage;
+  /** Wall time and token usage of this pass's reviewer invocation (C0 fields).
+   * Absent on ledgers written before instrumentation, and tokens absent whenever
+   * the reviewer CLI exposed no usage. */
+  elapsedMs?: number;
+  tokens?: ReviewPassTokens;
+  /** Persona-engine attribution (C3): the model and effort this pass ran with. */
+  model?: string;
+  effort?: string;
 }
 
 export interface ReviewSupersession {
@@ -146,12 +222,24 @@ export interface ReviewSupersession {
 
 export interface ReviewLedger {
   version: 1;
+  /** Marks ledgers written after causal classification became mandatory. Absent on
+   * legacy version 1 evidence, whose unresolved terminal decisions stay readable but
+   * cannot clear the status gate. */
+  causalScopeVersion?: 1;
   item?: string;
   /** The policy authority this review's class waivers are bound to, recorded when the
    * ledger is created and never rewritten afterwards. Absent on a ledger opened without
    * a data repo, and a waiver on such a ledger blocks - it is never backfilled, because
    * a binding a later run can supply is not a binding. */
   authority?: ReviewAuthority;
+  /** The review profile (C8) this ledger is bound to, recorded at creation like the
+   * authority and never rewritten: disposition and status re-resolve against it, and
+   * a mid-review profile change is refused like a mid-review policy-repo change. */
+  profile?: string;
+  /** An owner-authorized round cap from `start --max-rounds` (C7), persisted so the
+   * raise outlives the invocation: later starts and `status` honor it instead of
+   * treating the lower configured cap as already reached. */
+  maxRoundsOverride?: number;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -166,6 +254,9 @@ export interface ReviewFailure {
   model: string;
   attemptedAt: string;
   reason: string;
+  epoch?: number;
+  logicalRound?: number;
+  attempt?: string;
 }
 
 /** Which configuration may authorize a `waived-by-policy` disposition on this review.
@@ -189,6 +280,7 @@ export interface ReviewAuthority {
 export interface CreateLedgerInput {
   item?: string;
   authority?: ReviewAuthority;
+  profile?: string;
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -200,6 +292,7 @@ export interface AddRoundInput {
   model: string;
   reviewedAt: string;
   review: Review;
+  notes?: CombinedAuditNote[];
   audit?: ReviewRoundAudit;
   stepBack?: ReviewStepBack;
 }
@@ -213,6 +306,11 @@ export interface ReviewObligation {
    * live one. */
   findingId: string;
   type: ReviewObligationType;
+  /** Priority of the originating finding (C2): resolved through the finding each
+   * time the obligation is read, so it survives superseding decisions and legacy
+   * obligations resolve it the same way. Feeds the scoped-confirmation P0 widening
+   * and the C7 cap exit. */
+  priority: Priority;
   title: string;
   evidence: string;
   direction: string;
@@ -226,6 +324,16 @@ export function isDispositionKind(value: unknown): value is DispositionKind {
   return (dispositionKinds as readonly unknown[]).includes(value);
 }
 
+export function dispositionRequiresResolvedCausality(kind: DispositionKind): boolean {
+  return (
+    kind === "accepted" ||
+    kind === "waived-by-policy" ||
+    kind === "tracked-elsewhere" ||
+    kind === "accepted-as-limitation" ||
+    kind === "delegated-follow-up"
+  );
+}
+
 function isPriority(value: unknown): value is Priority {
   return (priorities as readonly unknown[]).includes(value);
 }
@@ -234,8 +342,12 @@ function isConfidence(value: unknown): value is Confidence {
   return (confidenceLevels as readonly unknown[]).includes(value);
 }
 
+export function isFindingCausality(value: unknown): value is FindingCausality {
+  return (findingCausalities as readonly unknown[]).includes(value);
+}
+
 export function createReviewLedger(input: CreateLedgerInput): ReviewLedger {
-  return { version: 1, ...input, rounds: [] };
+  return {version: 1, causalScopeVersion: 1, ...input, rounds: []};
 }
 
 /** Evidence paths (--doc, --step-back) are recorded normalized and repository-relative;
@@ -327,6 +439,15 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
   const doc = optionalString(input, "doc", path);
   const waivedClass = optionalString(input, "class", path);
   const tracks = optionalString(input, "tracks", path);
+  const causality = input.causality;
+  if (causality !== undefined && !isFindingCausality(causality)) {
+    throw new Error(`${path}.causality is invalid`);
+  }
+  const urgency = input.urgency;
+  if (urgency !== undefined && urgency !== "normal" && urgency !== "urgent") {
+    throw new Error(`${path}.urgency must be normal or urgent when present`);
+  }
+  const escalation = optionalString(input, "escalation", path);
   const carriedFrom = optionalString(input, "carriedFrom", path);
   return {
     kind,
@@ -334,6 +455,9 @@ function parseDisposition(input: unknown, path: string): ReviewDisposition | und
     ...(doc ? {doc} : {}),
     ...(waivedClass ? {class: waivedClass} : {}),
     ...(tracks ? {tracks} : {}),
+    ...(isFindingCausality(causality) ? {causality} : {}),
+    ...(urgency === "normal" || urgency === "urgent" ? {urgency} : {}),
+    ...(escalation ? {escalation} : {}),
     ...(carriedFrom ? {carriedFrom} : {}),
     ...(input.owner === true ? {owner: true} : {}),
     ...(typeof decidedAfterRound === "number" ? {decidedAfterRound} : {}),
@@ -348,22 +472,32 @@ export const carryableDispositionKinds: readonly DispositionKind[] = [
   "accepted-as-limitation",
   "waived-by-policy",
   "tracked-elsewhere",
+  "delegated-follow-up",
 ];
 
 /** Invariant 5: a persisted decision honors the recording rules even when the ledger
- * arrived from disk — a malformed ledger must fail closed, not certify silently. */
+ * arrived from disk - a malformed ledger must fail closed, not certify silently. */
 function assertDecisionInvariants(
   decision: ReviewDisposition,
-  finding: Pick<Finding, "priority" | "file">,
+  finding: Pick<Finding, "priority" | "file" | "causality">,
   path: string,
+  causalScopeVersion: 1 | undefined,
 ): void {
   const priority = finding.priority;
+  if (
+    decision.causality &&
+    finding.causality &&
+    finding.causality !== "unknown" &&
+    decision.causality !== finding.causality
+  ) {
+    throw new Error(`${path}.causality contradicts the finding's known causality`);
+  }
   if (decision.kind === "accepted-as-limitation") {
     if (!decision.doc) {
       throw new Error(`${path} is accepted-as-limitation and must carry a doc path`);
     }
     // No legacy writer existed for this kind, so a missing round stamp is
-    // malformation — the legacy fallback must never apply to it.
+    // malformation - the legacy fallback must never apply to it.
     if (decision.decidedAfterRound === undefined) {
       throw new Error(`${path} is accepted-as-limitation and must carry decidedAfterRound`);
     }
@@ -393,9 +527,9 @@ function assertDecisionInvariants(
   } else if (decision.class) {
     throw new Error(`${path}.class is only valid on a waived-by-policy disposition`);
   }
-  if (decision.kind === "tracked-elsewhere") {
+  if (decision.kind === "tracked-elsewhere" || decision.kind === "delegated-follow-up") {
     if (!decision.tracks) {
-      throw new Error(`${path} is tracked-elsewhere and must carry a tracks pointer naming where the fix lands`);
+      throw new Error(`${path} is ${decision.kind} and must carry a tracks pointer naming where the fix lands`);
     }
     if (decision.tracks !== validateTracksPointer(decision.tracks)) {
       throw new Error(`${path}.tracks must be a normalized pointer`);
@@ -405,7 +539,42 @@ function assertDecisionInvariants(
       throw new Error(`${path} is tracked-elsewhere and must carry decidedAfterRound`);
     }
   } else if (decision.tracks) {
-    throw new Error(`${path}.tracks is only valid on a tracked-elsewhere disposition`);
+    throw new Error(`${path}.tracks is only valid on tracked-elsewhere or delegated-follow-up`);
+  }
+  if (decision.kind === "delegated-follow-up") {
+    if (decision.causality !== "pre-existing") {
+      throw new Error(`${path} is delegated-follow-up and must carry pre-existing causality`);
+    }
+    if (!decision.urgency) {
+      throw new Error(`${path} is delegated-follow-up and must carry urgency`);
+    }
+    if (decision.urgency === "urgent" && !decision.escalation) {
+      throw new Error(`${path} is an urgent delegated-follow-up and must carry escalation evidence`);
+    }
+    if (decision.decidedAfterRound === undefined) {
+      throw new Error(`${path} is delegated-follow-up and must carry decidedAfterRound`);
+    }
+  } else {
+    if (decision.urgency) throw new Error(`${path}.urgency is only valid on delegated-follow-up`);
+    if (decision.escalation) throw new Error(`${path}.escalation is only valid on delegated-follow-up`);
+  }
+  const effectiveCausality = decision.causality ?? finding.causality;
+  if (
+    decision.kind === "tracked-elsewhere" &&
+    (effectiveCausality === "introduced" ||
+      effectiveCausality === "worsened" ||
+      effectiveCausality === "unmet-obligation")
+  ) {
+    throw new Error(`${path} routes a defect owned by the current workstream to tracked-elsewhere`);
+  }
+  if (
+    dispositionRequiresResolvedCausality(decision.kind) &&
+    (effectiveCausality === "unknown" || (causalScopeVersion === 1 && !effectiveCausality))
+  ) {
+    throw new Error(`${path} must resolve causality before using ${decision.kind}`);
+  }
+  if (decision.kind === "accepted" && effectiveCausality === "pre-existing") {
+    throw new Error(`${path} accepts a pre-existing defect as current-workstream remediation`);
   }
   if (decision.carriedFrom !== undefined && !carryableDispositionKinds.includes(decision.kind)) {
     throw new Error(
@@ -436,9 +605,21 @@ function parseStepBack(input: unknown, path: string, roundNumber: number): Revie
       `${path}.triggerRounds must be the two rounds immediately preceding round ${roundNumber}`,
     );
   }
+  const triggerRoundIds = input.triggerRoundIds;
+  if (
+    triggerRoundIds !== undefined &&
+    (!Array.isArray(triggerRoundIds) ||
+      triggerRoundIds.length !== 2 ||
+      triggerRoundIds.some((value) => typeof value !== "string" || !/^E[1-9]\d*-R[1-9]\d*$/.test(value)))
+  ) {
+    throw new Error(`${path}.triggerRoundIds must be two epoch-qualified round identifiers`);
+  }
   return {
     path: notePath,
     triggerRounds: [triggerRounds[0], triggerRounds[1]],
+    ...(Array.isArray(triggerRoundIds)
+      ? {triggerRoundIds: [String(triggerRoundIds[0]), String(triggerRoundIds[1])] as [string, string]}
+      : {}),
   };
 }
 
@@ -457,6 +638,10 @@ function parseAuthority(input: unknown): ReviewAuthority | undefined {
 export function parseReviewLedger(input: unknown): ReviewLedger {
   if (!isRecord(input)) throw new Error("review ledger must be an object");
   if (input.version !== 1) throw new Error("review ledger version must be 1");
+  if (input.causalScopeVersion !== undefined && input.causalScopeVersion !== 1) {
+    throw new Error("review ledger causalScopeVersion must be 1 when present");
+  }
+  const causalScopeVersion = input.causalScopeVersion === 1 ? 1 : undefined;
   const authority = parseAuthority(input.authority);
   if (!Array.isArray(input.rounds)) throw new Error("review ledger rounds must be an array");
   const totalRounds = input.rounds.length;
@@ -471,8 +656,12 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       if (!isRecord(findingInput)) throw new Error(`${path}.findings[${findingIndex}] must be an object`);
       const findingPath = `${path}.findings[${findingIndex}]`;
       const disposition = parseDisposition(findingInput.disposition, `${findingPath}.disposition`);
+      const persistedFinding = {
+        ...finding,
+        ...(isFindingCausality(findingInput.causality) ? {causality: findingInput.causality} : {}),
+      };
       if (disposition) {
-        assertDecisionInvariants(disposition, finding, `${findingPath}.disposition`);
+        assertDecisionInvariants(disposition, persistedFinding, `${findingPath}.disposition`, causalScopeVersion);
       }
       if (findingInput.history !== undefined && !Array.isArray(findingInput.history)) {
         throw new Error(`${findingPath}.history must be an array when present`);
@@ -482,7 +671,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
             const historyPath = `${findingPath}.history[${historyIndex}]`;
             const parsed = parseDisposition(entry, historyPath);
             if (!parsed) throw new Error(`${historyPath} must be an object`);
-            assertDecisionInvariants(parsed, finding, historyPath);
+            assertDecisionInvariants(parsed, persistedFinding, historyPath, causalScopeVersion);
             return parsed;
           })
         : undefined;
@@ -506,7 +695,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       }
       for (const decision of decisions) {
         // No decision can be recorded before its finding's round exists or after more
-        // rounds than the ledger holds — a forged stamp would let a pre-decision
+        // rounds than the ledger holds - a forged stamp would let a pre-decision
         // result close the obligation (openObligations trusts this value).
         if (
           decision.decidedAfterRound !== undefined &&
@@ -542,12 +731,15 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
           );
         }
       }
-      // Provenance fields fail closed when present but invalid — a silently dropped
+      // Provenance fields fail closed when present but invalid - a silently dropped
       // origin would disarm the remediation-churn tripwire. Only omission is legacy.
       if (findingInput.origin !== undefined && !isFindingOrigin(findingInput.origin)) {
         throw new Error(`${findingPath}.origin is invalid`);
       }
-      if (findingInput.passes !== undefined && !isReviewAuditPassArray(findingInput.passes)) {
+      if (findingInput.causality !== undefined && !isFindingCausality(findingInput.causality)) {
+        throw new Error(`${findingPath}.causality is invalid`);
+      }
+      if (findingInput.passes !== undefined && !isReviewPersonaNameArray(findingInput.passes)) {
         throw new Error(`${findingPath}.passes is invalid`);
       }
       if (
@@ -568,7 +760,8 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
         ...finding,
         id: requiredString(findingInput, "id", findingPath),
         ...(isFindingOrigin(findingInput.origin) ? {origin: findingInput.origin} : {}),
-        ...(isReviewAuditPassArray(findingInput.passes) ? {passes: findingInput.passes} : {}),
+        ...(isFindingCausality(findingInput.causality) ? {causality: findingInput.causality} : {}),
+        ...(isReviewPersonaNameArray(findingInput.passes) ? {passes: findingInput.passes} : {}),
         ...(optionalString(findingInput, "identity", findingPath)
           ? {identity: String(findingInput.identity)}
           : {}),
@@ -587,6 +780,17 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       throw new Error(`${path}.number must be ${roundIndex + 1}`);
     }
     const stepBack = parseStepBack(roundInput.stepBack, `${path}.stepBack`, roundIndex + 1);
+    const epoch = roundInput.epoch;
+    if (epoch !== undefined && (typeof epoch !== "number" || !Number.isInteger(epoch) || epoch < 1)) {
+      throw new Error(`${path}.epoch must be a positive integer when present`);
+    }
+    const logicalRound = roundInput.logicalRound;
+    if (
+      logicalRound !== undefined &&
+      (typeof logicalRound !== "number" || !Number.isInteger(logicalRound) || logicalRound < 1)
+    ) {
+      throw new Error(`${path}.logicalRound must be a positive integer when present`);
+    }
     // A present audit must parse or the ledger fails closed: silently dropping it
     // would erase the round's persisted review evidence on the next rewrite and turn
     // a malformed terminal classification into a fresh attempt.
@@ -597,13 +801,25 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       }
       audit = roundInput.audit;
     }
+    // Present notes must parse or the ledger fails closed, like audit above; a P0/P1
+    // in notes is malformation - the floor demotes only P2/P3, never a blocker.
+    let notes: CombinedAuditNote[] | undefined;
+    if (roundInput.notes !== undefined) {
+      if (!isReviewRoundNotes(roundInput.notes)) {
+        throw new Error(`${path}.notes is present but invalid (notes carry only P2/P3)`);
+      }
+      notes = roundInput.notes;
+    }
     return {
       number,
+      ...(typeof epoch === "number" ? {epoch} : {}),
+      ...(typeof logicalRound === "number" ? {logicalRound} : {}),
       headSha: requiredString(roundInput, "headSha", path),
       model: requiredString(roundInput, "model", path),
       reviewedAt: requiredString(roundInput, "reviewedAt", path),
       summary: parsedReview.summary,
       findings,
+      ...(notes ? {notes} : {}),
       ...(audit ? {audit} : {}),
       ...(stepBack ? {stepBack} : {}),
     };
@@ -615,11 +831,37 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
     ? input.failures.map((failureInput, failureIndex): ReviewFailure => {
         const path = `failures[${failureIndex}]`;
         if (!isRecord(failureInput)) throw new Error(`${path} must be an object`);
+        const coordinateFields = [failureInput.epoch, failureInput.logicalRound, failureInput.attempt];
+        const coordinateCount = coordinateFields.filter((value) => value !== undefined && value !== null).length;
+        if (coordinateCount !== 0 && coordinateCount !== coordinateFields.length) {
+          throw new Error(`${path}.epoch, logicalRound, and attempt must be present together`);
+        }
+        if (
+          failureInput.epoch !== undefined &&
+          (typeof failureInput.epoch !== "number" || !Number.isInteger(failureInput.epoch) || failureInput.epoch < 1)
+        ) {
+          throw new Error(`${path}.epoch must be a positive integer when present`);
+        }
+        if (
+          failureInput.logicalRound !== undefined &&
+          (typeof failureInput.logicalRound !== "number" ||
+            !Number.isInteger(failureInput.logicalRound) ||
+            failureInput.logicalRound < 1)
+        ) {
+          throw new Error(`${path}.logicalRound must be a positive integer when present`);
+        }
+        const attempt = optionalString(failureInput, "attempt", path);
+        if (attempt !== undefined && !/^[a-z]+$/.test(attempt)) {
+          throw new Error(`${path}.attempt must be a lowercase alphabetic suffix when present`);
+        }
         return {
           headSha: requiredString(failureInput, "headSha", path),
           model: requiredString(failureInput, "model", path),
           attemptedAt: requiredString(failureInput, "attemptedAt", path),
           reason: requiredString(failureInput, "reason", path),
+          ...(typeof failureInput.epoch === "number" ? {epoch: failureInput.epoch} : {}),
+          ...(typeof failureInput.logicalRound === "number" ? {logicalRound: failureInput.logicalRound} : {}),
+          ...(attempt ? {attempt} : {}),
         };
       })
     : undefined;
@@ -660,10 +902,55 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
         };
       })
     : undefined;
+  for (let supersessionIndex = 1; supersessionIndex < (supersessions?.length ?? 0); supersessionIndex += 1) {
+    if ((supersessions?.[supersessionIndex].afterRound ?? 0) < (supersessions?.[supersessionIndex - 1].afterRound ?? 0)) {
+      throw new Error("review ledger supersession boundaries must be nondecreasing");
+    }
+  }
+  const coordinateLedger = {supersessions};
+  for (const [roundIndex, round] of rounds.entries()) {
+    const expected = roundCoordinates(coordinateLedger, roundIndex + 1);
+    if (round.epoch !== undefined && round.epoch !== expected.epoch) {
+      throw new Error(`rounds[${roundIndex}].epoch must be ${expected.epoch}`);
+    }
+    if (round.logicalRound !== undefined && round.logicalRound !== expected.logicalRound) {
+      throw new Error(`rounds[${roundIndex}].logicalRound must be ${expected.logicalRound}`);
+    }
+    if (round.stepBack?.triggerRoundIds) {
+      const expectedTriggerIds = round.stepBack.triggerRounds.map((sequence) =>
+        reviewRoundIdentifier(coordinateLedger, sequence),
+      );
+      if (round.stepBack.triggerRoundIds.some((identifier, index) => identifier !== expectedTriggerIds[index])) {
+        throw new Error(`rounds[${roundIndex}].stepBack.triggerRoundIds do not match triggerRounds`);
+      }
+    }
+  }
+  const failureCoordinateLedger = {rounds, failures, supersessions};
+  for (const [failureIndex, failure] of (failures ?? []).entries()) {
+    if (failure.epoch === undefined || failure.logicalRound === undefined || !failure.attempt) continue;
+    const expected = derivedFailureCoordinates(failureCoordinateLedger, failureIndex);
+    if (
+      failure.epoch !== expected.epoch ||
+      failure.logicalRound !== expected.logicalRound ||
+      failure.attempt !== expected.attempt
+    ) {
+      throw new Error(`failures[${failureIndex}] coordinates contradict ledger history`);
+    }
+  }
   return {
     version: 1,
+    ...(causalScopeVersion === 1 ? {causalScopeVersion} : {}),
     ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
     ...(authority ? { authority } : {}),
+    ...(optionalString(input, "profile", "review ledger") ? { profile: String(input.profile) } : {}),
+    ...(input.maxRoundsOverride !== undefined
+      ? (() => {
+          if (typeof input.maxRoundsOverride !== "number" || !Number.isInteger(input.maxRoundsOverride) || input.maxRoundsOverride < 1) {
+            throw new Error("review ledger maxRoundsOverride must be an integer >= 1");
+          }
+          return { maxRoundsOverride: input.maxRoundsOverride };
+        })()
+      : {}),
     branch: requiredString(input, "branch", "review ledger"),
     baseRef: requiredString(input, "baseRef", "review ledger"),
     baseSha: requiredString(input, "baseSha", "review ledger"),
@@ -679,16 +966,98 @@ export function liveRounds(ledger: ReviewLedger): ReviewRound[] {
   return latest ? ledger.rounds.slice(latest.afterRound) : ledger.rounds;
 }
 
+export function activeReviewEpoch(ledger: ReviewLedger): number {
+  return (ledger.supersessions?.length ?? 0) + 1;
+}
+
+function roundCoordinates(ledger: Pick<ReviewLedger, "supersessions">, sequence: number): {
+  epoch: number;
+  logicalRound: number;
+} {
+  let epoch = 1;
+  let epochStart = 0;
+  for (const supersession of ledger.supersessions ?? []) {
+    if (sequence <= supersession.afterRound) break;
+    epoch += 1;
+    epochStart = supersession.afterRound;
+  }
+  return {epoch, logicalRound: sequence - epochStart};
+}
+
+export function reviewRoundIdentifier(
+  ledger: Pick<ReviewLedger, "supersessions">,
+  sequence: number,
+): string {
+  const coordinates = roundCoordinates(ledger, sequence);
+  return `E${coordinates.epoch}-R${coordinates.logicalRound}`;
+}
+
+function attemptSuffix(attemptNumber: number): string {
+  let remaining = attemptNumber;
+  let suffix = "";
+  while (remaining > 0) {
+    remaining -= 1;
+    suffix = String.fromCharCode(97 + (remaining % 26)) + suffix;
+    remaining = Math.floor(remaining / 26);
+  }
+  return suffix;
+}
+
+type FailureCoordinateLedger = Pick<ReviewLedger, "rounds" | "failures" | "supersessions">;
+
+function derivedFailureCoordinates(
+  ledger: FailureCoordinateLedger,
+  failureIndex: number,
+): {epoch: number; logicalRound: number; attempt: string} {
+  const failure = ledger.failures?.[failureIndex];
+  if (!failure) throw new Error(`review failure ${failureIndex} not found`);
+  let epoch = 1;
+  let epochStart = 0;
+  for (const supersession of ledger.supersessions ?? []) {
+    if (failure.attemptedAt < supersession.archivedAt) break;
+    epoch += 1;
+    epochStart = supersession.afterRound;
+  }
+  const epochEnd = ledger.supersessions?.[epoch - 1]?.afterRound ?? ledger.rounds.length;
+  const completedBeforeAttempt = ledger.rounds
+    .slice(epochStart, epochEnd)
+    .filter((round) => round.reviewedAt < failure.attemptedAt)
+    .length;
+  const coordinate = {epoch, logicalRound: completedBeforeAttempt + 1};
+  const priorAttempts = (ledger.failures ?? []).slice(0, failureIndex).filter((_, priorIndex) => {
+    const prior = derivedFailureCoordinates(ledger, priorIndex);
+    return prior.epoch === coordinate.epoch && prior.logicalRound === coordinate.logicalRound;
+  }).length;
+  return {...coordinate, attempt: attemptSuffix(priorAttempts + 1)};
+}
+
+function failureCoordinates(
+  ledger: FailureCoordinateLedger,
+  failureIndex: number,
+): {epoch: number; logicalRound: number; attempt: string} {
+  const failure = ledger.failures?.[failureIndex];
+  if (!failure) throw new Error(`review failure ${failureIndex} not found`);
+  if (failure.epoch !== undefined && failure.logicalRound !== undefined && failure.attempt) {
+    return {epoch: failure.epoch, logicalRound: failure.logicalRound, attempt: failure.attempt};
+  }
+  return derivedFailureCoordinates(ledger, failureIndex);
+}
+
 /** Enforcement contract rule 5: a changed patch series resets round mechanics only. The
- * same ledger continues — every disposition, obligation, and the tripwire's round
- * history stay in place by construction — while the superseded base context is recorded
+ * same ledger continues - every disposition, obligation, and the tripwire's round
+ * history stay in place by construction - while the superseded base context is recorded
  * here and the live window restarts after the last completed round. */
 export function supersedeLedgerBase(
   ledger: ReviewLedger,
   next: {baseRef: string; baseSha: string; patchIds?: string[]; archivedAt: string},
 ): ReviewLedger {
+  // An owner-authorized round raise does not ride into the new epoch: a changed patch
+  // series is reviewed against its own configured cap, and the owner re-authorizes if
+  // the new epoch needs more rounds too. Dropped explicitly rather than by omission,
+  // because everything else here is deliberately carried forward.
+  const {maxRoundsOverride: _superseded, ...carried} = ledger;
   return {
-    ...ledger,
+    ...carried,
     baseRef: next.baseRef,
     baseSha: next.baseSha,
     ...(next.patchIds ? {patchIds: next.patchIds} : {}),
@@ -706,25 +1075,48 @@ export function supersedeLedgerBase(
 }
 
 export function recordReviewFailure(ledger: ReviewLedger, failure: ReviewFailure): ReviewLedger {
-  return { ...ledger, failures: [...(ledger.failures ?? []), failure] };
+  const epoch = activeReviewEpoch(ledger);
+  const logicalRound = liveRounds(ledger).length + 1;
+  const priorAttempts = (ledger.failures ?? []).filter((_, failureIndex) => {
+    const prior = failureCoordinates(ledger, failureIndex);
+    return prior.epoch === epoch && prior.logicalRound === logicalRound;
+  }).length;
+  return {
+    ...ledger,
+    failures: [
+      ...(ledger.failures ?? []),
+      {
+        ...failure,
+        epoch,
+        logicalRound,
+        attempt: attemptSuffix(priorAttempts + 1),
+      },
+    ],
+  };
 }
 
 export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): ReviewLedger {
   const number = ledger.rounds.length + 1;
+  const epoch = activeReviewEpoch(ledger);
+  const logicalRound = liveRounds(ledger).length + 1;
+  const findingPrefix = `E${epoch}-R${logicalRound}`;
   return {
     ...ledger,
     rounds: [
       ...ledger.rounds,
       {
         number,
+        epoch,
+        logicalRound,
         headSha: input.headSha,
         model: input.model,
         reviewedAt: input.reviewedAt,
         summary: input.review.summary,
         findings: input.review.findings.map((finding, index) => ({
           ...finding,
-          id: `R${number}-F${index + 1}`,
+          id: `${findingPrefix}-F${index + 1}`,
         })),
+        ...(input.notes ? {notes: input.notes} : {}),
         ...(input.audit ? {audit: input.audit} : {}),
         ...(input.stepBack ? {stepBack: input.stepBack} : {}),
       },
@@ -796,7 +1188,7 @@ const terminalStatusByType: Record<ReviewObligationType, "fixed" | "documented">
 /** Every open obligation across the whole ledger, typed by the decision that created it:
  * `accepted` creates a remediation obligation (terminal: fixed), `accepted-as-limitation`
  * a documentation obligation (terminal: documented). Supersession of the review base
- * never drops these — the rounds carrying the decisions stay in the ledger. */
+ * never drops these - the rounds carrying the decisions stay in the ledger. */
 export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
   const terminalResults = ledger.rounds.flatMap((round) =>
     round.audit?.obligations
@@ -830,6 +1222,7 @@ export function openObligations(ledger: ReviewLedger): ReviewObligation[] {
       return [{
         findingId: id,
         type,
+        priority: finding.priority,
         title: finding.title,
         evidence: finding.evidence,
         direction: finding.direction,
@@ -851,7 +1244,7 @@ export type TripwireState = {armed: false} | {armed: true; rounds: [TripwireRoun
 
 /** C1: a completed round is remediation-dominated when it has at least one finding and
  * strictly more than half carry `origin: remediation`. The tripwire arms when the two
- * most recently completed rounds are both dominated. It reads the full round history —
+ * most recently completed rounds are both dominated. It reads the full round history -
  * base supersession resets round mechanics, not containment state. */
 function isRemediationDominated(round: Pick<ReviewRound, "findings">): boolean {
   const remediationCount = round.findings.filter((finding) => finding.origin === "remediation").length;
@@ -879,6 +1272,12 @@ export interface RecordDispositionOptions {
   waivedClass?: string;
   /** The pointer to where the fix lands (tracked-elsewhere only). */
   tracks?: string;
+  /** Implementer-confirmed causality, used to resolve a reviewer classification of unknown. */
+  causality?: FindingCausality;
+  /** Required for delegated-follow-up. */
+  urgency?: "normal" | "urgent";
+  /** Required for an urgent delegated-follow-up. */
+  escalation?: string;
   /** The RESOLVED review classes (loops.json, after per-project merge). Required for
    * waived-by-policy: recording a waiver without the config context fails closed. */
   classes?: ReviewClassConfig[];
@@ -908,31 +1307,75 @@ export function recordDisposition(
   if (kind === "waived-by-policy" && !options.waivedClass) {
     throw new Error("waived-by-policy requires the authorizing class name");
   }
-  if (options.tracks !== undefined && kind !== "tracked-elsewhere") {
-    throw new Error("a tracks pointer is only valid on a tracked-elsewhere disposition");
+  if (options.tracks !== undefined && kind !== "tracked-elsewhere" && kind !== "delegated-follow-up") {
+    throw new Error("a tracks pointer is only valid on tracked-elsewhere or delegated-follow-up");
   }
   let tracks: string | undefined;
-  if (kind === "tracked-elsewhere") {
+  if (kind === "tracked-elsewhere" || kind === "delegated-follow-up") {
     if (!options.tracks?.trim()) {
-      throw new Error("tracked-elsewhere requires a tracks pointer naming where the fix lands");
+      throw new Error(`${kind} requires a tracks pointer naming where the fix lands`);
     }
     tracks = validateTracksPointer(options.tracks);
   }
-  const next: ReviewDisposition = {
-    kind,
-    reason,
-    ...(doc ? {doc} : {}),
-    ...(kind === "waived-by-policy" && options.waivedClass ? {class: options.waivedClass} : {}),
-    ...(tracks ? {tracks} : {}),
-    ...(options.owner ? {owner: true} : {}),
-    decidedAfterRound: ledger.rounds.length,
-  };
+  if (kind === "delegated-follow-up" && !options.urgency) {
+    throw new Error("delegated-follow-up requires normal or urgent urgency");
+  }
+  if (options.urgency !== undefined && kind !== "delegated-follow-up") {
+    throw new Error("urgency is only valid on delegated-follow-up");
+  }
+  if (options.escalation !== undefined && kind !== "delegated-follow-up") {
+    throw new Error("escalation is only valid on delegated-follow-up");
+  }
+  if (kind === "delegated-follow-up" && options.urgency === "urgent" && !options.escalation?.trim()) {
+    throw new Error("urgent delegated-follow-up requires escalation evidence");
+  }
   let found = false;
   const rounds = ledger.rounds.map((round) => ({
     ...round,
     findings: round.findings.map((finding) => {
       if (finding.id !== findingId) return finding;
       found = true;
+      if (
+        options.causality &&
+        finding.causality &&
+        finding.causality !== "unknown" &&
+        options.causality !== finding.causality
+      ) {
+        throw new Error(
+          `${findingId} has known causality ${finding.causality}; it cannot be overridden to ${options.causality}`,
+        );
+      }
+      const causality = options.causality ?? finding.causality;
+      if (dispositionRequiresResolvedCausality(kind) && (!causality || causality === "unknown")) {
+        throw new Error(`${findingId} must resolve causality before it can be ${kind}`);
+      }
+      if (kind === "delegated-follow-up" && causality !== "pre-existing") {
+        throw new Error(`${findingId} must be pre-existing before it can be delegated to a follow-up`);
+      }
+      if (kind === "accepted" && causality === "pre-existing") {
+        throw new Error(`${findingId} is pre-existing and does not belong to current-workstream remediation`);
+      }
+      if (
+        kind === "tracked-elsewhere" &&
+        (causality === "introduced" || causality === "worsened" || causality === "unmet-obligation")
+      ) {
+        throw new Error(`${findingId} belongs to the current workstream and cannot be tracked elsewhere`);
+      }
+      if (kind === "tracked-elsewhere" && causality === "unknown") {
+        throw new Error(`${findingId} must resolve unknown causality before it can be tracked elsewhere`);
+      }
+      const next: ReviewDisposition = {
+        kind,
+        reason,
+        ...(doc ? {doc} : {}),
+        ...(kind === "waived-by-policy" && options.waivedClass ? {class: options.waivedClass} : {}),
+        ...(tracks ? {tracks} : {}),
+        ...(causality ? {causality} : {}),
+        ...(kind === "delegated-follow-up" && options.urgency ? {urgency: options.urgency} : {}),
+        ...(kind === "delegated-follow-up" && options.escalation ? {escalation: options.escalation} : {}),
+        ...(options.owner ? {owner: true} : {}),
+        decidedAfterRound: ledger.rounds.length,
+      };
       if (
         kind === "accepted-as-limitation" &&
         (finding.priority === "P0" || finding.priority === "P1") &&
@@ -963,7 +1406,7 @@ export function recordDisposition(
       if (!supersedable) {
         if (finding.disposition.kind === "accepted-as-limitation") {
           throw new Error(
-            `${findingId} is accepted-as-limitation — only an owner-attributed accepted disposition may supersede it`,
+            `${findingId} is accepted-as-limitation - only an owner-attributed accepted disposition may supersede it`,
           );
         }
         throw new Error(`${findingId} already has a disposition`);
@@ -1000,12 +1443,14 @@ export function carryForwardDispositions(ledger: ReviewLedger): ReviewLedger {
     const prior = priorFindingsById.get(mostRecentPriorId);
     const decision = prior?.disposition;
     if (!prior || !decision || !carryableDispositionKinds.includes(decision.kind)) return finding;
+    const priorCausality = decision.causality ?? prior.causality;
+    if (priorCausality !== finding.causality) return finding;
     carriedAny = true;
     return {
       ...finding,
       disposition: {
         ...decision,
-        carriedFrom: prior.id,
+        carriedFrom: decision.carriedFrom ?? prior.id,
         decidedAfterRound: ledger.rounds.length,
       },
     };
@@ -1019,14 +1464,14 @@ export function carryForwardDispositions(ledger: ReviewLedger): ReviewLedger {
 
 /** Prompt notes about previously dispositioned findings. Each round runs a fresh
  *  reviewer with no memory, so without these a rejected false positive gets re-raised
- *  every round and a clean confirmation round is unreachable — every disagreement
+ *  every round and a clean confirmation round is unreachable - every disagreement
  *  would dead-end at the round cap. Accepted findings are omitted: their fixes are new
  *  code the next round must genuinely re-review. */
 export function priorDispositionNotes(ledger: ReviewLedger): string[] {
   return ledger.rounds.flatMap((round) =>
     round.findings.flatMap((finding) =>
       finding.disposition && finding.disposition.kind !== "accepted"
-        ? [`${finding.id} "${finding.title}" — ${finding.disposition.kind}: ${finding.disposition.reason}`]
+        ? [`${finding.id} "${finding.title}" - ${finding.disposition.kind}: ${finding.disposition.reason}`]
         : [],
     ),
   );
@@ -1037,7 +1482,19 @@ function renderDisposition(disposition: ReviewDisposition): string {
   const doc = disposition.doc ? ` (documented at: ${disposition.doc})` : "";
   const waivedClass = disposition.class ? ` (class: ${disposition.class})` : "";
   const tracks = disposition.tracks ? ` (tracked at: ${disposition.tracks})` : "";
-  return `**${disposition.kind}**${attribution}${waivedClass}${tracks} - ${disposition.reason}${doc}`;
+  const causality = disposition.causality ? ` (causality: ${disposition.causality})` : "";
+  const urgency = disposition.urgency ? ` (urgency: ${disposition.urgency})` : "";
+  const escalation = disposition.escalation ? ` (escalated at: ${disposition.escalation})` : "";
+  return `**${disposition.kind}**${attribution}${waivedClass}${tracks}${causality}${urgency}${escalation} - ${disposition.reason}${doc}`;
+}
+
+/** The round cap in force for a ledger: the configured one, raised by an owner
+ * authorization the ledger recorded (`start --max-rounds`, C7). Monotone by
+ * construction - a recorded override only ever raises, so a stale record can never
+ * lower a cap the configuration since raised, and `status` reads the same cap the
+ * round that ran was allowed. */
+export function effectiveMaxRounds(ledger: Pick<ReviewLedger, "maxRoundsOverride">, configured: number): number {
+  return Math.max(configured, ledger.maxRoundsOverride ?? 0);
 }
 
 export function renderReviewLedger(ledger: ReviewLedger): string {
@@ -1045,6 +1502,8 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     "# Local review",
     "",
     ...(ledger.item ? [`- Item: \`${ledger.item}\``] : []),
+    ...(ledger.profile ? [`- Profile: \`${ledger.profile}\``] : []),
+    ...(ledger.maxRoundsOverride !== undefined ? [`- Max rounds (owner-authorized): ${ledger.maxRoundsOverride}`] : []),
     `- Branch: \`${ledger.branch}\``,
     `- Base ref: \`${ledger.baseRef}\``,
     `- Base SHA: \`${ledger.baseSha}\``,
@@ -1062,32 +1521,36 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
   ];
   if (ledger.supersessions?.length) {
     lines.push("", "## Base supersessions");
-    for (const supersession of ledger.supersessions) {
+    for (const [supersessionIndex, supersession] of ledger.supersessions.entries()) {
       lines.push(
         "",
-        `- Base superseded after round ${supersession.afterRound}: was \`${supersession.baseSha.slice(0, 12)}\` (${supersession.baseRef}), archived ${supersession.archivedAt}`,
+        `- Epoch ${supersessionIndex + 1} superseded after round ${supersession.afterRound - (ledger.supersessions[supersessionIndex - 1]?.afterRound ?? 0)}: was \`${supersession.baseSha.slice(0, 12)}\` (${supersession.baseRef}), archived ${supersession.archivedAt}`,
       );
     }
   }
   if (ledger.failures?.length) {
     lines.push("", "## Incomplete attempts");
-    for (const failure of ledger.failures) {
+    for (const [failureIndex, failure] of ledger.failures.entries()) {
+      const {epoch, logicalRound, attempt} = failureCoordinates(ledger, failureIndex);
       lines.push(
         "",
-        `- ${failure.attemptedAt} — \`${failure.headSha.slice(0, 12)}\` with \`${failure.model}\`: ${failure.reason}`,
+        `- Round ${logicalRound}-${attempt} (epoch ${epoch}), ${failure.attemptedAt}: \`${failure.headSha.slice(0, 12)}\` with \`${failure.model}\`: ${failure.reason}`,
       );
     }
   }
-  for (const round of ledger.rounds) {
+  for (const [roundIndex, round] of ledger.rounds.entries()) {
+    const coordinates = round.epoch && round.logicalRound
+      ? {epoch: round.epoch, logicalRound: round.logicalRound}
+      : roundCoordinates(ledger, roundIndex + 1);
     lines.push(
       "",
-      `## Round ${round.number} — \`${round.headSha.slice(0, 12)}\``,
+      `## Round ${coordinates.logicalRound} (epoch ${coordinates.epoch}) - \`${round.headSha.slice(0, 12)}\``,
       "",
       `- Head SHA: \`${round.headSha}\``,
       `- Model: \`${round.model}\``,
       `- Reviewed at: ${round.reviewedAt}`,
       ...(round.stepBack
-        ? [`- Step-back note: ${round.stepBack.path} (triggered by rounds ${round.stepBack.triggerRounds.join(", ")})`]
+        ? [`- Step-back note: ${round.stepBack.path} (triggered by rounds ${round.stepBack.triggerRounds.map((sequence) => reviewRoundIdentifier(ledger, sequence)).join(", ")})`]
         : []),
       "",
       round.summary,
@@ -1097,11 +1560,12 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
       const location = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\`` : "Not anchored";
       lines.push(
         "",
-        `### ${finding.id} — ${finding.priority}: ${finding.title}`,
+        `### ${finding.id} - ${finding.priority}: ${finding.title}`,
         "",
         `- Location: ${location}`,
         `- Confidence: ${finding.confidence}`,
         ...(finding.origin ? [`- Origin: ${finding.origin}`] : []),
+        ...(finding.causality ? [`- Causality: ${finding.causality}`] : []),
         ...(finding.passes?.length ? [`- Passes: ${finding.passes.join(", ")}`] : []),
         ...(finding.repeatedFrom?.length ? [`- Repeated from: ${finding.repeatedFrom.join(", ")}`] : []),
         ...(finding.firstSeenRound ? [`- First seen round: ${finding.firstSeenRound}`] : []),
@@ -1117,6 +1581,15 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
           : []),
       );
     }
+    if (round.notes?.length) {
+      lines.push("", "### Notes (non-blocking)", "");
+      for (const note of round.notes) {
+        const where = note.file ? ` (${note.file}${note.line !== undefined ? `:${note.line}` : ""})` : "";
+        lines.push(
+          `- ${note.priority} [${note.pass}] ${note.title}${where}${note.detail ? ` - ${note.detail}` : ""}`,
+        );
+      }
+    }
     if (round.audit) {
       const metrics = round.audit.metrics;
       lines.push(
@@ -1127,20 +1600,47 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
         ...(round.audit.scope === "remediation-range"
           ? ["- Scope: remediation range only (scoped confirmation); the range outside the fix was not re-reviewed this round"]
           : []),
+        ...(round.audit.scope === "full-widened"
+          ? ["- Scope: widened back to the full range - the fix delta outgrew the original range or an open obligation is P0, so scoped confirmation did not apply this round"]
+          : []),
         `- Passes: ${round.audit.passes.map((pass) => pass.pass).join(", ")}`,
+        ...(metrics.elapsedMs !== undefined
+          ? [
+              `- Elapsed: ${(metrics.elapsedMs / 1000).toFixed(1)}s wall${
+                metrics.reviewerMs !== undefined && metrics.reviewerMs !== metrics.elapsedMs
+                  ? `, ${(metrics.reviewerMs / 1000).toFixed(1)}s reviewer compute`
+                  : ""
+              } (${round.audit.passes
+                .map((pass) =>
+                  pass.elapsedMs !== undefined ? `${pass.pass} ${(pass.elapsedMs / 1000).toFixed(1)}s` : pass.pass,
+                )
+                .join(", ")})`,
+            ]
+          : []),
+        ...(metrics.tokens
+          ? [
+              `- Tokens: ${metrics.tokens.total ?? 0} total (input ${metrics.tokens.input ?? 0}, output ${metrics.tokens.output ?? 0})`,
+            ]
+          : []),
         `- Coverage: complete for ${round.audit.manifest.files.length} reviewable files, ${round.audit.manifest.files.reduce((count, file) => count + file.hunks.length, 0)} hunks, and ${round.audit.manifest.instructionFiles.length} instruction files`,
         ...(round.audit.manifest.instructionFilesUnderRevision?.length
           ? [`- Instruction files under revision (declared change surface): ${round.audit.manifest.instructionFilesUnderRevision.join(", ")}`]
           : []),
         `- Remediation focus: ${round.audit.manifest.remediationFiles?.length ?? 0} files`,
         `- Base-delta focus: ${round.audit.manifest.baseDeltaFiles?.length ?? 0} files`,
-        `- Findings by pass: diff=${metrics.findingsByPass.diff}, integration=${metrics.findingsByPass.integration}, adversarial=${metrics.findingsByPass.adversarial}`,
+        `- Findings by pass: diff=${metrics.findingsByPass.diff}, integration=${metrics.findingsByPass.integration}, adversarial=${metrics.findingsByPass.adversarial}${metrics.findingsByPass.confirmation !== undefined ? `, confirmation=${metrics.findingsByPass.confirmation}` : ""}`,
         `- Findings by priority: P0=${metrics.findingsByPriority.P0}, P1=${metrics.findingsByPriority.P1}, P2=${metrics.findingsByPriority.P2}, P3=${metrics.findingsByPriority.P3}`,
         `- Findings by origin: original=${metrics.findingsByOrigin.original}, remediation=${metrics.findingsByOrigin.remediation}, base-delta=${metrics.findingsByOrigin["base-delta"]}, unknown=${metrics.findingsByOrigin.unknown}`,
         `- Repeated findings: ${metrics.repeatedFindings}`,
         `- Late P0/P1 findings: ${metrics.lateHighPriorityFindings}`,
         `- Unchanged-HEAD drift: ${metrics.unchangedHeadDrift ? "yes" : "no"}`,
         ...(metrics.declineRatio === undefined ? [] : [`- Decline ratio: ${metrics.declineRatio}`]),
+        ...(metrics.noteCount === undefined ? [] : [`- Notes (non-blocking): ${metrics.noteCount}`]),
+        ...(round.audit.shadow
+          ? [
+              `- Shadow (non-blocking, --shadow-full): ${round.audit.shadow.findings.length} finding(s) from ${round.audit.shadow.passes.map((pass) => pass.pass).join(", ") || "no completed pass"}${round.audit.shadow.errors?.length ? `; ${round.audit.shadow.errors.length} shadow pass(es) failed` : ""}`,
+            ]
+          : []),
       );
       if (round.audit.obligations.length === 0) {
         lines.push("- Obligations: none");
@@ -1150,7 +1650,7 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
           // results recorded before results carried their type.
           const type = obligation.type ?? (obligation.status === "documented" ? "documentation" : "remediation");
           const label = type === "documentation" ? "Documentation obligation" : "Remediation obligation";
-          lines.push(`- ${label} ${obligation.findingId}: ${obligation.status} — ${obligation.evidence}`);
+          lines.push(`- ${label} ${obligation.findingId}: ${obligation.status} - ${obligation.evidence}`);
         }
       }
     }
@@ -1166,10 +1666,12 @@ function isStringArray(input: unknown): input is string[] {
   return Array.isArray(input) && input.every((value) => typeof value === "string");
 }
 
-function isReviewAuditPassArray(input: unknown): input is ReviewAuditPass[] {
-  return Array.isArray(input) && input.every((value) =>
-    value === "diff" || value === "integration" || value === "adversarial"
-  );
+function isReviewPersonaName(input: unknown): input is ReviewPersonaName {
+  return input === "diff" || input === "integration" || input === "adversarial" || input === "confirmation";
+}
+
+function isReviewPersonaNameArray(input: unknown): input is ReviewPersonaName[] {
+  return Array.isArray(input) && input.every(isReviewPersonaName);
 }
 
 function isFindingOrigin(input: unknown): input is FindingOrigin {
@@ -1253,16 +1755,82 @@ function isNumericRecord(input: unknown, keys: string[]): boolean {
   return isRecord(input) && keys.every((key) => typeof input[key] === "number");
 }
 
+function isReviewRoundNotes(input: unknown): input is CombinedAuditNote[] {
+  return (
+    Array.isArray(input) &&
+    input.every(
+      (note) =>
+        isRecord(note) &&
+        isReviewPersonaName(note.pass) &&
+        (note.priority === "P2" || note.priority === "P3") &&
+        typeof note.title === "string" &&
+        note.title.length > 0 &&
+        (note.file === undefined || typeof note.file === "string") &&
+        (note.line === undefined || typeof note.line === "number") &&
+        (note.detail === undefined || typeof note.detail === "string"),
+    )
+  );
+}
+
+function isReviewPassTokens(input: unknown): input is ReviewPassTokens {
+  return (
+    isRecord(input) &&
+    (input.input === undefined || typeof input.input === "number") &&
+    (input.output === undefined || typeof input.output === "number") &&
+    (input.total === undefined || typeof input.total === "number")
+  );
+}
+
 function isReviewMetrics(input: unknown): input is ReviewMetrics {
   return (
     isRecord(input) &&
     isNumericRecord(input.findingsByPass, ["diff", "integration", "adversarial"]) &&
+    (isRecord(input.findingsByPass) &&
+      ((input.findingsByPass as Record<string, unknown>).confirmation === undefined ||
+        typeof (input.findingsByPass as Record<string, unknown>).confirmation === "number")) &&
     isNumericRecord(input.findingsByPriority, ["P0", "P1", "P2", "P3"]) &&
     isNumericRecord(input.findingsByOrigin, ["original", "remediation", "base-delta", "unknown"]) &&
     typeof input.repeatedFindings === "number" &&
     typeof input.lateHighPriorityFindings === "number" &&
     typeof input.unchangedHeadDrift === "boolean" &&
-    (input.declineRatio === undefined || typeof input.declineRatio === "number")
+    (input.declineRatio === undefined || typeof input.declineRatio === "number") &&
+    (input.elapsedMs === undefined || typeof input.elapsedMs === "number") &&
+    (input.reviewerMs === undefined || typeof input.reviewerMs === "number") &&
+    (input.tokens === undefined || isReviewPassTokens(input.tokens)) &&
+    (input.shadowElapsedMs === undefined || typeof input.shadowElapsedMs === "number") &&
+    (input.shadowReviewerMs === undefined || typeof input.shadowReviewerMs === "number") &&
+    (input.shadowTokens === undefined || isReviewPassTokens(input.shadowTokens))
+  );
+}
+
+function isReviewRoundPolicy(input: unknown): input is ReviewRoundPolicy {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return false;
+  const policy = input as Record<string, unknown>;
+  return (
+    (policy.maxRounds === undefined || (typeof policy.maxRounds === "number" && Number.isInteger(policy.maxRounds))) &&
+    (policy.severityFloor === undefined ||
+      policy.severityFloor === "round-2-plus" ||
+      policy.severityFloor === "all-rounds") &&
+    (policy.terminalRejection === undefined || typeof policy.terminalRejection === "boolean") &&
+    (policy.capExit === undefined || typeof policy.capExit === "boolean") &&
+    (policy.confirmation === undefined || policy.confirmation === "full" || policy.confirmation === "scoped")
+  );
+}
+
+function isReviewRoundAuditPassArray(input: unknown): input is ReviewRoundAuditPass[] {
+  return (
+    Array.isArray(input) &&
+    input.every(
+      (pass) =>
+        isRecord(pass) &&
+        isReviewPersonaName(pass.pass) &&
+        typeof pass.summary === "string" &&
+        isReviewCoverage(pass.coverage) &&
+        (pass.elapsedMs === undefined || typeof pass.elapsedMs === "number") &&
+        (pass.tokens === undefined || isReviewPassTokens(pass.tokens)) &&
+        (pass.model === undefined || typeof pass.model === "string") &&
+        (pass.effort === undefined || typeof pass.effort === "string"),
+    )
   );
 }
 
@@ -1270,19 +1838,19 @@ function isReviewRoundAudit(input: unknown): input is ReviewRoundAudit {
   return (
     isRecord(input) &&
     (input.kind === "full" || input.kind === "remediation" || input.kind === "base-delta") &&
-    (input.scope === undefined || input.scope === "remediation-range") &&
+    (input.scope === undefined || input.scope === "remediation-range" || input.scope === "full-widened") &&
     isReviewManifest(input.manifest) &&
-    Array.isArray(input.passes) &&
-    input.passes.every(
-      (pass) =>
-        isRecord(pass) &&
-        (pass.pass === "diff" || pass.pass === "integration" || pass.pass === "adversarial") &&
-        typeof pass.summary === "string" &&
-        isReviewCoverage(pass.coverage),
-    ) &&
+    isReviewRoundAuditPassArray(input.passes) &&
     Array.isArray(input.obligations) &&
     input.obligations.every(isReviewObligationResult) &&
-    isReviewMetrics(input.metrics)
+    isReviewMetrics(input.metrics) &&
+    (input.policy === undefined || isReviewRoundPolicy(input.policy)) &&
+    (input.shadow === undefined ||
+      (isRecord(input.shadow) &&
+        isReviewRoundAuditPassArray(input.shadow.passes) &&
+        Array.isArray(input.shadow.findings) &&
+        input.shadow.findings.every(isRecord) &&
+        (input.shadow.errors === undefined || isStringArray(input.shadow.errors))))
   );
 }
 
@@ -1339,12 +1907,12 @@ export function parseReview(input: unknown): Review {
 }
 
 // `rounds` is a single item+patch-series ledger (a changed patch series starts fresh;
-// a patch-equivalent rebase retains it), so `limit` bounds one unit of work — not a branch's lifetime. It
+// a patch-equivalent rebase retains it), so `limit` bounds one unit of work - not a branch's lifetime. It
 // breaks the accept-fix-reintroduce loop where each round's fix spawns the next round's
 // finding; it is not a budget across the several units a long-lived branch may carry.
 export function reviewCanContinue(
   rounds: RoundState[],
-  limit = 3,
+  limit = DEFAULT_REVIEW_MAX_ROUNDS,
   currentHeadSha?: string,
   obligations: ReviewObligation[] = [],
 ): { allowed: boolean; reason?: string } {
@@ -1355,9 +1923,9 @@ export function reviewCanContinue(
   }
   if (rounds.length >= limit) return { allowed: false, reason: `review round limit of ${limit} reached` };
   const latestRound = rounds.at(-1);
-  // A clean latest round is terminal only when nothing is owed: an open obligation —
+  // A clean latest round is terminal only when nothing is owed: an open obligation -
   // e.g. the fresh remediation obligation an owner reversal creates after a clean
-  // confirmation round — still needs a round to classify it.
+  // confirmation round - still needs a round to classify it.
   if (latestRound && latestRound.findings.length === 0 && obligations.length === 0) {
     return { allowed: false, reason: "latest review round has no actionable findings" };
   }
@@ -1366,7 +1934,7 @@ export function reviewCanContinue(
   }
   // Accepting a finding is a commitment to fix it. Re-running at the same HEAD would
   // let a clean round certify the branch with the accepted defect still in the tree
-  // (a fresh reviewer isn't guaranteed to re-find it) — the fix must be committed
+  // (a fresh reviewer isn't guaranteed to re-find it) - the fix must be committed
   // first. Open remediation obligations extend the same rule to decisions recorded in
   // earlier rounds (an owner reversal); documentation obligations are exempt because
   // verifying an already-committed doc needs no new commit.
@@ -1378,7 +1946,7 @@ export function reviewCanContinue(
   ) {
     return {
       allowed: false,
-      reason: "latest round has accepted findings — implement and commit them before the next round",
+      reason: "latest round has accepted findings - implement and commit them before the next round",
     };
   }
   return { allowed: true };

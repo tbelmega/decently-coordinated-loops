@@ -1,5 +1,5 @@
 // Shared types for the board core (parse / validate / render / preflight).
-// Pure domain logic only — no file IO here (see parse.ts for the IO boundary).
+// Pure domain logic only - no file IO here (see parse.ts for the IO boundary).
 
 export interface Links {
   [key: string]: string | undefined;
@@ -46,7 +46,7 @@ export interface ItemFile {
   /** Only set when nextActor === "owner": unblock | review-merge | deliver | accept | approve | decide */
   awaiting?: string;
   fit?: string;
-  /** "waived" — the owner's explicit call that no spec is needed despite the item's
+  /** "waived" - the owner's explicit call that no spec is needed despite the item's
    *  size (loops-pickup → Spec gate). Absent for every other item. */
   spec?: string;
   dependsOn: string[];

@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   linkSync,
   statSync,
@@ -19,10 +20,16 @@ import {
   appendOrphanRowEntry,
   orphanRoutingOutcome,
   replaceIfUnchanged,
+  replaceResolvedIfUnchanged,
+  resolvedOutboxIdentity,
   routeOrphanRows,
   withOutboxLock,
 } from "./outbox.ts";
 import type { OrphanRow } from "./preflight.ts";
+import { TEST_IDENTITIES } from "./test-identities.ts";
+
+const householdProject = TEST_IDENTITIES.projects.household;
+const spacedHouseholdProject = householdProject.replaceAll("-", " ");
 
 const orphan: OrphanRow = {
   raw: "| [Ghost row](items/does-not-exist.md) | atlas | idea | owner | decide | - | codex/default | 2026-07-01 |",
@@ -57,7 +64,7 @@ describe("appendOrphanRowEntry", () => {
     expect(result).toMatch(/^> A:$/m);
   });
 
-  test("carries no `- item:` line — an orphan row is precisely a row with no item", () => {
+  test("carries no `- item:` line - an orphan row is precisely a row with no item", () => {
     const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
     expect(result).not.toMatch(/^- item:/m);
   });
@@ -71,20 +78,21 @@ describe("appendOrphanRowEntry", () => {
 
   test("marks a label it cannot represent instead of inventing a project", () => {
     // The consumer reads the project field as one whitespace-free token and compares it
-    // to its own project labels. A label like "family app" cannot be that token, and
-    // neither substituting nor escaping it is honest: one merges two real projects, the
-    // other names a project that exists nowhere. The exact label goes in the body.
-    const spaced: OrphanRow = { ...orphan, project: "family app" };
+    // to its own project labels. The shared household project with spaces cannot be that
+    // token, and neither substituting nor escaping it is honest: one merges two real
+    // projects, the other names a project that exists nowhere. The exact label goes in
+    // the body.
+    const spaced: OrphanRow = { ...orphan, project: spacedHouseholdProject };
     const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, spaced);
     expect(CANONICAL_HEADING.exec(result)![3]).toBe(UNPARSEABLE_PROJECT);
-    expect(result).toContain("project=family app");
+    expect(result).toContain(`project=${spacedHouseholdProject}`);
   });
 
   const headingOf = (project: string) =>
     CANONICAL_HEADING.exec(appendOrphanRowEntry(`# Outbox\n\n## Open\n`, { ...orphan, project }))![3];
 
   test("never renames a project that already is a valid token", () => {
-    expect(headingOf("family-app")).toBe("family-app");
+    expect(headingOf(householdProject)).toBe(householdProject);
     expect(headingOf("100%-done")).toBe("100%-done");
   });
 
@@ -95,7 +103,7 @@ describe("appendOrphanRowEntry", () => {
 
   test("uses a marker no board row could ever carry", () => {
     // A board row is split on `|` before its project cell is read, so a label containing
-    // one cannot reach this writer — which is what makes the marker unforgeable rather
+    // one cannot reach this writer - which is what makes the marker unforgeable rather
     // than just unlikely. A plain word would be a legal project name.
     expect(UNPARSEABLE_PROJECT).toContain("|");
     expect(headingOf("UNPARSEABLE")).toBe("UNPARSEABLE");
@@ -140,10 +148,28 @@ describe("appendOrphanRowEntry", () => {
 
   test("still appends a different orphan alongside an existing one", () => {
     const once = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
-    const other: OrphanRow = { ...orphan, path: "items/other-ghost.md", title: "Other ghost" };
+    const other: OrphanRow = {
+      ...orphan,
+      raw: orphan.raw.replace("Ghost row", "Other ghost").replace("does-not-exist", "other-ghost"),
+      path: "items/other-ghost.md",
+      title: "Other ghost",
+    };
     const both = appendOrphanRowEntry(once, other);
     expect(both).toContain("items/does-not-exist.md");
     expect(both).toContain("items/other-ghost.md");
+    expect([...both.matchAll(/orphan BOARD.md row with no item file/g)]).toHaveLength(2);
+  });
+
+  test("preserves distinct orphan rows that share an item path", () => {
+    const once = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
+    const changed: OrphanRow = {
+      ...orphan,
+      raw: orphan.raw.replace("Ghost row", "Conflicting ghost row"),
+      title: "Conflicting ghost row",
+    };
+    const both = appendOrphanRowEntry(once, changed);
+    expect(both).toContain("Ghost row");
+    expect(both).toContain("Conflicting ghost row");
     expect([...both.matchAll(/orphan BOARD.md row with no item file/g)]).toHaveLength(2);
   });
 });
@@ -258,6 +284,53 @@ describe("outbox file transactions", () => {
       expect(readFileSync(canonical, "utf8")).toBe("after");
     });
 
+    test("refuses when the verified target disappears before replacement", () => {
+      const snapshot = `# Outbox\n\n## Open\n`;
+      const removingRead = (target: string): string => {
+        const content = readFileSync(target, "utf8");
+        rmSync(target);
+        return content;
+      };
+      expect(() => replaceIfUnchanged(path, snapshot, "next", removingRead)).toThrow(/disappeared/);
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("refuses when the verified target becomes a symlink before replacement", () => {
+      const snapshot = `# Outbox\n\n## Open\n`;
+      const other = join(dir, "other.md");
+      writeFileSync(other, snapshot);
+      const replacingRead = (target: string): string => {
+        const content = readFileSync(target, "utf8");
+        rmSync(target);
+        symlinkSync(other, target);
+        return content;
+      };
+      expect(() => replaceIfUnchanged(path, snapshot, "next", replacingRead)).toThrow(/changed identity/);
+      expect(readFileSync(other, "utf8")).toBe(snapshot);
+    });
+
+    test("a resolved replacement refuses a symlink installed before comparison", () => {
+      const snapshot = `# Outbox\n\n## Open\n`;
+      const other = join(dir, "other.md");
+      writeFileSync(other, snapshot);
+      const expected = resolvedOutboxIdentity(path);
+      rmSync(path);
+      symlinkSync(other, path);
+      expect(() => replaceResolvedIfUnchanged(path, snapshot, "next", expected)).toThrow(/changed identity/);
+      expect(readFileSync(other, "utf8")).toBe(snapshot);
+    });
+
+    test("a resolved replacement refuses a same-content file installed after observation", () => {
+      const snapshot = `# Outbox\n\n## Open\n`;
+      const expected = resolvedOutboxIdentity(path);
+      const replacement = join(dir, "replacement.md");
+      writeFileSync(replacement, snapshot);
+      renameSync(replacement, path);
+
+      expect(() => replaceResolvedIfUnchanged(path, snapshot, "next", expected)).toThrow(/changed identity/);
+      expect(readFileSync(path, "utf8")).toBe(snapshot);
+    });
+
     test("leaves no temporary file behind", () => {
       replaceIfUnchanged(path, `# Outbox\n\n## Open\n`, "next");
       expect(readdirSync(dir).sort()).toEqual(["OUTBOX.md"]);
@@ -271,7 +344,12 @@ describe("outbox file transactions", () => {
     });
 
     test("counts what it appended, and confirms only what predates this run", () => {
-      const other: OrphanRow = { ...orphan, path: "items/other-ghost.md", title: "Other ghost" };
+      const other: OrphanRow = {
+        ...orphan,
+        raw: orphan.raw.replace("Ghost row", "Other ghost").replace("does-not-exist", "other-ghost"),
+        path: "items/other-ghost.md",
+        title: "Other ghost",
+      };
       routeOrphanRows(path, [orphan]);
       // The first row's entry survived a run that did not write it; the second is new.
       expect(routeOrphanRows(path, [orphan, other])).toEqual({
@@ -373,7 +451,7 @@ describe("orphanRoutingOutcome", () => {
   });
 
   test("aborts sync when the rows did not reach the outbox", () => {
-    // Continuing would regenerate BOARD.md without the orphan rows — they have no item
+    // Continuing would regenerate BOARD.md without the orphan rows - they have no item
     // file, so the board is the only remaining copy. The next sync could not re-route
     // what it can no longer see.
     for (const routing of [{ status: "locked" } as const, { status: "conflict" } as const]) {
@@ -414,11 +492,11 @@ describe("orphan entry contract", () => {
 
   test("dedups on a marker no prose can produce by accident", () => {
     // The old key was the entry's own prose, so an unrelated note repeating it read as
-    // "already recorded" — and sync then dropped the board row that was its only copy.
+    // "already recorded" - and sync then dropped the board row that was its only copy.
     const quoting = `# Outbox\n\n## Open\n\n### 1 — question · atlas · a note\n\nSomeone wrote about the BOARD.md row \`items/does-not-exist.md\` here.\n\n> A:\n`;
     const result = appendOrphanRowEntry(quoting, orphan);
     expect(result).not.toBe(quoting);
-    expect(result).toContain("<!-- loops:orphan items/does-not-exist.md -->");
+    expect(result).toMatch(/<!-- loops:orphan [a-f0-9]{64} -->/);
   });
 
   test("marks a project label carrying the heading's own separator", () => {

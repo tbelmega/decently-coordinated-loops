@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["pass", "summary", "coverage", "obligations", "findings"],
+  "required": ["pass", "summary", "coverage", "obligations", "findings", "notes"],
   "properties": {
-    "pass": { "enum": ["diff", "integration", "adversarial"] },
+    "pass": { "enum": ["diff", "integration", "adversarial", "confirmation"] },
     "summary": { "type": "string", "minLength": 1 },
     "coverage": {
       "type": "object",
@@ -45,7 +45,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["priority", "title", "file", "line", "evidence", "impact", "direction", "confidence", "origin", "obligationId", "obligationIds"],
+        "required": ["priority", "title", "file", "line", "evidence", "impact", "direction", "confidence", "origin", "causality", "obligationId", "obligationIds"],
         "properties": {
           "priority": { "enum": ["P0", "P1", "P2", "P3"] },
           "title": { "type": "string", "minLength": 1 },
@@ -56,8 +56,24 @@
           "direction": { "type": "string", "minLength": 1 },
           "confidence": { "enum": ["high", "medium", "low"] },
           "origin": { "enum": ["original", "remediation", "base-delta", "unknown"] },
+          "causality": { "enum": ["introduced", "worsened", "unmet-obligation", "pre-existing", "unknown"] },
           "obligationId": { "type": ["string", "null"], "minLength": 1 },
           "obligationIds": { "type": ["array", "null"], "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["priority", "title", "file", "line", "detail"],
+        "properties": {
+          "priority": { "enum": ["P2", "P3"] },
+          "title": { "type": "string", "minLength": 1 },
+          "file": { "type": ["string", "null"], "minLength": 1 },
+          "line": { "type": ["integer", "null"], "minimum": 1 },
+          "detail": { "type": "string", "minLength": 1 }
         }
       }
     }

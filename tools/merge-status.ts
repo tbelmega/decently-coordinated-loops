@@ -1,5 +1,5 @@
 // Pure logic for the PR merge-status check (`bun run landed`).
-// No IO here — the gh shell-out and token file reads live in cli-landed.ts, so
+// No IO here - the gh shell-out and token file reads live in cli-landed.ts, so
 // everything below is unit-testable without network or filesystem access.
 import { isMap, isNode, isScalar, parseDocument } from "yaml";
 import type { ItemFile } from "./types.ts";
@@ -25,7 +25,7 @@ export type PrStatus =
 
 /** The work ref an item's status is *reported* under: its review URL when it has
  *  one, else its branch. Null for items with neither (nothing to check). This is a
- *  display value, not a lookup key — a bare branch is not unique across projects, so
+ *  display value, not a lookup key - a bare branch is not unique across projects, so
  *  it must never be used to key the status store (use `statusKey`). */
 export function workRef(item: ItemFile): string | null {
   return item.links.pr ?? item.links.branch ?? null;
@@ -50,7 +50,7 @@ export function statusKey(item: ItemFile): string | null {
   return statusKeyFor(item.project, identity);
 }
 
-/** What `bun run landed` must do to check one item, and — crucially — the key its
+/** What `bun run landed` must do to check one item, and - crucially - the key its
  *  result must be stored under. The key is ALWAYS `statusKey(item)`, because that is
  *  what buildMergeReport / itemsToFlipMerged look the result up by. The git adapter
  *  must not key by branch: an item that also carries a `links.pr` would then be
@@ -63,7 +63,7 @@ export type LandedPlan =
 /** Pure: decide how to check an item's landed status under the given adapter, and
  *  under which key to store the result. Returns null only for items with no work ref
  *  (nothing to check). The github adapter needs a `links.pr`; the git adapter needs a
- *  `links.branch` — a missing one yields an `error` plan keyed under `workRef(item)`. */
+ *  `links.branch` - a missing one yields an `error` plan keyed under `workRef(item)`. */
 export function planLandedCheck(
   item: ItemFile,
   adapter: "github" | "git",
@@ -114,7 +114,7 @@ export function parsePrUrl(url: string): PrRef | null {
 
 /** Pure: the configured token file path for a GitHub org, or null when the org
  *  has no dedicated token configured (the caller then falls back to ambient gh
- *  auth). Expanding a leading "~" to the home directory is the caller's job — this
+ *  auth). Expanding a leading "~" to the home directory is the caller's job - this
  *  just returns whatever path was configured, verbatim. */
 export function tokenPathForOrg(config: LoopsConfig, org: string): string | null {
   return config.githubTokens[org] ?? null;
@@ -128,7 +128,7 @@ export interface MergeReportRow {
   state: PrState | "ERROR";
   itemState: string;
   awaiting?: string;
-  /** MERGED PR whose item still sits in `awaiting: review-merge` — the actionable case. */
+  /** MERGED PR whose item still sits in `awaiting: review-merge` - the actionable case. */
   staleReviewMerge: boolean;
   /** CLOSED-but-not-merged PR: the item points at an abandoned PR. */
   closedUnmerged: boolean;
@@ -194,7 +194,7 @@ export function buildMergeReport(
   return { rows, stale: rows.filter((r) => r.staleReviewMerge) };
 }
 
-/** Pure: the `implemented` items whose work is reported landed (MERGED) — the flip
+/** Pure: the `implemented` items whose work is reported landed (MERGED) - the flip
  *  candidates for `bun run landed --apply`. Only `implemented` items are eligible;
  *  anything already at `merged`/`tested`/… is left alone (idempotent), and an item
  *  with no fetched-MERGED status is skipped. Sorted by slug for deterministic output. */
@@ -284,8 +284,8 @@ function parseTopLevelScalarKeyLines(block: string, keys: ScalarKeySource[]): Ar
 
 /** Pure: rewrite one item file's frontmatter to record an observed merge, writing
  *  the auto-set fields (state/next-actor/autonomy/next-step), dropping `awaiting`,
- *  and bumping `updated` to `today`. Every other line — the body, the `links:`
- *  block, unrelated keys — is preserved verbatim; only top-level scalar keys are
+ *  and bumping `updated` to `today`. Every other line - the body, the `links:`
+ *  block, unrelated keys - is preserved verbatim; only top-level scalar keys are
  *  touched (anchored to line start so the indented keys under `links:` are never
  *  matched). */
 export function applyMergedFrontmatter(rawText: string, today: string): string {

@@ -83,8 +83,8 @@ misconfiguration rather than a decision to honor.
 
 **The shortcut is not part of this change.** Four of the six review rounds found
 something in it, a fifth round would have been needed to confirm the last fix, and no
-project in this instance configures `review.classes` at all - so Thiemo ruled it out of
-this change rather than confirmed once more (OUTBOX 107, 2026-08-18). It returns as its
+project in the installation configured `review.classes` at all - so the owner removed it
+from that change rather than spending another confirmation round. It returns as its
 own board item, `dcl-review-exempt-change-class`, and the rule above travels with it:
 whatever reintroduces the shortcut owes that rule and the fail-closed tests removed with
 the code.

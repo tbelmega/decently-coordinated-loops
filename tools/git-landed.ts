@@ -1,9 +1,9 @@
 // The `git` landed-adapter: decide whether an agent branch's work has landed on
-// the integration branch using git alone — for projects whose review/landing flow
+// the integration branch using git alone - for projects whose review/landing flow
 // doesn't go through a forge API. Landing is assumed to be rebase-shaped, so the
 // check is patch-id equivalence (`git cherry`), not ancestry: a rebase rewrites
 // hashes but keeps patch-ids. Known limit: a squash-with-edits landing changes the
-// patch-id and reads as PENDING — record those by hand or use the github adapter.
+// patch-id and reads as PENDING - record those by hand or use the github adapter.
 import { spawnSync } from "node:child_process";
 
 export type GitLandedState = "LANDED" | "PENDING";
@@ -40,7 +40,7 @@ function resolveRef(repoDir: string, name: string): string | null {
 }
 
 /** The integration ref to compare against: prefer the remote-tracking ref
- * (origin/<branch>) — origin is the source of truth — falling back to the local
+ * (origin/<branch>) - origin is the source of truth - falling back to the local
  * branch for repos without a remote. */
 function integrationRef(repoDir: string, integrationBranch: string): string | null {
   for (const candidate of [`origin/${integrationBranch}`, integrationBranch]) {
@@ -51,7 +51,7 @@ function integrationRef(repoDir: string, integrationBranch: string): string | nu
   return null;
 }
 
-/** Pure query (no fetch — the caller refreshes remote refs if it wants freshness):
+/** Pure query (no fetch - the caller refreshes remote refs if it wants freshness):
  * has every commit in the immutable item range, or the legacy whole branch, landed
  * patch-equivalent on the integration branch? `git cherry` marks each selected
  * commit `-` (an equivalent patch exists upstream) or `+` (it doesn't); any `+`
@@ -74,7 +74,7 @@ export function gitLandedStatus(
     const head = git(repoDir, ["rev-parse", "--verify", "--quiet", `${itemRange.headSha}^{commit}`]);
     if (!head.ok) return { error: `head SHA "${itemRange.headSha}" not found in ${repoDir}` };
     // A malformed pair (reversed, or not an ancestry range at all) selects no commits,
-    // and empty `git cherry` output would read as LANDED — reject it instead.
+    // and empty `git cherry` output would read as LANDED - reject it instead.
     const ancestry = git(repoDir, ["merge-base", "--is-ancestor", itemRange.baseSha, itemRange.headSha]);
     if (!ancestry.ok) {
       return {

@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 
 export const STAMP_FILE = ".loops-version";
 
-/** The DCL clone serving this run — the parent of tools/, where this module lives.
+/** The DCL clone serving this run - the parent of tools/, where this module lives.
  *  Resolves from this file's own location, so it is independent of the data repo's cwd. */
 export function dclHome(): string {
   return resolve(import.meta.dirname, "..");

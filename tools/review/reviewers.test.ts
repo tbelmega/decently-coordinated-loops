@@ -4,10 +4,12 @@ import {
   getReviewer,
   isReviewerId,
   parseClaudeOutput,
+  parseCodexEvents,
   parseCursorOutput,
   promptWithSchema,
   reviewerIds,
   stripCodeFences,
+  usageTokens,
 } from "./reviewers.ts";
 
 const reviewJson = '{"summary":"ok","findings":[]}';
@@ -30,14 +32,22 @@ describe("stripCodeFences", () => {
 });
 
 describe("parseClaudeOutput", () => {
-  test("prefers structured_output (the parsed object)", () => {
-    const stdout = JSON.stringify({ type: "result", is_error: false, result: reviewJson, structured_output: { summary: "ok", findings: [] } });
-    expect(parseClaudeOutput(stdout)).toEqual({ summary: "ok", findings: [] });
+  test("prefers structured_output (the parsed object) and records envelope usage", () => {
+    const stdout = JSON.stringify({ type: "result", is_error: false, result: reviewJson, structured_output: { summary: "ok", findings: [] }, usage: { input_tokens: 120, output_tokens: 30 } });
+    expect(parseClaudeOutput(stdout)).toEqual({
+      review: { summary: "ok", findings: [] },
+      tokens: { input: 120, output: 30, total: 150 },
+    });
   });
 
   test("falls back to parsing the result string when structured_output is absent", () => {
     const stdout = JSON.stringify({ type: "result", is_error: false, result: reviewJson });
-    expect(parseClaudeOutput(stdout)).toEqual({ summary: "ok", findings: [] });
+    expect(parseClaudeOutput(stdout)).toEqual({ review: { summary: "ok", findings: [] } });
+  });
+
+  test("missing usage is tolerated - the field is omitted, never zero-filled", () => {
+    const stdout = JSON.stringify({ type: "result", is_error: false, result: reviewJson, structured_output: { summary: "ok", findings: [] } });
+    expect(parseClaudeOutput(stdout)).toEqual({ review: { summary: "ok", findings: [] } });
   });
 
   test("throws when the envelope reports an error", () => {
@@ -47,14 +57,48 @@ describe("parseClaudeOutput", () => {
 });
 
 describe("parseCursorOutput", () => {
-  test("parses the result string, stripping fences", () => {
+  test("parses the result string, stripping fences, without usage when absent", () => {
     const stdout = JSON.stringify({ type: "result", is_error: false, result: "```json\n" + reviewJson + "\n```" });
-    expect(parseCursorOutput(stdout)).toEqual({ summary: "ok", findings: [] });
+    expect(parseCursorOutput(stdout)).toEqual({ review: { summary: "ok", findings: [] } });
+  });
+
+  test("records envelope usage when the CLI exposes it", () => {
+    const stdout = JSON.stringify({ type: "result", is_error: false, result: reviewJson, usage: { input_tokens: 7, output_tokens: 2 } });
+    expect(parseCursorOutput(stdout)).toEqual({
+      review: { summary: "ok", findings: [] },
+      tokens: { input: 7, output: 2, total: 9 },
+    });
   });
 
   test("throws when the envelope reports an error", () => {
     const stdout = JSON.stringify({ is_error: true, result: "denied" });
     expect(() => parseCursorOutput(stdout)).toThrow(/cursor review reported an error/);
+  });
+});
+
+describe("parseCodexEvents", () => {
+  test("sums turn.completed usage across the JSONL stream", () => {
+    const stream = [
+      '{"type":"thread.started","thread_id":"t"}',
+      '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":26472,"cached_input_tokens":9984,"output_tokens":5,"reasoning_output_tokens":0}}',
+      '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}',
+    ].join("\n");
+    expect(parseCodexEvents(stream)).toEqual({ input: 26572, output: 15, total: 26587 });
+  });
+
+  test("a stream with no usage events yields undefined, and junk lines are skipped", () => {
+    expect(parseCodexEvents("plain text\n{\"type\":\"turn.started\"}\nnot json {")).toBeUndefined();
+    expect(parseCodexEvents("")).toBeUndefined();
+  });
+});
+
+describe("usageTokens", () => {
+  test("maps input/output and totals them; unrecognizable usage maps to undefined", () => {
+    expect(usageTokens({ input_tokens: 3, output_tokens: 4 })).toEqual({ input: 3, output: 4, total: 7 });
+    expect(usageTokens({ output_tokens: 4 })).toEqual({ output: 4, total: 4 });
+    expect(usageTokens({ something: 1 })).toBeUndefined();
+    expect(usageTokens(null)).toBeUndefined();
   });
 });
 
@@ -68,6 +112,8 @@ describe("buildCodexArgs", () => {
     expect(args.join(" ")).toContain("--sandbox read-only");
     expect(args).toContain("--output-schema");
     expect(args).toContain("--output-last-message");
+    // JSONL events are the only place codex exposes token usage (C0).
+    expect(args).toContain("--json");
     // `-` is codex's documented "read the instructions from stdin" positional.
     expect(args.at(-1)).toBe("-");
   });

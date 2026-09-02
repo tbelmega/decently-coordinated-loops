@@ -35,7 +35,7 @@ mkdir ../public && git -C <private> archive "$REVIEWED" | tar -x -C ../public
 cd ../public && git init -q && git add -A
 
 # The equality gate, and it must stop you. The staged tree has to be the reviewed tree
-# exactly — same paths, same contents, same modes — so a difference means something
+# exactly - same paths, same contents, same modes - so a difference means something
 # entered or left the export and nothing should be committed.
 test "$(git write-tree)" = "$(git -C <private> rev-parse "$REVIEWED^{tree}")" || {
   echo "tree mismatch: refusing to publish" >&2

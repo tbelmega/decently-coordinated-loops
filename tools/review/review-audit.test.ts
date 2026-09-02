@@ -38,6 +38,7 @@ function passResult(pass: "diff" | "integration" | "adversarial", title = "Race"
       direction: "make the write conditional",
       confidence: "high",
       origin: "original",
+      causality: "introduced",
     }],
   };
 }
@@ -47,6 +48,11 @@ describe("parseReviewPass", () => {
     const parsed = parseReviewPass(passResult("diff"), "diff", manifest, []);
     expect(parsed.coverage.files).toEqual(manifest.files);
     expect(parsed.findings[0].origin).toBe("original");
+    expect(parsed.findings[0].causality).toBe("introduced");
+
+    const missingCausality = passResult("diff") as {findings: Record<string, unknown>[]};
+    delete missingCausality.findings[0].causality;
+    expect(() => parseReviewPass(missingCausality, "diff", manifest, [])).toThrow(/causality/);
 
     const missingFile = passResult("diff") as Record<string, unknown>;
     missingFile.coverage = {files: [manifest.files[0]], instructionFiles: [], callsites: []};
@@ -74,8 +80,8 @@ describe("parseReviewPass", () => {
     };
     expect(parseReviewPass(coversMetadata, "diff", withMetadata, []).coverage.files).toHaveLength(3);
 
-    // A path that is neither in the manifest nor exempt still fails closed — that is what
-    // catches a reviewer auditing the wrong range — and the message says which path.
+    // A path that is neither in the manifest nor exempt still fails closed - that is what
+    // catches a reviewer auditing the wrong range - and the message says which path.
     const stray = passResult("diff") as Record<string, unknown>;
     stray.coverage = {
       files: [...manifest.files, {path: "src/unrelated.ts", hunks: []}],
@@ -185,7 +191,7 @@ describe("parseReviewPass", () => {
       /outside the review manifest: src\/reverted\.ts/,
     );
 
-    // A reported fix-delta-only path needs its complete delta hunk set — an empty or
+    // A reported fix-delta-only path needs its complete delta hunk set - an empty or
     // partial list must not pass through a vacuous subset check. (R1-F1..F3)
     const emptyHunks = passResult("diff") as Record<string, unknown>;
     emptyHunks.coverage = {
@@ -224,7 +230,7 @@ describe("parseReviewPass", () => {
     // when the round ran. A pass that was never asked to classify may still echo
     // classifications (the prompt shows every obligation to every pass); discarding
     // them preserves the invariant, while rejecting them killed a clean logical round
-    // on 2026-08-14 — the same reviewer-did-as-told class as the coverage notes above.
+    // on 2026-08-14 - the same reviewer-did-as-told class as the coverage notes above.
     const echoed = passResult("diff") as Record<string, unknown>;
     echoed.obligations = [{findingId: "R9-F9", status: "documented", evidence: "echoed"}];
     expect(parseReviewPass(echoed, "diff", manifest, []).obligations).toEqual([]);
@@ -323,7 +329,7 @@ describe("computeReviewMetrics", () => {
       passResults: [diff, integration],
       findings: combined.findings,
     })).toEqual({
-      findingsByPass: {diff: 1, integration: 1, adversarial: 0},
+      findingsByPass: {diff: 1, integration: 1, adversarial: 0, confirmation: 0},
       findingsByPriority: {P0: 0, P1: 1, P2: 0, P3: 0},
       findingsByOrigin: {original: 1, remediation: 0, "base-delta": 0, unknown: 0},
       repeatedFindings: 0,
@@ -331,5 +337,54 @@ describe("computeReviewMetrics", () => {
       unchangedHeadDrift: true,
       declineRatio: 0.75,
     });
+  });
+});
+
+describe("severity-floor notes (C1)", () => {
+  test("valid P2/P3 notes parse and combine with pass attribution", () => {
+    const withNotes = passResult("diff") as Record<string, unknown>;
+    withNotes.notes = [
+      {priority: "P2", title: "missing fixture", file: "src/a.ts", line: 4, detail: "no CRLF case"},
+      {priority: "P3", title: "stale comment", file: null, line: null, detail: "wording"},
+    ];
+    const parsed = parseReviewPass(withNotes, "diff", manifest, []);
+    expect(parsed.notes).toEqual([
+      {priority: "P2", title: "missing fixture", file: "src/a.ts", line: 4, detail: "no CRLF case"},
+      {priority: "P3", title: "stale comment", detail: "wording"},
+    ]);
+    const combined = combineReviewPasses([parsed], []);
+    expect(combined.notes).toEqual([
+      {priority: "P2", title: "missing fixture", file: "src/a.ts", line: 4, detail: "no CRLF case", pass: "diff"},
+      {priority: "P3", title: "stale comment", detail: "wording", pass: "diff"},
+    ]);
+  });
+
+  test("absent notes are tolerated as an empty channel", () => {
+    expect(parseReviewPass(passResult("diff"), "diff", manifest, []).notes).toEqual([]);
+  });
+
+  test("a blocking priority smuggled into notes fails the pass", () => {
+    const withNotes = passResult("diff") as Record<string, unknown>;
+    withNotes.notes = [{priority: "P1", title: "actually blocking", file: null, line: null, detail: "x"}];
+    expect(() => parseReviewPass(withNotes, "diff", manifest, [])).toThrow(
+      /notes\[0\].priority must be P2 or P3/,
+    );
+  });
+
+  test("noteCount lands in metrics only when the channel was in use", () => {
+    const base = {
+      roundNumber: 2,
+      headSha: "head",
+      passResults: [],
+      findings: [],
+    };
+    expect(computeReviewMetrics(base).noteCount).toBeUndefined();
+    expect(computeReviewMetrics({...base, notes: []}).noteCount).toBe(0);
+    expect(
+      computeReviewMetrics({
+        ...base,
+        notes: [{priority: "P2", title: "n", pass: "diff"}],
+      }).noteCount,
+    ).toBe(1);
   });
 });

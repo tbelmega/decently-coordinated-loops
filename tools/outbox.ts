@@ -7,6 +7,7 @@ import {
   existsSync,
   closeSync,
   fstatSync,
+  lstatSync,
   openSync,
   readFileSync,
   realpathSync,
@@ -17,7 +18,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { OrphanRow } from "./preflight.ts";
 
@@ -42,7 +43,7 @@ function canonicalPath(path: string): string {
  *
  * **The lock is an optimisation, not the correctness mechanism.** It stops cooperating
  * writers wasting work on each other, but it cannot bind a writer that does not take
- * it — a person editing the file, a phone client, or a tool in another repository.
+ * it - a person editing the file, a phone client, or a tool in another repository.
  * Against those, `replaceIfUnchanged` narrows the window rather than closing it; read
  * its contract before claiming this file is safe against any writer at all.
  * The lock filename (`<path>.lock`) is part of the contract: a second writer that picks
@@ -68,7 +69,7 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
   // Identity is the inode we created, not what the file says. Content cannot carry it: a
   // token write that fails, or half-lands, would leave a lock nothing recognises and
   // nothing ever removes. The pid below is written through this descriptor rather than by
-  // path, so it reaches only the file we made — writing by path could overwrite a
+  // path, so it reaches only the file we made - writing by path could overwrite a
   // successor's lock if ours was removed in between, and we would then delete theirs.
   let identity: number;
   try {
@@ -84,7 +85,7 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
     try {
       closeSync(handle);
     } catch {
-      // nothing to do — the descriptor dies with the process
+      // nothing to do - the descriptor dies with the process
     }
     try {
       unlinkSync(lockPath);
@@ -108,15 +109,15 @@ export function withOutboxLock<T>(path: string, body: () => T): T | null {
     }
     try {
       // Keep our hands off a lock that is now somebody else's. If this lock was deleted
-      // while we still held it — the documented manual recovery, aimed at a crashed
-      // holder — a second writer may already have created its own, and unlinking that
+      // while we still held it - the documented manual recovery, aimed at a crashed
+      // holder - a second writer may already have created its own, and unlinking that
       // would let a third in while the second is still working. Comparing inodes before
       // unlinking cannot close that window (the path can change between the two calls,
       // and a freed inode number can be reused), but it turns the common case from
       // "silently breaks the lock" into "leaves it alone".
       if (statSync(lockPath).ino === identity) unlinkSync(lockPath);
     } catch {
-      // already gone, or unstattable — nothing safe left to do
+      // already gone, or unstattable - nothing safe left to do
     }
   }
 }
@@ -132,29 +133,54 @@ export class UnsupportedOutboxError extends Error {}
  *
  * The existing mode is carried onto the replacement. Replace-by-rename otherwise silently
  * re-creates the file at the process default (commonly 0644), so an OUTBOX.md an owner
- * restricted to 0600 would be published to every local user by a routine sync — a write
+ * restricted to 0600 would be published to every local user by a routine sync - a write
  * that widens permissions is a worse failure than the torn read this avoids. */
-function writeFileAtomically(path: string, content: string): void {
+export interface OutboxFileIdentity {
+  dev: number;
+  ino: number;
+}
+
+/** Captures the filesystem object a caller is about to read and later replace. */
+export function resolvedOutboxIdentity(target: string): OutboxFileIdentity {
+  try {
+    const stats = lstatSync(target);
+    if (stats.isSymbolicLink()) {
+      throw new UnsupportedOutboxError(`${target} changed identity before observation; nothing was written.`);
+    }
+    return { dev: stats.dev, ino: stats.ino };
+  } catch (error) {
+    if (error instanceof UnsupportedOutboxError) throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new UnsupportedOutboxError(`${target} disappeared before observation; nothing was written.`);
+    }
+    throw error;
+  }
+}
+
+function writeFileAtomically(path: string, content: string, expected: OutboxFileIdentity): void {
   // Replace the file the path resolves to, not the path. A rename over a symlinked
   // OUTBOX.md would swap the link itself for a standalone file, silently forking a data
-  // repo that points several checkouts at one canonical outbox — and the recovery entry
+  // repo that points several checkouts at one canonical outbox - and the recovery entry
   // written here would then be invisible to every writer still using the target.
   //
   // What replace-by-rename still cannot preserve is the inode's own metadata: ownership,
   // ACLs and extended attributes belong to the file it replaces. That is inherent to the
   // technique (tools/review/atomic-write.ts makes the same trade) and is the price of
   // never letting a reader see a half-written outbox.
-  const target = canonicalPath(path);
+  const target = path;
   const temporaryPath = join(dirname(target), `${basename(target)}.tmp-${process.pid}-${randomUUID()}`);
-  let mode: number | undefined;
+  let mode: number;
   try {
-    const stats = statSync(target);
+    const stats = lstatSync(target);
+    if (stats.isSymbolicLink() || stats.dev !== expected.dev || stats.ino !== expected.ino) {
+      throw new UnsupportedOutboxError(`${target} changed identity before replacement; nothing was written.`);
+    }
     mode = stats.mode;
     if (stats.nlink > 1) {
       // Replace-by-rename swaps in a new inode, so every other name for the old content
       // keeps it: a hard-linked outbox forks silently, and entries written here become
       // invisible through the other link. Unlike a symlink there is no canonical path to
-      // resolve to — a hard link IS the file — so the only honest answers are to fork it
+      // resolve to - a hard link IS the file - so the only honest answers are to fork it
       // quietly or to refuse. Refusing, loudly.
       throw new UnsupportedOutboxError(
         `${target} has ${stats.nlink} hard links; replacing it would fork the file. ` +
@@ -163,15 +189,18 @@ function writeFileAtomically(path: string, content: string): void {
     }
   } catch (error) {
     if (error instanceof UnsupportedOutboxError) throw error;
-    // No existing file (or its mode is unreadable): the default applies.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new UnsupportedOutboxError(`${target} disappeared before replacement; nothing was written.`);
+    }
+    throw error;
   }
   try {
     // The mode goes on at creation, not afterwards. Writing first and chmodding second
     // publishes the content at the default mode for the width of that window, which for a
     // deliberately restricted OUTBOX.md is the exposure this is meant to prevent. The
     // explicit chmod stays because the creation mode is still masked by the umask.
-    writeFileSync(temporaryPath, content, mode === undefined ? undefined : { mode });
-    if (mode !== undefined) chmodSync(temporaryPath, mode);
+    writeFileSync(temporaryPath, content, { mode });
+    chmodSync(temporaryPath, mode);
     renameSync(temporaryPath, target);
   } finally {
     rmSync(temporaryPath, { force: true });
@@ -184,10 +213,10 @@ function writeFileAtomically(path: string, content: string): void {
  * **This is not an atomic compare-and-swap, and must not be described as one.** The
  * check and the rename are two syscalls: an edit that lands in between is overwritten
  * and lost, undetectably, because no lock-free protocol over a plain file can close that
- * window. What the check does buy is real but bounded — it catches every edit made
+ * window. What the check does buy is real but bounded - it catches every edit made
  * before the transaction started, which is the overwhelmingly likely shape of a
  * conflict (a person editing OUTBOX.md, or a phone client committing an answer, while a
- * long-running sync computes) — and it costs nothing. Full serialization is available
+ * long-running sync computes) - and it costs nothing. Full serialization is available
  * only between writers that take `withOutboxLock`; against the ones that cannot, this
  * narrows the race to microseconds rather than eliminating it. */
 export function replaceIfUnchanged(
@@ -196,8 +225,26 @@ export function replaceIfUnchanged(
   next: string,
   read: ReadFile = defaultRead,
 ): boolean {
-  if (read(path) !== snapshot) return false;
-  writeFileAtomically(path, next);
+  const target = canonicalPath(path);
+  return replaceResolvedIfUnchanged(target, snapshot, next, resolvedOutboxIdentity(target), read);
+}
+
+/** The resolved-path form for callers that already verified one canonical target and
+ * observed its identity before reading. Carrying that identity through the transaction
+ * prevents an identical-content file installed after the read from being overwritten. */
+export function replaceResolvedIfUnchanged(
+  target: string,
+  snapshot: string,
+  next: string,
+  expected: OutboxFileIdentity,
+  read: ReadFile = defaultRead,
+): boolean {
+  const current = resolvedOutboxIdentity(target);
+  if (current.dev !== expected.dev || current.ino !== expected.ino) {
+    throw new UnsupportedOutboxError(`${target} changed identity before comparison; nothing was written.`);
+  }
+  if (read(target) !== snapshot) return false;
+  writeFileAtomically(target, next, expected);
   return true;
 }
 
@@ -215,6 +262,175 @@ function openSection(text: string): { head: string; open: string; tail: string }
   return { head: text.slice(0, at), open: rest.slice(0, cut), tail: rest.slice(cut) };
 }
 
+/** One entry under `## Open`. */
+export interface OutboxEntry {
+  /** From `### <id> — ...`. Stable and citable, but sparse because routed entries are deleted. */
+  id: number;
+  /** The label as written. Unknown values remain visible and produce an anomaly. */
+  type: string;
+  /** `decision` is a notice; every other type is an ask. This never determines openness. */
+  kind: "notice" | "ask";
+  project: string;
+  title: string;
+  /** Markdown excluding the answer blockquote. */
+  body: string;
+  /** Opaque digest of the raw entry used by callers to detect a concurrent rewrite. */
+  entryHash: string;
+  itemSlug: string | null;
+  /** The `> A:` blockquote content, or null when it is empty or absent. */
+  answer: string | null;
+  /** Whether the entry contains a `> A:` line that a writer can replace. */
+  answerable: boolean;
+}
+
+export type OutboxAnomalyKind =
+  | "unparseable-heading"
+  | "unknown-type"
+  | "duplicate-id"
+  | "retired-type";
+
+export interface OutboxAnomaly {
+  kind: OutboxAnomalyKind;
+  detail: string;
+}
+
+export interface OutboxPayload {
+  /** ISO 8601 timestamp for this parse. */
+  readAt: string;
+  entries: OutboxEntry[];
+  anomalies: OutboxAnomaly[];
+}
+
+/** Anything that can answer whether an item slug exists. */
+export type KnownSlugs = { has(slug: string): boolean };
+
+const KNOWN_TYPES: ReadonlySet<string> = new Set(["question", "proposal", "approval", "decision"]);
+const RETIRED_TYPES: ReadonlySet<string> = new Set(["decide"]);
+const ENTRY_HEADING = /^(\d+)\s+—\s+(\S+)\s+·\s+(\S+)\s+·\s+(.+)$/;
+const ANSWER_START = /^>\s*A:\s?(.*)$/;
+
+/** An entry is open exactly when it has no non-blank answer. */
+export function isOpen(entry: OutboxEntry): boolean {
+  return !entry.answer?.trim();
+}
+
+function hashEntry(raw: string): string {
+  return createHash("sha256").update(raw.trim()).digest("hex");
+}
+
+function splitAnswer(rest: string): { body: string; answer: string | null; answerable: boolean } {
+  const lines = rest.split("\n");
+  const start = lines.findIndex((line) => ANSWER_START.test(line));
+  if (start === -1) return { body: rest.trim(), answer: null, answerable: false };
+
+  const answerLines = [ANSWER_START.exec(lines[start])![1]];
+  let end = start + 1;
+  while (end < lines.length && lines[end].startsWith(">")) {
+    answerLines.push(lines[end].replace(/^>\s?/, ""));
+    end += 1;
+  }
+
+  const before = lines.slice(0, start).join("\n").trim();
+  const after = lines.slice(end).join("\n").trim();
+  const answer = answerLines.join("\n").trim();
+  return {
+    body: [before, after].filter(Boolean).join("\n\n"),
+    answer: answer === "" ? null : answer,
+    answerable: true,
+  };
+}
+
+function resolveItemSlug(body: string, knownSlugs: KnownSlugs): string | null {
+  const explicit = /^-\s*item:\s*([a-z0-9-]+)\s*$/m.exec(body);
+  if (explicit) return explicit[1];
+
+  const link = /items\/([a-z0-9-]+)\.md/.exec(body);
+  if (link) return link[1];
+
+  for (const line of body.split("\n")) {
+    if (!/^\s*(?:\*\*)?(?:Source|Item)(?:\*\*)?:/.test(line)) continue;
+    for (const [, candidate] of line.matchAll(/`([a-z0-9-]+)`/g)) {
+      if (knownSlugs.has(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/** Parse the entries in OUTBOX.md's `## Open` section without reading the file itself. */
+export function parseOutbox(
+  text: string,
+  knownSlugs: KnownSlugs,
+  now: Date = new Date(),
+): OutboxPayload {
+  const anomalies: OutboxAnomaly[] = [];
+  const entries: OutboxEntry[] = [];
+  const readAt = now.toISOString();
+  const section = openSection(text);
+  if (!section) {
+    anomalies.push({
+      kind: "unparseable-heading",
+      detail: "no `## Open` section - the file was left alone rather than guessed at",
+    });
+    return { readAt, entries, anomalies };
+  }
+
+  const titleById = new Map<number, string>();
+  for (const chunk of section.open.split(/^### /m).slice(1)) {
+    const raw = `### ${chunk}`;
+    const newline = chunk.indexOf("\n");
+    const headingLine = (newline === -1 ? chunk : chunk.slice(0, newline)).trim();
+    const rest = newline === -1 ? "" : chunk.slice(newline + 1);
+    const match = ENTRY_HEADING.exec(headingLine);
+    if (!match) {
+      anomalies.push({
+        kind: "unparseable-heading",
+        detail: `not "<id> — <type> · <project> · <title>": ${headingLine}`,
+      });
+      continue;
+    }
+
+    const [, idText, type, project, titleText] = match;
+    const id = parseInt(idText, 10);
+    const title = titleText.trim();
+    if (titleById.has(id)) {
+      anomalies.push({
+        kind: "duplicate-id",
+        detail: `id ${id} appears twice - "${titleById.get(id)}" and "${title}"`,
+      });
+    } else {
+      titleById.set(id, title);
+    }
+
+    if (RETIRED_TYPES.has(type)) {
+      anomalies.push({
+        kind: "retired-type",
+        detail: `entry ${id} uses the retired type "${type}" - re-type it as \`question\` when routing`,
+      });
+    } else if (!KNOWN_TYPES.has(type)) {
+      anomalies.push({
+        kind: "unknown-type",
+        detail: `entry ${id} has type "${type}", which the entry contract does not define`,
+      });
+    }
+
+    const { body, answer, answerable } = splitAnswer(rest);
+    entries.push({
+      id,
+      type,
+      kind: type === "decision" ? "notice" : "ask",
+      project,
+      title,
+      body,
+      entryHash: hashEntry(raw),
+      itemSlug: resolveItemSlug(body, knownSlugs),
+      answer,
+      answerable,
+    });
+  }
+
+  return { readAt, entries, anomalies };
+}
+
 /** Append one orphan-row entry to OUTBOX.md's `## Open` section, in the shape the
  * loops-queues entry contract defines: `### <id> — <type> · <project> · <title>` and a
  * prose body. No `- item:` line: the row is on the board precisely because no active
@@ -226,18 +442,18 @@ function openSection(text: string): { head: string; open: string; tail: string }
  * Idempotent by orphan path: if an entry for this row is already present, the text is
  * returned unchanged. Sync writes the outbox before it regenerates the board, so a
  * crash in between (or a restored old board) re-runs preflight against the same still
- * orphaned row — without this guard each re-run would append a duplicate ask. The
+ * orphaned row - without this guard each re-run would append a duplicate ask. The
  * marker is built once and embedded in the body, so the guard cannot drift away from
  * what the entry actually says. Answered entries are deleted on routing, so a present
  * marker always means a live open ask. */
 /** The project a routed entry claims, which readers compare directly against their own
  * project labels. The heading's project field is one whitespace-free token to them, while
- * the item schema asks only that `project` be non-blank — and an orphan row has no item
+ * the item schema asks only that `project` be non-blank - and an orphan row has no item
  * file, so nothing validated its label in the first place.
  *
  * A label that cannot be that token gets this marker, never an invented identity.
- * Substituting the whitespace (`family app` → `family-app`) would silently merge two
- * distinct projects, and escaping it (`family%20app`) invents a project name that matches
+ * Substituting the whitespace (`household app` → `household-app`) would silently merge two
+ * distinct projects, and escaping it (`household%20app`) invents a project name that matches
  * nothing on the board and that no consumer decodes. The marker is the honest third
  * answer: it does not misattribute the entry to any project, and the exact label is
  * recorded in the body immediately below it.
@@ -252,7 +468,7 @@ function headingToken(project: string): string {
   // The raw value, not the trimmed one: ` atlas ` is not the project `atlas`, and quietly
   // trimming a malformed label into a real project is the misattribution this function
   // exists to prevent. (The board parser trims its cells, so that case is unreachable
-  // from sync today — it is the contract for every future caller.)
+  // from sync today - it is the contract for every future caller.)
   //
   // The middle dot is rejected for the same reason as whitespace: it is the heading's own
   // field separator, so a label carrying one hands the reader an extra field and an entry
@@ -261,13 +477,14 @@ function headingToken(project: string): string {
   return unrepresentable ? UNPARSEABLE_PROJECT : project;
 }
 
-/** The dedup key for an orphan's entry: machine-readable, and impossible to write by
+/** The dedup key for an orphan row's entry: machine-readable, and impossible to write by
  * accident. The predecessor keyed on the entry's own prose (``BOARD.md row `path` ``), so
- * any text repeating that phrase — a retained note, a quoted earlier entry, the owner
- * describing the problem — read as "already recorded". Sync then dropped the row from
+ * any text repeating that phrase - a retained note, a quoted earlier entry, the owner
+ * describing the problem - read as "already recorded". Sync then dropped the row from
  * BOARD.md, which is its only remaining copy, and reported success. */
-function orphanMarker(path: string): string {
-  return `<!-- loops:orphan ${path} -->`;
+function orphanMarker(orphan: OrphanRow): string {
+  const identity = createHash("sha256").update(orphan.raw).digest("hex");
+  return `<!-- loops:orphan ${identity} -->`;
 }
 
 export function appendOrphanRowEntry(outboxText: string, orphan: OrphanRow): string {
@@ -275,7 +492,7 @@ export function appendOrphanRowEntry(outboxText: string, orphan: OrphanRow): str
   if (!section) throw new Error("OUTBOX.md has no `## Open` section to append to");
   // Scoped to the open section: an entry that has been answered and moved on is not a
   // live ask, and re-filing the row is the right thing once it is out of `## Open`.
-  if (section.open.includes(orphanMarker(orphan.path))) return outboxText;
+  if (section.open.includes(orphanMarker(orphan))) return outboxText;
 
   const entry = orphanEntryText(outboxText, orphan);
   return `${section.head}${section.open.replace(/\n+$/, "")}\n${entry}${section.tail}`;
@@ -300,7 +517,7 @@ awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, u
   if (orphan.stranded) {
     return `
 ### ${nextId} — question · ${headingToken(orphan.project)} · BOARD.md row whose item is stranded in archive/
-${orphanMarker(orphan.path)}
+${orphanMarker(orphan)}
 
 Source: [${orphan.title}](${orphan.path}). Its item file exists at \`${orphan.stranded.itemPath}\`, but state
 \`${orphan.state}\` belongs in \`${orphan.stranded.belongsIn}/\` and sync never moves files out of \`archive/\`.
@@ -314,7 +531,7 @@ ${rowFields}
 
   return `
 ### ${nextId} — question · ${headingToken(orphan.project)} · orphan BOARD.md row with no item file
-${orphanMarker(orphan.path)}
+${orphanMarker(orphan)}
 
 Source: [${orphan.title}](${orphan.path}), dropped from BOARD.md because no item file matched it.
 ${rowFields}
@@ -323,6 +540,40 @@ ${rowFields}
 
 > A:
 `;
+}
+
+/** Rewrite one entry's `> A:` block in place and leave every other byte untouched. */
+export function applyAnswer(outboxText: string, id: number, text: string): string {
+  const answer = text.trim();
+  if (answer === "") throw new Error("an answer cannot be blank - empty means never answered");
+
+  const section = openSection(outboxText);
+  if (!section) throw new Error("OUTBOX.md has no `## Open` section");
+
+  const chunks = section.open.split(/^### /m);
+  let found = false;
+  const rewritten = chunks.map((chunk, index) => {
+    if (index === 0) return chunk;
+    const newline = chunk.indexOf("\n");
+    const heading = chunk.slice(0, newline === -1 ? undefined : newline).trim();
+    const match = ENTRY_HEADING.exec(heading);
+    if (!match || parseInt(match[1], 10) !== id || found) return chunk;
+    found = true;
+
+    const lines = chunk.split("\n");
+    const start = lines.findIndex((line) => ANSWER_START.test(line));
+    if (start === -1) throw new Error(`entry ${id} has no \`> A:\` line to write to`);
+
+    let end = start + 1;
+    while (end < lines.length && lines[end].startsWith(">")) end += 1;
+
+    const answerLines = answer.split("\n");
+    const block = [`> A: ${answerLines[0]}`, ...answerLines.slice(1).map((line) => `> ${line}`)];
+    return [...lines.slice(0, start), ...block, ...lines.slice(end)].join("\n");
+  });
+
+  if (!found) throw new Error(`no entry ${id} under \`## Open\``);
+  return section.head + rewritten.join("### ") + section.tail;
 }
 
 /** Reports `routed` only after reading the live file back and finding every entry inside
@@ -347,7 +598,7 @@ function verified(
   read: ReadFile,
 ): OrphanRoutingResult {
   const section = openSection(read(outboxPath));
-  const missing = orphans.filter((orphan) => !section?.open.includes(orphanMarker(orphan.path)));
+  const missing = orphans.filter((orphan) => !section?.open.includes(orphanMarker(orphan)));
   return missing.length ? { status: "conflict" } : { status: "routed", count: appended, confirmed };
 }
 
@@ -363,7 +614,7 @@ export type OrphanRoutingResult =
 /** Route every orphan row into OUTBOX.md under the shared lock, against a single
  * snapshot, and report what happened. Nothing is reported as done that did not
  * happen: a held lock and a concurrent edit each return their own status for the caller
- * to surface. Both are safe to leave — the rows stay orphaned, so the next sync files
+ * to surface. Both are safe to leave - the rows stay orphaned, so the next sync files
  * them again. */
 export function routeOrphanRows(
   outboxPath: string,
@@ -387,11 +638,11 @@ export function routeOrphanRows(
       };
     }
     // Recorded before this run touched anything. A row may only leave the board once its
-    // entry has survived at least one write it did not make itself — see the two-phase
+    // entry has survived at least one write it did not make itself - see the two-phase
     // note on the return type.
     const openBefore = openSection(snapshot)?.open ?? "";
     const confirmed = orphans
-      .filter((orphan) => openBefore.includes(orphanMarker(orphan.path)))
+      .filter((orphan) => openBefore.includes(orphanMarker(orphan)))
       .map((orphan) => orphan.path);
     let outboxText = snapshot;
     // Counted, not assumed: a batch mixing already-recorded rows with new ones would
@@ -405,8 +656,8 @@ export function routeOrphanRows(
     }
     if (outboxText === snapshot) return { status: "routed", count: 0, confirmed };
 
-    // When `## Open` is the last section — the seeded shape, and the shape of every
-    // outbox that has not grown an archive section — the new entries belong at the end of
+    // When `## Open` is the last section - the seeded shape, and the shape of every
+    // outbox that has not grown an archive section - the new entries belong at the end of
     // the file, so they can be appended instead of rewriting it. That is the whole
     // difference between "we probably did not clobber the owner's edit" and "we cannot
     // have": O_APPEND places the write after whatever else has landed, and it keeps the
@@ -453,14 +704,14 @@ export function orphanRoutingOutcome(
     case "locked":
       return {
         abort: true,
-        message: `${rows} NOT routed: OUTBOX.md.lock is held by another writer. Nothing was changed — re-run sync.`,
+        message: `${rows} NOT routed: OUTBOX.md.lock is held by another writer. Nothing was changed - re-run sync.`,
       };
     case "conflict":
       return {
         abort: true,
         message:
           `${rows} NOT routed: OUTBOX.md changed under sync, so the entries could not be placed ` +
-          `where a reader would find them. The board is untouched — re-run sync.`,
+          `where a reader would find them. The board is untouched - re-run sync.`,
       };
     case "unsupported":
       return { abort: true, message: `${rows} NOT routed: ${routing.detail} Nothing was changed.` };

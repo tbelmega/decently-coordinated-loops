@@ -30,7 +30,7 @@ describe("renderBoardMd", () => {
   });
 
   test("renders the configured priorities line", () => {
-    expect(text).toContain("Priorities: 1. atlas — 2. everything else by most recent activity.");
+    expect(text).toContain("Priorities: 1. atlas - 2. everything else by most recent activity.");
   });
 
   test("falls back to a plain note when no priority projects are configured", () => {
@@ -38,7 +38,7 @@ describe("renderBoardMd", () => {
     expect(noPriority).toContain("Priorities: most recent activity first.");
   });
 
-  test("renders no Done section — terminal items belong in ARCHIVE.md, not BOARD.md", () => {
+  test("renders no Done section - terminal items belong in ARCHIVE.md, not BOARD.md", () => {
     expect(text).not.toContain("## Done");
     expect(text).not.toContain("Finished");
   });

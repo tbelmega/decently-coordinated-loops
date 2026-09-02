@@ -24,6 +24,7 @@ function prompt(pass: "diff" | "integration" | "adversarial"): string {
     obligations: [{
       findingId: "R1-F1",
       type: "remediation",
+      priority: "P1",
       title: "Race",
       evidence: "two writers",
       direction: "serialize",
@@ -57,6 +58,13 @@ describe("reviewPrompt", () => {
     expect(prompt("adversarial")).toContain("security, data loss, concurrency, failure handling, accessibility");
   });
 
+  test("requires broad contextual inspection but a bounded causal classification", () => {
+    const value = prompt("integration");
+    expect(value).toContain("introduced, worsened, unmet-obligation, pre-existing, or unknown");
+    expect(value).toContain("Do not begin a separate reproduction effort");
+    expect(value).toContain("Pre-existing findings are contextual observations");
+  });
+
   test("marks landing metadata as excluded from terminal code coverage", () => {
     expect(prompt("integration")).toContain("docs/release-state.md");
     expect(prompt("integration")).toContain("landing metadata");
@@ -71,6 +79,7 @@ describe("reviewPrompt", () => {
       obligations: [{
         findingId: "R2-F1",
         type: "documentation",
+        priority: "P1",
         title: "Lock loss on crash",
         evidence: "lock file survives",
         direction: "document or fix",
@@ -198,5 +207,57 @@ describe("reviewPrompt", () => {
     expect(value).toContain(
       'Change class "coordination-prose" covers these changed files: OUTBOX.md. Report only factual errors.',
     );
+  });
+});
+
+describe("severity floor and taxonomy (C1)", () => {
+  const base = {
+    manifest,
+    contextDocuments: [] as never[],
+    priorNotes: [] as string[],
+    obligations: [] as never[],
+    classifyObligations: false,
+  };
+
+  test("off: no priority definitions, and the notes channel is declared unused", () => {
+    const value = reviewPrompt({...base, pass: "diff"});
+    expect(value).not.toContain("Priority definitions");
+    expect(value).toContain("Return an empty notes array");
+    expect(value).not.toContain("severity floor is active");
+  });
+
+  test("taxonomy emits the four definitions without activating the floor", () => {
+    const value = reviewPrompt({...base, pass: "diff", taxonomy: true});
+    expect(value).toContain("Priority definitions - apply them exactly:");
+    expect(value).toContain("P0: data loss, security exposure");
+    expect(value).toContain("P3: prose, comment, or consistency defects");
+    expect(value).not.toContain("severity floor is active");
+    expect(value).toContain("Return an empty notes array");
+  });
+
+  test("an active floor demotes P2/P3 to notes and keeps the taxonomy as the contract", () => {
+    const value = reviewPrompt({...base, pass: "adversarial", taxonomy: true, severityFloorActive: true});
+    expect(value).toContain("severity floor is active");
+    expect(value).toContain("ONLY new P0/P1 defects");
+    expect(value).toContain("notes array instead");
+    expect(value).not.toContain("Return an empty notes array");
+  });
+});
+
+describe("rejection refutation (C4)", () => {
+  test("a pending P0/P1 rejection turns the confirmation round into a refutation test", () => {
+    const value = reviewPrompt({
+      pass: "diff",
+      manifest,
+      contextDocuments: [],
+      priorNotes: ["E1-R1-F1 rejected: not reproducible"],
+      obligations: [],
+      classifyObligations: false,
+      taxonomy: true,
+      refuteRejections: true,
+    });
+    expect(value).toContain("rejected one or more P0/P1 findings");
+    expect(value).toContain("refute it with factual evidence");
+    expect(value).toContain("Do not re-raise the finding unchanged");
   });
 });

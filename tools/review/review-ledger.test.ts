@@ -9,9 +9,11 @@ import {
   parseReviewLedger,
   priorDispositionNotes,
   recordDisposition,
+  recordReviewFailure,
   remediationChurnTripwire,
   renderReviewLedger,
   reviewCanContinue,
+  effectiveMaxRounds,
   supersedeLedgerBase,
   validateEvidencePath,
   type Review,
@@ -28,6 +30,7 @@ const finding = {
   impact: "reads past the end",
   direction: "use <",
   confidence: "high" as const,
+  causality: "introduced" as const,
 };
 
 const review: Review = { summary: "one issue", findings: [finding] };
@@ -50,12 +53,197 @@ describe("parseReview", () => {
 });
 
 describe("addReviewRound", () => {
-  test("assigns per-round finding ids R<round>-F<n>", () => {
+  test("assigns epoch-qualified per-round finding ids", () => {
     let ledger = createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "b0" });
     ledger = addReviewRound(ledger, { headSha: "h1", model: "m", reviewedAt: "t1", review });
     ledger = addReviewRound(ledger, { headSha: "h2", model: "m", reviewedAt: "t2", review });
-    expect(ledger.rounds[0].findings[0].id).toBe("R1-F1");
-    expect(ledger.rounds[1].findings[0].id).toBe("R2-F1");
+    expect(ledger.rounds[0].findings[0].id).toBe("E1-R1-F1");
+    expect(ledger.rounds[1].findings[0].id).toBe("E1-R2-F1");
+  });
+
+  test("records explicit epoch and logical-round identities", () => {
+    let ledger = createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"});
+    ledger = addReviewRound(ledger, {headSha: "h1", model: "m", reviewedAt: "t1", review});
+    expect(ledger.rounds[0]).toMatchObject({epoch: 1, logicalRound: 1});
+    expect(ledger.rounds[0].findings[0].id).toBe("E1-R1-F1");
+
+    ledger = supersedeLedgerBase(ledger, {
+      baseRef: "master",
+      baseSha: "b1",
+      archivedAt: "t2",
+    });
+    ledger = addReviewRound(ledger, {headSha: "h2", model: "m", reviewedAt: "t3", review});
+    expect(ledger.rounds[1]).toMatchObject({epoch: 2, logicalRound: 1});
+    expect(ledger.rounds[1].findings[0].id).toBe("E2-R1-F1");
+  });
+
+  test("labels failed attempts against the pending logical round without consuming it", () => {
+    let ledger = createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"});
+    ledger = recordReviewFailure(ledger, {headSha: "h1", model: "m", attemptedAt: "t1", reason: "timeout"});
+    ledger = recordReviewFailure(ledger, {headSha: "h1", model: "m", attemptedAt: "t2", reason: "invalid"});
+    expect(ledger.failures).toMatchObject([
+      {epoch: 1, logicalRound: 1, attempt: "a"},
+      {epoch: 1, logicalRound: 1, attempt: "b"},
+    ]);
+    ledger = addReviewRound(ledger, {headSha: "h1", model: "m", reviewedAt: "t3", review});
+    expect(ledger.rounds[0]).toMatchObject({epoch: 1, logicalRound: 1});
+  });
+
+  test("continues suffix allocation after legacy failed attempts", () => {
+    const legacy = {
+      ...createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"}),
+      failures: [
+        {headSha: "h1", model: "m", attemptedAt: "t1", reason: "timeout"},
+        {headSha: "h1", model: "m", attemptedAt: "t2", reason: "invalid"},
+      ],
+    };
+    const ledger = recordReviewFailure(legacy, {
+      headSha: "h1",
+      model: "m",
+      attemptedAt: "t3",
+      reason: "truncated",
+    });
+    expect(ledger.failures?.at(-1)).toMatchObject({epoch: 1, logicalRound: 1, attempt: "c"});
+    const rendered = renderReviewLedger(ledger);
+    expect(rendered).toContain("Round 1-a (epoch 1)");
+    expect(rendered).toContain("Round 1-b (epoch 1)");
+    expect(rendered).toContain("Round 1-c (epoch 1)");
+  });
+
+  test("assigns a legacy same-HEAD failure after a completed round to the pending round", () => {
+    let legacy: ReviewLedger = addReviewRound(
+      createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"}),
+      {headSha: "h1", model: "m", reviewedAt: "2026-08-23T10:00:00Z", review},
+    );
+    legacy = {
+      ...legacy,
+      failures: [{
+        headSha: "h1",
+        model: "m",
+        attemptedAt: "2026-08-23T11:00:00Z",
+        reason: "timeout",
+      }],
+    };
+
+    const ledger = recordReviewFailure(legacy, {
+      headSha: "h1",
+      model: "m",
+      attemptedAt: "2026-08-23T12:00:00Z",
+      reason: "invalid",
+    });
+
+    expect(ledger.failures?.at(-1)).toMatchObject({epoch: 1, logicalRound: 2, attempt: "b"});
+    const rendered = renderReviewLedger(ledger);
+    expect(rendered).toContain("Round 2-a (epoch 1), 2026-08-23T11:00:00Z");
+    expect(rendered).toContain("Round 2-b (epoch 1), 2026-08-23T12:00:00Z");
+  });
+
+  test("keeps legacy failed attempts in their historical epoch after supersession", () => {
+    let ledger: ReviewLedger = {
+      ...createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"}),
+      failures: [{
+        headSha: "old-head",
+        model: "m",
+        attemptedAt: "2026-08-23T10:00:00Z",
+        reason: "timeout",
+      }],
+    };
+    ledger = supersedeLedgerBase(ledger, {
+      baseRef: "master",
+      baseSha: "b1",
+      archivedAt: "2026-08-23T11:00:00Z",
+    });
+    ledger = recordReviewFailure(ledger, {
+      headSha: "new-head",
+      model: "m",
+      attemptedAt: "2026-08-23T12:00:00Z",
+      reason: "invalid",
+    });
+    expect(ledger.failures?.at(-1)).toMatchObject({epoch: 2, logicalRound: 1, attempt: "a"});
+    const rendered = renderReviewLedger(ledger);
+    expect(rendered).toContain("Round 1-a (epoch 1), 2026-08-23T10:00:00Z");
+    expect(rendered).toContain("Round 1-a (epoch 2), 2026-08-23T12:00:00Z");
+  });
+
+  test("fails closed on malformed persisted attempt coordinates", () => {
+    const ledger = recordReviewFailure(
+      createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"}),
+      {headSha: "h1", model: "m", attemptedAt: "t1", reason: "timeout"},
+    );
+    const missingCoordinate = JSON.parse(JSON.stringify(ledger));
+    delete missingCoordinate.failures[0].epoch;
+    expect(() => parseReviewLedger(missingCoordinate)).toThrow(/epoch.*logicalRound.*attempt/);
+
+    const invalidAttempt = JSON.parse(JSON.stringify(ledger));
+    invalidAttempt.failures[0].attempt = "1";
+    expect(() => parseReviewLedger(invalidAttempt)).toThrow(/attempt/);
+  });
+
+  test("fails closed on persisted attempt coordinates that contradict ledger history", () => {
+    let ledger = recordReviewFailure(
+      createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"}),
+      {headSha: "h1", model: "m", attemptedAt: "2026-08-23T10:00:00Z", reason: "timeout"},
+    );
+    ledger = recordReviewFailure(ledger, {
+      headSha: "h1",
+      model: "m",
+      attemptedAt: "2026-08-23T11:00:00Z",
+      reason: "invalid",
+    });
+
+    for (const contradictory of [
+      {epoch: 99},
+      {logicalRound: 99},
+      {attempt: "z"},
+    ]) {
+      const persisted = JSON.parse(JSON.stringify(ledger));
+      Object.assign(persisted.failures[1], contradictory);
+      expect(() => parseReviewLedger(persisted)).toThrow(/coordinates.*ledger history/);
+    }
+  });
+
+  test("fails closed on decreasing persisted supersession boundaries", () => {
+    let ledger = addReviewRound(
+      createReviewLedger({branch: "feature", baseRef: "master", baseSha: "b0"}),
+      {headSha: "h1", model: "m", reviewedAt: "2026-08-23T10:00:00Z", review},
+    );
+    ledger = addReviewRound(ledger, {
+      headSha: "h2",
+      model: "m",
+      reviewedAt: "2026-08-23T11:00:00Z",
+      review,
+    });
+    const persisted = JSON.parse(JSON.stringify(ledger));
+    persisted.supersessions = [
+      {afterRound: 2, baseRef: "master", baseSha: "b0", archivedAt: "2026-08-23T12:00:00Z"},
+      {afterRound: 1, baseRef: "master", baseSha: "b1", archivedAt: "2026-08-23T13:00:00Z"},
+    ];
+
+    expect(() => parseReviewLedger(persisted)).toThrow(/supersession boundaries.*nondecreasing/);
+  });
+
+  test("keeps a pre-causal terminal disposition readable while causal ledgers stay strict", () => {
+    const current = recordDisposition(
+      addReviewRound(createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}), {
+        headSha: "head",
+        model: "model",
+        reviewedAt: "time",
+        review,
+      }),
+      "E1-R1-F1",
+      "accepted",
+      "Fix here",
+    );
+    const legacy = JSON.parse(JSON.stringify(current));
+    delete legacy.causalScopeVersion;
+    delete legacy.rounds[0].findings[0].causality;
+    delete legacy.rounds[0].findings[0].disposition.causality;
+    expect(parseReviewLedger(legacy).rounds[0].findings[0].disposition?.kind).toBe("accepted");
+
+    const malformedCurrent = JSON.parse(JSON.stringify(current));
+    delete malformedCurrent.rounds[0].findings[0].causality;
+    delete malformedCurrent.rounds[0].findings[0].disposition.causality;
+    expect(() => parseReviewLedger(malformedCurrent)).toThrow(/resolve causality/);
   });
 
   test("survives a ledger round-trip with every obligation a finding answered", () => {
@@ -78,15 +266,15 @@ describe("addReviewRound", () => {
             direction: "make the write conditional",
             confidence: "high",
             origin: "remediation",
-            obligationId: "R1-F1",
-            obligationIds: ["R1-F1", "R1-F2", "R1-F3"],
+            obligationId: "E1-R1-F1",
+            obligationIds: ["E1-R1-F1", "E1-R1-F2", "E1-R1-F3"],
           }],
         },
       },
     );
     const parsed = parseReviewLedger(JSON.parse(JSON.stringify(ledger)));
-    expect(parsed.rounds[0].findings[0].obligationIds).toEqual(["R1-F1", "R1-F2", "R1-F3"]);
-    expect(renderReviewLedger(parsed)).toContain("R1-F1, R1-F2, R1-F3");
+    expect(parsed.rounds[0].findings[0].obligationIds).toEqual(["E1-R1-F1", "E1-R1-F2", "E1-R1-F3"]);
+    expect(renderReviewLedger(parsed)).toContain("E1-R1-F1, E1-R1-F2, E1-R1-F3");
   });
 
   test("persists structured audit evidence while legacy rounds remain readable", () => {
@@ -157,25 +345,31 @@ describe("recordDisposition", () => {
   });
 
   test("records a disposition, then rejects a duplicate and an unknown id", () => {
-    const disposed = recordDisposition(seed, "R1-F1", "accepted", "will fix");
-    expect(disposed.rounds[0].findings[0].disposition).toEqual({ kind: "accepted", reason: "will fix", decidedAfterRound: 1 });
-    expect(() => recordDisposition(disposed, "R1-F1", "rejected", "no")).toThrow(/already has a disposition/);
+    const disposed = recordDisposition(seed, "E1-R1-F1", "accepted", "will fix");
+    expect(disposed.rounds[0].findings[0].disposition).toEqual({
+      kind: "accepted",
+      reason: "will fix",
+      causality: "introduced",
+      decidedAfterRound: 1,
+    });
+    expect(() => recordDisposition(disposed, "E1-R1-F1", "rejected", "no")).toThrow(/already has a disposition/);
     expect(() => recordDisposition(seed, "R9-F9", "accepted", "x")).toThrow(/not found/);
   });
 
   test("rejects an empty reason", () => {
-    expect(() => recordDisposition(seed, "R1-F1", "accepted", "")).toThrow(/reason/);
+    expect(() => recordDisposition(seed, "E1-R1-F1", "accepted", "")).toThrow(/reason/);
   });
 
   test("allows superseding only a deferred-to-human disposition", () => {
-    const deferred = recordDisposition(seed, "R1-F1", "deferred-to-human", "owner call needed");
-    const resolved = recordDisposition(deferred, "R1-F1", "rejected", "owner: not reproducible");
+    const deferred = recordDisposition(seed, "E1-R1-F1", "deferred-to-human", "owner call needed");
+    const resolved = recordDisposition(deferred, "E1-R1-F1", "rejected", "owner: not reproducible");
     expect(resolved.rounds[0].findings[0].disposition).toEqual({
       kind: "rejected",
       reason: "owner: not reproducible",
+      causality: "introduced",
       decidedAfterRound: 1,
     });
-    expect(() => recordDisposition(resolved, "R1-F1", "accepted", "changed my mind")).toThrow(
+    expect(() => recordDisposition(resolved, "E1-R1-F1", "accepted", "changed my mind")).toThrow(
       /already has a disposition/,
     );
   });
@@ -191,18 +385,18 @@ describe("priorDispositionNotes", () => {
       reviewedAt: "t",
       review: { summary: "three issues", findings: [finding, secondFinding, thirdFinding] },
     });
-    ledger = recordDisposition(ledger, "R1-F1", "rejected", "not reproducible");
-    ledger = recordDisposition(ledger, "R1-F2", "accepted", "will fix");
-    ledger = recordDisposition(ledger, "R1-F3", "deferred-to-human", "owner call");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "rejected", "not reproducible");
+    ledger = recordDisposition(ledger, "E1-R1-F2", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F3", "deferred-to-human", "owner call");
 
     expect(priorDispositionNotes(ledger)).toEqual([
-      'R1-F1 "off-by-one" — rejected: not reproducible',
-      'R1-F3 "flaky retry" — deferred-to-human: owner call',
+      'E1-R1-F1 "off-by-one" - rejected: not reproducible',
+      'E1-R1-F3 "flaky retry" - deferred-to-human: owner call',
     ]);
   });
 });
 
-describe("openObligations — accepted findings", () => {
+describe("openObligations - accepted findings", () => {
   test("retains accepted finding intent until a later audit verifies it fixed", () => {
     let ledger = addReviewRound(createReviewLedger({branch: "f", baseRef: "master", baseSha: "b"}), {
       headSha: "h1",
@@ -210,10 +404,11 @@ describe("openObligations — accepted findings", () => {
       reviewedAt: "t1",
       review,
     });
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "replace the boundary check");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "replace the boundary check");
     expect(openObligations(ledger)).toEqual([{
-      findingId: "R1-F1",
+      findingId: "E1-R1-F1",
       type: "remediation",
+      priority: "P1",
       title: "off-by-one",
       evidence: "loop uses <=",
       direction: "use <",
@@ -240,7 +435,7 @@ describe("openObligations — accepted findings", () => {
           patchIds: [],
         },
         passes: [],
-        obligations: [{findingId: "R1-F1", status: "fixed", evidence: "strict comparison"}],
+        obligations: [{findingId: "E1-R1-F1", status: "fixed", evidence: "strict comparison"}],
         metrics: {
           findingsByPass: {diff: 0, integration: 0, adversarial: 0},
           findingsByPriority: {P0: 0, P1: 0, P2: 0, P3: 0},
@@ -257,7 +452,7 @@ describe("openObligations — accepted findings", () => {
 
 describe("reviewCanContinue", () => {
   test("blocks while any finding is undisposed", () => {
-    expect(reviewCanContinue([{ findings: [{ id: "R1-F1" }] }]).allowed).toBe(false);
+    expect(reviewCanContinue([{ findings: [{ id: "E1-R1-F1" }] }]).allowed).toBe(false);
   });
 
   test("stops at the round-cap", () => {
@@ -270,30 +465,31 @@ describe("reviewCanContinue", () => {
   });
 
   test("allows a clean confirmation round after all findings are rejected", () => {
-    const rounds = [{ findings: [{ id: "R1-F1", disposition: "rejected" as const }] }];
+    const rounds = [{ findings: [{ id: "E1-R1-F1", disposition: "rejected" as const }] }];
     expect(reviewCanContinue(rounds).allowed).toBe(true);
   });
 
   test("stops when a finding is deferred to the owner", () => {
-    const rounds = [{ findings: [{ id: "R1-F1", disposition: "deferred-to-human" as const }] }];
+    const rounds = [{ findings: [{ id: "E1-R1-F1", disposition: "deferred-to-human" as const }] }];
     expect(reviewCanContinue(rounds).reason).toMatch(/deferred/);
   });
 
   test("refuses another round at an unchanged HEAD after an accepted finding", () => {
-    const rounds = [{ headSha: "same", findings: [{ id: "R1-F1", disposition: "accepted" as const }] }];
+    const rounds = [{ headSha: "same", findings: [{ id: "E1-R1-F1", disposition: "accepted" as const }] }];
     expect(reviewCanContinue(rounds, 3, "same").reason).toMatch(/implement and commit/);
     expect(reviewCanContinue(rounds, 3, "fixed").allowed).toBe(true);
   });
 
   test("allows another round when the latest has an accepted finding to act on", () => {
-    const rounds = [{ findings: [{ id: "R1-F1", disposition: "accepted" as const }] }];
+    const rounds = [{ findings: [{ id: "E1-R1-F1", disposition: "accepted" as const }] }];
     expect(reviewCanContinue(rounds).allowed).toBe(true);
   });
 
   function obligationOf(type: "remediation" | "documentation") {
     return {
-      findingId: "R1-F1#2",
+      findingId: "E1-R1-F1#2",
       type,
+      priority: "P1" as const,
       title: "off-by-one",
       evidence: "loop uses <=",
       direction: "use <",
@@ -305,7 +501,7 @@ describe("reviewCanContinue", () => {
     // The owner reversal of a limitation reopens work after a clean confirmation round:
     // without the obligation the clean round would dead-end the ledger.
     const rounds = [
-      { headSha: "h1", findings: [{ id: "R1-F1", disposition: "accepted-as-limitation" as const }] },
+      { headSha: "h1", findings: [{ id: "E1-R1-F1", disposition: "accepted-as-limitation" as const }] },
       { headSha: "h2", findings: [] },
     ];
     expect(reviewCanContinue(rounds, 5, "h3", [obligationOf("remediation")]).allowed).toBe(true);
@@ -314,7 +510,7 @@ describe("reviewCanContinue", () => {
 
   test("refuses an unchanged HEAD while a remediation obligation is open, but not a documentation one", () => {
     const rounds = [
-      { headSha: "h1", findings: [{ id: "R1-F1", disposition: "accepted-as-limitation" as const }] },
+      { headSha: "h1", findings: [{ id: "E1-R1-F1", disposition: "accepted-as-limitation" as const }] },
       { headSha: "h2", findings: [] },
     ];
     expect(reviewCanContinue(rounds, 5, "h2", [obligationOf("remediation")]).reason).toMatch(
@@ -378,17 +574,17 @@ describe("validateEvidencePath", () => {
   });
 });
 
-describe("recordDisposition — accepted-as-limitation", () => {
+describe("recordDisposition - accepted-as-limitation", () => {
   test("requires a documentation path", () => {
     expect(() =>
-      recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "cost exceeds bar"),
+      recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted-as-limitation", "cost exceeds bar"),
     ).toThrow(/doc/);
   });
 
   test("records the doc path and rejects a doc path on any other kind", () => {
     const disposed = recordDisposition(
       seededLedger(p2Finding),
-      "R1-F1",
+      "E1-R1-F1",
       "accepted-as-limitation",
       "cost exceeds the documented bar",
       {doc: "./docs/limits.md"},
@@ -397,22 +593,23 @@ describe("recordDisposition — accepted-as-limitation", () => {
       kind: "accepted-as-limitation",
       reason: "cost exceeds the documented bar",
       doc: "docs/limits.md",
+      causality: "introduced",
       decidedAfterRound: 1,
     });
     expect(() =>
-      recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix", {doc: "docs/limits.md"}),
+      recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted", "will fix", {doc: "docs/limits.md"}),
     ).toThrow(/doc/);
   });
 
   test("refuses a P0/P1 finding without owner attribution and accepts with it", () => {
     expect(() =>
-      recordDisposition(seededLedger(finding), "R1-F1", "accepted-as-limitation", "too costly", {
+      recordDisposition(seededLedger(finding), "E1-R1-F1", "accepted-as-limitation", "too costly", {
         doc: "docs/limits.md",
       }),
     ).toThrow(/owner/);
     const disposed = recordDisposition(
       seededLedger(finding),
-      "R1-F1",
+      "E1-R1-F1",
       "accepted-as-limitation",
       "owner ruled 2026-08-14: below the assurance bar",
       {doc: "docs/limits.md", owner: true},
@@ -423,32 +620,39 @@ describe("recordDisposition — accepted-as-limitation", () => {
   test("is superseded only by an owner-attributed accepted decision, preserving both", () => {
     const limited = recordDisposition(
       seededLedger(p2Finding),
-      "R1-F1",
+      "E1-R1-F1",
       "accepted-as-limitation",
       "cost exceeds bar",
       {doc: "docs/limits.md"},
     );
-    expect(() => recordDisposition(limited, "R1-F1", "accepted", "changed my mind")).toThrow(/owner/);
-    expect(() => recordDisposition(limited, "R1-F1", "rejected", "owner: not real", {owner: true})).toThrow(
+    expect(() => recordDisposition(limited, "E1-R1-F1", "accepted", "changed my mind")).toThrow(/owner/);
+    expect(() => recordDisposition(limited, "E1-R1-F1", "rejected", "owner: not real", {owner: true})).toThrow(
       /accepted/,
     );
-    const reversed = recordDisposition(limited, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    const reversed = recordDisposition(limited, "E1-R1-F1", "accepted", "owner ruled: fix it", {owner: true});
     expect(reversed.rounds[0].findings[0].disposition).toEqual({
       kind: "accepted",
       reason: "owner ruled: fix it",
+      causality: "introduced",
       owner: true,
       decidedAfterRound: 1,
     });
     expect(reversed.rounds[0].findings[0].history).toEqual([
-      {kind: "accepted-as-limitation", reason: "cost exceeds bar", doc: "docs/limits.md", decidedAfterRound: 1},
+      {
+        kind: "accepted-as-limitation",
+        reason: "cost exceeds bar",
+        doc: "docs/limits.md",
+        causality: "introduced",
+        decidedAfterRound: 1,
+      },
     ]);
   });
 
   test("still supersedes deferred-to-human while preserving the parked decision", () => {
-    const deferred = recordDisposition(seededLedger(p2Finding), "R1-F1", "deferred-to-human", "owner call");
-    const resolved = recordDisposition(deferred, "R1-F1", "rejected", "owner: not reproducible");
+    const deferred = recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "deferred-to-human", "owner call");
+    const resolved = recordDisposition(deferred, "E1-R1-F1", "rejected", "owner: not reproducible");
     expect(resolved.rounds[0].findings[0].history).toEqual([
-      {kind: "deferred-to-human", reason: "owner call", decidedAfterRound: 1},
+      {kind: "deferred-to-human", reason: "owner call", causality: "introduced", decidedAfterRound: 1},
     ]);
   });
 });
@@ -470,7 +674,7 @@ describe("recordDisposition: waived-by-policy", () => {
   }
 
   test("records an authorized waiver with its class and round stamp", () => {
-    const ledger = recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Prose nit", {
+    const ledger = recordDisposition(ledgerWithFinding(proseFinding), "E1-R1-F1", "waived-by-policy", "Prose nit", {
       waivedClass: "coordination-prose",
       classes: [classes[0]],
     });
@@ -478,6 +682,7 @@ describe("recordDisposition: waived-by-policy", () => {
       kind: "waived-by-policy",
       reason: "Prose nit",
       class: "coordination-prose",
+      causality: "introduced",
       decidedAfterRound: 1,
     });
     // The waiver round-trips through the parser's structural invariants.
@@ -486,18 +691,18 @@ describe("recordDisposition: waived-by-policy", () => {
 
   test("fails closed without a class name, without resolved classes, or on a finding without a file", () => {
     expect(() =>
-      recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Prose nit", {
+      recordDisposition(ledgerWithFinding(proseFinding), "E1-R1-F1", "waived-by-policy", "Prose nit", {
         classes: [classes[0]],
       }),
     ).toThrow("requires the authorizing class name");
     expect(() =>
-      recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Prose nit", {
+      recordDisposition(ledgerWithFinding(proseFinding), "E1-R1-F1", "waived-by-policy", "Prose nit", {
         waivedClass: "coordination-prose",
       }),
     ).toThrow("no review classes");
     const anchorless: Finding = (({ file: _file, line: _line, ...rest }) => rest)(proseFinding);
     expect(() =>
-      recordDisposition(ledgerWithFinding(anchorless), "R1-F1", "waived-by-policy", "Prose nit", {
+      recordDisposition(ledgerWithFinding(anchorless), "E1-R1-F1", "waived-by-policy", "Prose nit", {
         waivedClass: "coordination-prose",
         classes: [classes[0]],
       }),
@@ -506,7 +711,7 @@ describe("recordDisposition: waived-by-policy", () => {
 
   test("refuses a non-waivable priority and applies multi-class strictness", () => {
     expect(() =>
-      recordDisposition(ledgerWithFinding({ ...proseFinding, priority: "P1" }), "R1-F1", "waived-by-policy", "Nit", {
+      recordDisposition(ledgerWithFinding({ ...proseFinding, priority: "P1" }), "E1-R1-F1", "waived-by-policy", "Nit", {
         waivedClass: "coordination-prose",
         classes: [classes[0]],
       }),
@@ -516,7 +721,7 @@ describe("recordDisposition: waived-by-policy", () => {
     expect(() =>
       recordDisposition(
         ledgerWithFinding({ ...proseFinding, priority: "P2" }),
-        "R1-F1",
+        "E1-R1-F1",
         "waived-by-policy",
         "Nit",
         { waivedClass: "coordination-prose", classes },
@@ -526,14 +731,14 @@ describe("recordDisposition: waived-by-policy", () => {
 
   test("rejects a class option on any other disposition kind", () => {
     expect(() =>
-      recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "rejected", "Not a defect", {
+      recordDisposition(ledgerWithFinding(proseFinding), "E1-R1-F1", "rejected", "Not a defect", {
         waivedClass: "coordination-prose",
       }),
     ).toThrow("only valid on a waived-by-policy disposition");
   });
 
   test("parser rejects a persisted waiver missing its class, file anchor, or round stamp", () => {
-    const authorized = recordDisposition(ledgerWithFinding(proseFinding), "R1-F1", "waived-by-policy", "Nit", {
+    const authorized = recordDisposition(ledgerWithFinding(proseFinding), "E1-R1-F1", "waived-by-policy", "Nit", {
       waivedClass: "coordination-prose",
       classes: [classes[0]],
     });
@@ -568,18 +773,19 @@ describe("recordDisposition: tracked-elsewhere", () => {
       headSha: "current",
       model: "codex-default",
       reviewedAt: "2026-07-19T12:00:00Z",
-      review,
+      review: {...review, findings: review.findings.map((subject) => ({...subject, causality: "pre-existing"}))},
     });
   }
 
   test("records the pointer, creates no obligation, and round-trips the parser", () => {
-    const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Counterpart lands separately", {
+    const ledger = recordDisposition(ledgerWithFinding(), "E1-R1-F1", "tracked-elsewhere", "Counterpart lands separately", {
       tracks: "other-repo-item-slug",
     });
     expect(ledger.rounds[0].findings[0].disposition).toEqual({
       kind: "tracked-elsewhere",
       reason: "Counterpart lands separately",
       tracks: "other-repo-item-slug",
+      causality: "pre-existing",
       decidedAfterRound: 1,
     });
     expect(openObligations(ledger)).toEqual([]);
@@ -590,15 +796,15 @@ describe("recordDisposition: tracked-elsewhere", () => {
 
   test("refuses a missing pointer and a pointer on any other kind", () => {
     expect(() =>
-      recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Counterpart lands separately"),
+      recordDisposition(ledgerWithFinding(), "E1-R1-F1", "tracked-elsewhere", "Counterpart lands separately"),
     ).toThrow("requires a tracks pointer");
     expect(() =>
-      recordDisposition(ledgerWithFinding(), "R1-F1", "rejected", "Not a defect", { tracks: "somewhere" }),
-    ).toThrow("only valid on a tracked-elsewhere disposition");
+      recordDisposition(ledgerWithFinding(), "E1-R1-F1", "rejected", "Not a defect", { tracks: "somewhere" }),
+    ).toThrow("only valid on tracked-elsewhere or delegated-follow-up");
   });
 
   test("parser rejects a persisted record missing its pointer or stamp", () => {
-    const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Counterpart lands separately", {
+    const ledger = recordDisposition(ledgerWithFinding(), "E1-R1-F1", "tracked-elsewhere", "Counterpart lands separately", {
       tracks: "other-repo-item-slug",
     });
     const serialized = JSON.parse(JSON.stringify(ledger));
@@ -617,7 +823,7 @@ describe("recordDisposition: tracked-elsewhere", () => {
       reason: "Not a defect",
       tracks: "somewhere",
     };
-    expect(() => parseReviewLedger(tracksOnRejected)).toThrow("only valid on a tracked-elsewhere disposition");
+    expect(() => parseReviewLedger(tracksOnRejected)).toThrow("only valid on tracked-elsewhere or delegated-follow-up");
   });
 
   test("accepts each documented pointer shape", () => {
@@ -629,7 +835,7 @@ describe("recordDisposition: tracked-elsewhere", () => {
       "home-ops#a-b.c",
       "docs/specs/2026-08-18-thing.md",
     ]) {
-      const ledger = recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", {
+      const ledger = recordDisposition(ledgerWithFinding(), "E1-R1-F1", "tracked-elsewhere", "Lands separately", {
         tracks,
       });
       expect(ledger.rounds[0].findings[0].disposition?.tracks).toBe(tracks);
@@ -669,12 +875,12 @@ describe("recordDisposition: tracked-elsewhere", () => {
       "repo#a-",
     ]) {
       expect(() =>
-        recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", { tracks }),
+        recordDisposition(ledgerWithFinding(), "E1-R1-F1", "tracked-elsewhere", "Lands separately", { tracks }),
       ).toThrow();
     }
     const serialized = JSON.parse(
       JSON.stringify(
-        recordDisposition(ledgerWithFinding(), "R1-F1", "tracked-elsewhere", "Lands separately", {
+        recordDisposition(ledgerWithFinding(), "E1-R1-F1", "tracked-elsewhere", "Lands separately", {
           tracks: "other-repo-item-slug",
         }),
       ),
@@ -683,6 +889,217 @@ describe("recordDisposition: tracked-elsewhere", () => {
     expect(() => parseReviewLedger(serialized)).toThrow("tracks must be a board item slug");
     serialized.rounds[0].findings[0].disposition.tracks = "repo#main\u0001";
     expect(() => parseReviewLedger(serialized)).toThrow("tracks must be a board item slug");
+  });
+});
+
+describe("recordDisposition: delegated-follow-up", () => {
+  function ledgerWithCausality(causality: "introduced" | "worsened" | "unmet-obligation" | "pre-existing" | "unknown") {
+    return addReviewRound(createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}), {
+      headSha: "head",
+      model: "model",
+      reviewedAt: "time",
+      review: {summary: "finding", findings: [{...finding, causality}]},
+    });
+  }
+
+  test("delegates a pre-existing finding to a durable follow-up without opening remediation", () => {
+    const ledger = recordDisposition(
+      ledgerWithCausality("pre-existing"),
+      "E1-R1-F1",
+      "delegated-follow-up",
+      "Unchanged by this range",
+      {tracks: "follow-up-item", urgency: "normal"},
+    );
+    expect(ledger.rounds[0].findings[0].disposition).toEqual({
+      kind: "delegated-follow-up",
+      reason: "Unchanged by this range",
+      causality: "pre-existing",
+      tracks: "follow-up-item",
+      urgency: "normal",
+      decidedAfterRound: 1,
+    });
+    expect(openObligations(ledger)).toEqual([]);
+  });
+
+  test.each(["introduced", "worsened", "unmet-obligation"] as const)(
+    "refuses to delegate a %s finding away from the current workstream",
+    (causality) => {
+      expect(() =>
+        recordDisposition(
+          ledgerWithCausality(causality),
+          "E1-R1-F1",
+          "delegated-follow-up",
+          "Track later",
+          {tracks: "follow-up-item", urgency: "normal"},
+        ),
+      ).toThrow(/pre-existing/);
+    },
+  );
+
+  test("refuses tracked-elsewhere while causality remains unknown", () => {
+    expect(() =>
+      recordDisposition(
+        ledgerWithCausality("unknown"),
+        "E1-R1-F1",
+        "tracked-elsewhere",
+        "Fix in another workstream",
+        {tracks: "other-item"},
+      ),
+    ).toThrow(/resolve.*causality/);
+  });
+
+  test("refuses tracked-elsewhere while legacy causality is absent", () => {
+    const {causality: _causality, ...legacyFinding} = finding;
+    const ledger = addReviewRound(createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}), {
+      headSha: "head",
+      model: "model",
+      reviewedAt: "time",
+      review: {summary: "legacy finding", findings: [legacyFinding]},
+    });
+
+    expect(() =>
+      recordDisposition(
+        ledger,
+        "E1-R1-F1",
+        "tracked-elsewhere",
+        "Fix in another workstream",
+        {tracks: "other-item"},
+      ),
+    ).toThrow(/resolve.*causality/);
+  });
+
+  test.each(["waived-by-policy", "accepted-as-limitation"] as const)(
+    "refuses %s while causality remains unknown",
+    (kind) => {
+      expect(() =>
+        recordDisposition(
+          ledgerWithCausality("unknown"),
+          "E1-R1-F1",
+          kind,
+          "Do not remediate in this workstream",
+          kind === "waived-by-policy"
+            ? {waivedClass: "bookkeeping", classes: [{name: "bookkeeping", match: ["src/x.ts"], waivablePriorities: ["P1"]}]}
+            : {doc: "docs/limits.md", owner: true},
+        ),
+      ).toThrow(/resolve.*causality/);
+    },
+  );
+
+  test("requires escalation evidence for an urgent pre-existing finding", () => {
+    expect(() =>
+      recordDisposition(
+        ledgerWithCausality("pre-existing"),
+        "E1-R1-F1",
+        "delegated-follow-up",
+        "Urgent production defect",
+        {tracks: "follow-up-item", urgency: "urgent"},
+      ),
+    ).toThrow(/escalation/);
+  });
+
+  test("does not accept a pre-existing defect as current-workstream remediation", () => {
+    expect(() =>
+      recordDisposition(
+        ledgerWithCausality("pre-existing"),
+        "E1-R1-F1",
+        "accepted",
+        "Fix here",
+      ),
+    ).toThrow(/does not belong to current-workstream remediation/);
+  });
+
+  test.each(["unknown", undefined] as const)(
+    "does not accept a finding with %s causality as current-workstream remediation",
+    (causality) => {
+      const ledger = causality === undefined
+        ? addReviewRound(createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}), {
+            headSha: "head",
+            model: "model",
+            reviewedAt: "time",
+            review: {summary: "legacy finding", findings: [{...finding, causality: undefined}]},
+          })
+        : ledgerWithCausality(causality);
+      expect(() =>
+        recordDisposition(ledger, "E1-R1-F1", "accepted", "Fix here"),
+      ).toThrow(/resolve.*causality/);
+    },
+  );
+
+  test.each(["unknown", "pre-existing"] as const)(
+    "rejects persisted accepted disposition with %s effective causality",
+    (causality) => {
+      const ledger = ledgerWithCausality(causality);
+      ledger.rounds[0].findings[0].disposition = {
+        kind: "accepted",
+        reason: "Fix here",
+        causality,
+        decidedAfterRound: 1,
+      };
+      expect(() => parseReviewLedger(ledger)).toThrow(/resolve causality.*accepted|current-workstream remediation/);
+    },
+  );
+
+  test("lets the implementer resolve unknown causality before disposition", () => {
+    const ledger = recordDisposition(
+      ledgerWithCausality("unknown"),
+      "E1-R1-F1",
+      "accepted",
+      "The changed caller newly reaches this path",
+      {causality: "introduced"},
+    );
+    expect(ledger.rounds[0].findings[0].disposition?.causality).toBe("introduced");
+  });
+
+  test("refuses to override a known owned causality", () => {
+    expect(() =>
+      recordDisposition(
+        ledgerWithCausality("introduced"),
+        "E1-R1-F1",
+        "delegated-follow-up",
+        "Claim it predates the range",
+        {tracks: "follow-up-item", urgency: "normal", causality: "pre-existing"},
+      ),
+    ).toThrow(/known causality/);
+  });
+
+  test.each(["introduced", "worsened", "unmet-obligation"] as const)(
+    "refuses tracked-elsewhere for a %s finding",
+    (causality) => {
+      expect(() =>
+        recordDisposition(
+          ledgerWithCausality(causality),
+          "E1-R1-F1",
+          "tracked-elsewhere",
+          "Fix in another workstream",
+          {tracks: "other-item"},
+        ),
+      ).toThrow(/current workstream/);
+    },
+  );
+
+  test("rejects a persisted causality override that contradicts the finding", () => {
+    const ledger = ledgerWithCausality("introduced");
+    ledger.rounds[0].findings[0].disposition = {
+      kind: "delegated-follow-up",
+      reason: "Claim it predates the range",
+      tracks: "follow-up-item",
+      causality: "pre-existing",
+      urgency: "normal",
+      decidedAfterRound: 1,
+    };
+    expect(() => parseReviewLedger(ledger)).toThrow(/contradicts.*causality/);
+  });
+
+  test("rejects persisted tracked-elsewhere while causality remains unknown", () => {
+    const ledger = ledgerWithCausality("unknown");
+    ledger.rounds[0].findings[0].disposition = {
+      kind: "tracked-elsewhere",
+      reason: "Fix in another workstream",
+      tracks: "other-item",
+      causality: "unknown",
+      decidedAfterRound: 1,
+    };
+    expect(() => parseReviewLedger(ledger)).toThrow(/resolve.*causality/);
   });
 });
 
@@ -763,40 +1180,55 @@ describe("carryForwardDispositions", () => {
       headSha: "head-two",
       model: "codex-default",
       reviewedAt: "2026-07-19T13:00:00Z",
-      review: { summary: "repeat", findings: [{ ...finding, repeatedFrom: ["R1-F1"] } as Finding] },
+      review: { summary: "repeat", findings: [{ ...finding, repeatedFrom: ["E1-R1-F1"] } as Finding] },
     });
   }
 
   test("carries a terminal non-remediation decision onto an exact repeat", () => {
     const ledger = carryForwardDispositions(
-      twoRoundLedger(() => (l) => recordDisposition(l, "R1-F1", "rejected", "Not a defect")),
+      twoRoundLedger(() => (l) => recordDisposition(l, "E1-R1-F1", "rejected", "Not a defect")),
     );
     expect(ledger.rounds[1].findings[0].disposition).toEqual({
       kind: "rejected",
       reason: "Not a defect",
-      carriedFrom: "R1-F1",
+      carriedFrom: "E1-R1-F1",
+      causality: "introduced",
       decidedAfterRound: 2,
     });
     expect(openObligations(ledger)).toEqual([]);
     expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
     // Override: a fresh disposition supersedes the carried one via history.
-    const overridden = recordDisposition(ledger, "R2-F1", "accepted", "New round convinced me");
+    const overridden = recordDisposition(ledger, "E1-R2-F1", "accepted", "New round convinced me");
     expect(overridden.rounds[1].findings[0].disposition?.kind).toBe("accepted");
-    expect(overridden.rounds[1].findings[0].history?.[0].carriedFrom).toBe("R1-F1");
+    expect(overridden.rounds[1].findings[0].history?.[0].carriedFrom).toBe("E1-R1-F1");
     expect(parseReviewLedger(JSON.parse(JSON.stringify(overridden)))).toEqual(overridden);
   });
 
   test("never carries accepted or deferred decisions, or onto non-repeats", () => {
     const acceptedPrior = carryForwardDispositions(
-      twoRoundLedger(() => (l) => recordDisposition(l, "R1-F1", "accepted", "Real defect")),
+      twoRoundLedger(() => (l) => recordDisposition(l, "E1-R1-F1", "accepted", "Real defect")),
     );
     expect(acceptedPrior.rounds[1].findings[0].disposition).toBeUndefined();
     const deferredPrior = carryForwardDispositions(
-      twoRoundLedger(() => (l) => recordDisposition(l, "R1-F1", "deferred-to-human", "Owner call")),
+      twoRoundLedger(() => (l) => recordDisposition(l, "E1-R1-F1", "deferred-to-human", "Owner call")),
     );
     expect(deferredPrior.rounds[1].findings[0].disposition).toBeUndefined();
     const undispositioned = carryForwardDispositions(twoRoundLedger());
     expect(undispositioned.rounds[1].findings[0].disposition).toBeUndefined();
+  });
+
+  test("does not carry a terminal decision when the repeated finding's causality changed", () => {
+    let ledger = twoRoundLedger(
+      () => (current) => recordDisposition(current, "E1-R1-F1", "rejected", "Pre-existing only"),
+    );
+    ledger.rounds[0].findings[0].causality = "pre-existing";
+    ledger.rounds[0].findings[0].disposition = {
+      ...ledger.rounds[0].findings[0].disposition!,
+      causality: "pre-existing",
+    };
+    ledger.rounds[1].findings[0].causality = "worsened";
+
+    expect(carryForwardDispositions(ledger).rounds[1].findings[0].disposition).toBeUndefined();
   });
 });
 
@@ -815,22 +1247,24 @@ describe("openObligations", () => {
       reviewedAt: "t2",
       review: {summary: "second", findings: [{...p2Finding, title: "missing doc"}]},
     });
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "fix the boundary");
-    ledger = recordDisposition(ledger, "R2-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "fix the boundary");
+    ledger = recordDisposition(ledger, "E1-R2-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     expect(openObligations(ledger)).toEqual([
       {
-        findingId: "R1-F1",
+        findingId: "E1-R1-F1",
         type: "remediation",
+        priority: "P2",
         title: "off-by-one",
         evidence: "loop uses <=",
         direction: "use <",
         dispositionReason: "fix the boundary",
       },
       {
-        findingId: "R2-F1",
+        findingId: "E1-R2-F1",
         type: "documentation",
+        priority: "P2",
         title: "missing doc",
         evidence: "loop uses <=",
         direction: "use <",
@@ -842,7 +1276,7 @@ describe("openObligations", () => {
 
   test("closes a remediation obligation on fixed and a documentation obligation on documented", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -850,14 +1284,14 @@ describe("openObligations", () => {
       model: "m",
       reviewedAt: "t2",
       review: {summary: "clean", findings: []},
-      audit: auditWith([{findingId: "R1-F1", status: "documented", evidence: "limitation documented"}]),
+      audit: auditWith([{findingId: "E1-R1-F1", status: "documented", evidence: "limitation documented"}]),
     });
     expect(openObligations(ledger)).toEqual([]);
   });
 
   test("does not let a fixed result close a documentation obligation", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -865,14 +1299,14 @@ describe("openObligations", () => {
       model: "m",
       reviewedAt: "t2",
       review: {summary: "clean", findings: []},
-      audit: auditWith([{findingId: "R1-F1", status: "fixed", evidence: "wrong terminal"}]),
+      audit: auditWith([{findingId: "E1-R1-F1", status: "fixed", evidence: "wrong terminal"}]),
     });
     expect(openObligations(ledger)).toHaveLength(1);
   });
 
   test("the owner reversal creates a fresh qualified obligation no retired result can satisfy", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -881,15 +1315,16 @@ describe("openObligations", () => {
       reviewedAt: "t2",
       review: {summary: "clean", findings: []},
       audit: auditWith([
-        {findingId: "R1-F1", status: "documented", evidence: "limitation documented"},
-        {findingId: "R1-F1", status: "fixed", evidence: "stale result under the retired decision"},
+        {findingId: "E1-R1-F1", status: "documented", evidence: "limitation documented"},
+        {findingId: "E1-R1-F1", status: "fixed", evidence: "stale result under the retired decision"},
       ]),
     });
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "owner ruled: fix it", {owner: true});
     expect(openObligations(ledger)).toEqual([
       {
-        findingId: "R1-F1#2",
+        findingId: "E1-R1-F1#2",
         type: "remediation",
+        priority: "P2",
         title: "off-by-one",
         evidence: "loop uses <=",
         direction: "use <",
@@ -901,50 +1336,50 @@ describe("openObligations", () => {
       model: "m",
       reviewedAt: "t3",
       review: {summary: "clean", findings: []},
-      audit: auditWith([{findingId: "R1-F1#2", status: "fixed", evidence: "boundary rewritten"}]),
+      audit: auditWith([{findingId: "E1-R1-F1#2", status: "fixed", evidence: "boundary rewritten"}]),
     });
     expect(openObligations(confirmed)).toEqual([]);
   });
 });
 
-describe("openObligations — result ordering", () => {
+describe("openObligations - result ordering", () => {
   test("a terminal result recorded before its decision cannot close the obligation", () => {
     // Legacy shape: the old validator accepted unsolicited results, so a round can
     // carry a terminal result for a finding whose obligation a LATER decision creates.
     let ledger = seededLedger(p2Finding);
     ledger = {
       ...ledger,
-      rounds: [{...ledger.rounds[0], audit: auditWith([{findingId: "R1-F1", status: "fixed", evidence: "unsolicited"}])}],
+      rounds: [{...ledger.rounds[0], audit: auditWith([{findingId: "E1-R1-F1", status: "fixed", evidence: "unsolicited"}])}],
     };
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix");
     expect(openObligations(ledger)).toHaveLength(1);
   });
 
   test("stamps the deciding round on a new disposition so only later results close it", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix");
     expect(ledger.rounds[0].findings[0].disposition?.decidedAfterRound).toBe(1);
     ledger = addReviewRound(ledger, {
       headSha: "h2",
       model: "m",
       reviewedAt: "t2",
       review: {summary: "clean", findings: []},
-      audit: auditWith([{findingId: "R1-F1", status: "fixed", evidence: "verified"}]),
+      audit: auditWith([{findingId: "E1-R1-F1", status: "fixed", evidence: "verified"}]),
     });
     expect(openObligations(ledger)).toEqual([]);
   });
 });
 
-describe("parseReviewLedger — decision ordering and result types", () => {
+describe("parseReviewLedger - decision ordering and result types", () => {
   test("rejects a decision stamped before its finding's round or beyond the round count", () => {
     const precedesFinding = JSON.parse(
-      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted", "will fix")),
     );
     precedesFinding.rounds[0].findings[0].disposition.decidedAfterRound = 0;
     expect(() => parseReviewLedger(precedesFinding)).toThrow(/decidedAfterRound/);
 
     const beyondRounds = JSON.parse(
-      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted", "will fix")),
     );
     beyondRounds.rounds[0].findings[0].disposition.decidedAfterRound = 5;
     expect(() => parseReviewLedger(beyondRounds)).toThrow(/decidedAfterRound/);
@@ -952,7 +1387,7 @@ describe("parseReviewLedger — decision ordering and result types", () => {
 
   test("rejects a supersession chain whose round stamps run backwards", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -961,7 +1396,7 @@ describe("parseReviewLedger — decision ordering and result types", () => {
       reviewedAt: "t2",
       review: {summary: "clean", findings: []},
     });
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "owner ruled: fix it", {owner: true});
     const forged = JSON.parse(JSON.stringify(ledger));
     forged.rounds[0].findings[0].history[0].decidedAfterRound = 2;
     forged.rounds[0].findings[0].disposition.decidedAfterRound = 1;
@@ -970,7 +1405,7 @@ describe("parseReviewLedger — decision ordering and result types", () => {
 
   test("fails closed on a result whose status contradicts its stamped type", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -979,7 +1414,7 @@ describe("parseReviewLedger — decision ordering and result types", () => {
       reviewedAt: "t2",
       review: {summary: "clean", findings: []},
       audit: auditWith([
-        {findingId: "R1-F1", status: "documented", evidence: "forged", type: "remediation"},
+        {findingId: "E1-R1-F1", status: "documented", evidence: "forged", type: "remediation"},
       ]),
     });
     // In memory the malformed result must not close the documentation obligation; a
@@ -1008,7 +1443,7 @@ describe("parseReviewLedger — decision ordering and result types", () => {
         reviewedAt: `t${roundNumber}`,
         review: {summary: `r${roundNumber}`, findings: [dominated ? churn : p2Finding]},
       });
-      ledger = recordDisposition(ledger, `R${roundNumber}-F1`, "rejected", "not reproducible");
+      ledger = recordDisposition(ledger, `E1-R${roundNumber}-F1`, "rejected", "not reproducible");
     }
     ledger = addReviewRound(ledger, {headSha: "h3", model: "m", reviewedAt: "t3", review: {summary: "r3", findings: []}, stepBack});
     return JSON.parse(JSON.stringify(ledger));
@@ -1034,7 +1469,7 @@ describe("parseReviewLedger — decision ordering and result types", () => {
   test("requires the round stamp on decisions that cannot be legacy data", () => {
     const limitationWithoutStamp = JSON.parse(
       JSON.stringify(
-        recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "below the bar", {
+        recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted-as-limitation", "below the bar", {
           doc: "docs/limits.md",
         }),
       ),
@@ -1045,10 +1480,10 @@ describe("parseReviewLedger — decision ordering and result types", () => {
     const reversalWithoutStamp = JSON.parse(
       JSON.stringify(
         recordDisposition(
-          recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "below the bar", {
+          recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted-as-limitation", "below the bar", {
             doc: "docs/limits.md",
           }),
-          "R1-F1",
+          "E1-R1-F1",
           "accepted",
           "owner ruled: fix it",
           {owner: true},
@@ -1075,7 +1510,7 @@ describe("parseReviewLedger — decision ordering and result types", () => {
 
   test("rejects a documented result that omits its obligation type", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -1083,21 +1518,21 @@ describe("parseReviewLedger — decision ordering and result types", () => {
       model: "m",
       reviewedAt: "t2",
       review: {summary: "clean", findings: []},
-      audit: auditWith([{findingId: "R1-F1", status: "documented", evidence: "covered"}]),
+      audit: auditWith([{findingId: "E1-R1-F1", status: "documented", evidence: "covered"}]),
     });
     expect(() => parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toThrow(/audit/);
   });
 });
 
-describe("parseReviewLedger — supersession sequence", () => {
+describe("parseReviewLedger - supersession sequence", () => {
   test("rejects a persisted reversal that lacks owner attribution", () => {
     const reversed = JSON.parse(
       JSON.stringify(
         recordDisposition(
-          recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted-as-limitation", "below the bar", {
+          recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted-as-limitation", "below the bar", {
             doc: "docs/limits.md",
           }),
-          "R1-F1",
+          "E1-R1-F1",
           "accepted",
           "owner ruled: fix it",
           {owner: true},
@@ -1110,7 +1545,7 @@ describe("parseReviewLedger — supersession sequence", () => {
 
   test("rejects an unsupported history transition and history without a live decision", () => {
     const rejectedThenAccepted = JSON.parse(
-      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted", "will fix")),
     );
     rejectedThenAccepted.rounds[0].findings[0].history = [{kind: "rejected", reason: "not real"}];
     expect(() => parseReviewLedger(rejectedThenAccepted)).toThrow(/supersession|superseded/);
@@ -1194,12 +1629,12 @@ describe("remediationChurnTripwire", () => {
   });
 });
 
-describe("parseReviewLedger — persisted decision invariants", () => {
+describe("parseReviewLedger - persisted decision invariants", () => {
   function persistedLimitation(withOwner = false): any {
     const seed = withOwner ? seededLedger(finding) : seededLedger(p2Finding);
     return JSON.parse(
       JSON.stringify(
-        recordDisposition(seed, "R1-F1", "accepted-as-limitation", "below the bar", {
+        recordDisposition(seed, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
           doc: "docs/limits.md",
           ...(withOwner ? {owner: true} : {}),
         }),
@@ -1215,7 +1650,7 @@ describe("parseReviewLedger — persisted decision invariants", () => {
 
   test("rejects a doc path on a non-limitation disposition", () => {
     const ledger = JSON.parse(
-      JSON.stringify(recordDisposition(seededLedger(p2Finding), "R1-F1", "accepted", "will fix")),
+      JSON.stringify(recordDisposition(seededLedger(p2Finding), "E1-R1-F1", "accepted", "will fix")),
     );
     ledger.rounds[0].findings[0].disposition.doc = "docs/limits.md";
     expect(() => parseReviewLedger(ledger)).toThrow(/doc/);
@@ -1238,11 +1673,11 @@ describe("parseReviewLedger — persisted decision invariants", () => {
     const reversed = JSON.parse(
       JSON.stringify(
         recordDisposition(
-          recordDisposition(seededLedger(finding), "R1-F1", "accepted-as-limitation", "owner ruled", {
+          recordDisposition(seededLedger(finding), "E1-R1-F1", "accepted-as-limitation", "owner ruled", {
             doc: "docs/limits.md",
             owner: true,
           }),
-          "R1-F1",
+          "E1-R1-F1",
           "accepted",
           "owner ruled: fix it",
           {owner: true},
@@ -1257,7 +1692,7 @@ describe("parseReviewLedger — persisted decision invariants", () => {
 describe("supersedeLedgerBase and liveRounds", () => {
   test("keeps every round and decision while resetting the live window", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "will fix");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "will fix");
     const superseded = supersedeLedgerBase(ledger, {
       baseRef: "master",
       baseSha: "b2",
@@ -1280,16 +1715,16 @@ describe("supersedeLedgerBase and liveRounds", () => {
       review: {summary: "post-supersession", findings: []},
     });
     expect(resumed.rounds).toHaveLength(2);
-    expect(resumed.rounds[1].number).toBe(2);
+    expect(resumed.rounds[1]).toMatchObject({number: 2, epoch: 2, logicalRound: 1});
     expect(liveRounds(resumed)).toHaveLength(1);
   });
 
   test("round-trips supersessions, decision history, step-back, doc, and owner through parse", () => {
     let ledger = seededLedger({...p2Finding, origin: "remediation"});
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "owner ruled: fix it", {owner: true});
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "owner ruled: fix it", {owner: true});
     ledger = addReviewRound(ledger, {
       headSha: "h2",
       model: "m",
@@ -1307,17 +1742,25 @@ describe("supersedeLedgerBase and liveRounds", () => {
       model: "m",
       reviewedAt: "t3",
       review: {summary: "with step-back", findings: []},
-      stepBack: {path: "docs/step-back.md", triggerRounds: [1, 2]},
+      stepBack: {
+        path: "docs/step-back.md",
+        triggerRounds: [1, 2],
+        triggerRoundIds: ["E1-R1", "E1-R2"],
+      },
     });
     const parsed = parseReviewLedger(JSON.parse(JSON.stringify(ledger)));
     expect(parsed).toEqual(ledger);
-    expect(parsed.rounds[2].stepBack).toEqual({path: "docs/step-back.md", triggerRounds: [1, 2]});
+    expect(parsed.rounds[2].stepBack).toEqual({
+      path: "docs/step-back.md",
+      triggerRounds: [1, 2],
+      triggerRoundIds: ["E1-R1", "E1-R2"],
+    });
     expect(parsed.rounds[0].findings[0].history).toHaveLength(1);
   });
 
   test("labels a nonterminal documentation result from its persisted type", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -1326,15 +1769,15 @@ describe("supersedeLedgerBase and liveRounds", () => {
       reviewedAt: "t2",
       review: {summary: "doc gap", findings: []},
       audit: auditWith([
-        {findingId: "R1-F1", status: "incomplete", evidence: "doc misses the crash path", type: "documentation"},
+        {findingId: "E1-R1-F1", status: "incomplete", evidence: "doc misses the crash path", type: "documentation"},
       ]),
     });
-    expect(renderReviewLedger(ledger)).toContain("Documentation obligation R1-F1: incomplete");
+    expect(renderReviewLedger(ledger)).toContain("Documentation obligation E1-R1-F1: incomplete");
   });
 
   test("renders limitation, owner attribution, step-back, and supersession context", () => {
     let ledger = seededLedger(p2Finding);
-    ledger = recordDisposition(ledger, "R1-F1", "accepted-as-limitation", "below the bar", {
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted-as-limitation", "below the bar", {
       doc: "docs/limits.md",
     });
     ledger = addReviewRound(ledger, {
@@ -1353,13 +1796,19 @@ describe("supersedeLedgerBase and liveRounds", () => {
       model: "m",
       reviewedAt: "t3",
       review: {summary: "post", findings: []},
-      stepBack: {path: "docs/step-back.md", triggerRounds: [1, 2]},
+      stepBack: {
+        path: "docs/step-back.md",
+        triggerRounds: [1, 2],
+        triggerRoundIds: ["E1-R1", "E1-R2"],
+      },
     });
     const md = renderReviewLedger(ledger);
     expect(md).toContain("**accepted-as-limitation**");
     expect(md).toContain("documented at: docs/limits.md");
     expect(md).toContain("Step-back note: docs/step-back.md");
-    expect(md).toContain("Base superseded after round 2");
+    expect(md).toContain("triggered by rounds E1-R1, E1-R2");
+    expect(md).toContain("Epoch 1 superseded after round 2");
+    expect(md).toContain("## Round 1 (epoch 2)");
   });
 });
 
@@ -1371,14 +1820,84 @@ describe("renderReviewLedger", () => {
       reviewedAt: "t",
       review,
     });
-    ledger = recordDisposition(ledger, "R1-F1", "accepted", "fixing");
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "fixing");
     ledger = { ...ledger, failures: [{ headSha: "cafe", model: "m", attemptedAt: "t0", reason: "timeout" }] };
     const md = renderReviewLedger(ledger);
-    expect(md).toContain("### R1-F1");
+    expect(md).toContain("### E1-R1-F1");
     // Separator changed with the renderer, not the assertion's meaning: the disposition
     // line now uses a plain hyphen, per the house rule against em dashes in new text.
-    expect(md).toContain("**accepted** - fixing");
+    expect(md).toContain("**accepted** (causality: introduced) - fixing");
     expect(md).toContain("Incomplete attempts");
+    expect(md).toContain("Round 2-a");
     expect(md).toContain("timeout");
+  });
+});
+
+describe("round notes (C1)", () => {
+  test("notes round-trip through the parser and render in their own section", () => {
+    const ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "head",
+        model: "codex",
+        reviewedAt: "2026-08-23T12:00:00Z",
+        review: { summary: "clean of P0/P1", findings: [] },
+        notes: [
+          { priority: "P2", title: "missing fixture", file: "src/a.ts", line: 4, pass: "diff" },
+          { priority: "P3", title: "stale comment", detail: "wording", pass: "adversarial" },
+        ],
+      },
+    );
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
+    const markdown = renderReviewLedger(ledger);
+    expect(markdown).toContain("### Notes (non-blocking)");
+    expect(markdown).toContain("- P2 [diff] missing fixture (src/a.ts:4)");
+    expect(markdown).toContain("- P3 [adversarial] stale comment - wording");
+  });
+
+  test("a persisted note with a blocking priority fails closed", () => {
+    const ledger = addReviewRound(
+      createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" }),
+      {
+        headSha: "head",
+        model: "codex",
+        reviewedAt: "2026-08-23T12:00:00Z",
+        review: { summary: "clean", findings: [] },
+      },
+    );
+    const raw = JSON.parse(JSON.stringify(ledger));
+    raw.rounds[0].notes = [{ priority: "P1", title: "smuggled", pass: "diff" }];
+    expect(() => parseReviewLedger(raw)).toThrow(/notes is present but invalid/);
+  });
+});
+
+describe("owner-authorized round cap (C7)", () => {
+  const base = () => createReviewLedger({ branch: "feature", baseRef: "master", baseSha: "base" });
+
+  test("a recorded authorization raises the configured cap but never lowers it", () => {
+    expect(effectiveMaxRounds(base(), 3)).toBe(3);
+    expect(effectiveMaxRounds({ ...base(), maxRoundsOverride: 5 }, 3)).toBe(5);
+    // A configuration that has since caught up wins on its own merit.
+    expect(effectiveMaxRounds({ ...base(), maxRoundsOverride: 2 }, 4)).toBe(4);
+  });
+
+  test("a superseding patch series is reviewed against its configured cap again", () => {
+    const raised = { ...base(), maxRoundsOverride: 5 };
+    const superseded = supersedeLedgerBase(raised, {
+      baseRef: "master",
+      baseSha: "rebased",
+      archivedAt: "2026-08-24T00:00:00Z",
+    });
+    expect(superseded.maxRoundsOverride).toBeUndefined();
+    expect(effectiveMaxRounds(superseded, 3)).toBe(3);
+  });
+
+  test("the round-trip keeps the authorization and rejects a malformed one", () => {
+    const ledger = { ...base(), maxRoundsOverride: 4 };
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger))).maxRoundsOverride).toBe(4);
+    expect(renderReviewLedger(ledger)).toContain("- Max rounds (owner-authorized): 4");
+    const raw = JSON.parse(JSON.stringify(ledger));
+    raw.maxRoundsOverride = 0;
+    expect(() => parseReviewLedger(raw)).toThrow(/maxRoundsOverride must be an integer/);
   });
 });

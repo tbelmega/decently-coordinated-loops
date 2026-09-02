@@ -10,8 +10,8 @@ export interface MoveLog {
 
 /** Move a tracked file with `git mv` so the change is recorded as a rename (git keeps
  * the item file's history under `--follow`) and staged for the agent's commit. Returns
- * false when git can't do it — the data repo isn't a git repo, or the file isn't
- * tracked yet (a freshly filed item that was never committed) — so the caller falls
+ * false when git can't do it - the data repo isn't a git repo, or the file isn't
+ * tracked yet (a freshly filed item that was never committed) - so the caller falls
  * back to a plain filesystem move. `fromRel`/`toRel` are repo-relative paths. */
 function gitMv(root: string, fromRel: string, toRel: string): boolean {
   const result = spawnSync("git", ["-C", root, "mv", fromRel, toRel], { encoding: "utf8" });
@@ -20,9 +20,9 @@ function gitMv(root: string, fromRel: string, toRel: string): boolean {
 
 /** Executes a batch of item-file moves (items/ <-> for-delivery/ <-> archive/)
  * idempotently: if the source is already gone and the destination already exists,
- * the move already happened on a previous run — skip it rather than erroring, so a
+ * the move already happened on a previous run - skip it rather than erroring, so a
  * sync rerun after a partial previous run doesn't fail. If neither exists, that's a
- * genuine anomaly (the file vanished from both ends) — log it and continue rather
+ * genuine anomaly (the file vanished from both ends) - log it and continue rather
  * than aborting the whole batch. Otherwise copy the content to the destination and
  * remove the source. */
 export function performMoves(root: string, moves: ItemMove[]): MoveLog[] {
