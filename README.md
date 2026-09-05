@@ -127,6 +127,13 @@ Pass the same data repo you passed to
 `start`: the gate re-resolves the review policy from it to authorize any class waiver, and
 a waiver authorized by any other one is refused.
 
+When the owner requests spec finalization, `cli-review.ts draft-start --item <item-slug>
+--draft <draft-path> --intent <recorded-decisions-path> --data-repo <data-repo>` uses the
+same configured CLI adapters and per-pass model settings on uncommitted snapshots.
+JSON findings and a readable report live under `.reviews/drafts/`; `draft-disposition`
+records decisions and `draft-status` discloses changed inputs. The default is one round,
+and draft review never grants spec approval or an implementation pass.
+
 `BOARD.md` is a derived projection: never hand-resolve its merge conflicts; take
 either side and re-run `bun run sync`.
 

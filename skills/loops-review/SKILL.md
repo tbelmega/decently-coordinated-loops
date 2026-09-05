@@ -29,10 +29,33 @@ editing; it does not approve the spec or authorize implementation.
 Run **one independent review round, then relevant fixes**. Give the reviewer the exact
 draft and the recorded outcome, scope, decisions, constraints, and open questions.
 Ask it to check contradictions, omissions, feasibility, and consistency with that intent.
-Use a read-only harness reviewer on a stable draft snapshot, including uncommitted text;
-record the reviewed version and findings with the draft. Do not commit or promote a draft
-merely to satisfy the committed-HEAD implementation CLI. If no suitable reviewer is
-available, report review as not run and return the draft to the owner.
+Use the configured **reviewer CLI**, never a native subagent substitute. Run from the
+target project's checkout and use an existing board item belonging to that project.
+Draft and intent paths may be outside the checkout or uncommitted:
+
+```bash
+bun "$DCL_HOME/tools/review/cli-review.ts" draft-start --item <item-slug> \
+  --draft <draft-path> --intent <recorded-decisions-path> --data-repo <data-repo>
+bun "$DCL_HOME/tools/review/cli-review.ts" draft-disposition --item <item-slug> \
+  --finding D1-F1 --status addressed --reason "<what changed within agreed intent>" \
+  --data-repo <data-repo>
+bun "$DCL_HOME/tools/review/cli-review.ts" draft-status --item <item-slug> \
+  --data-repo <data-repo>
+```
+
+The same global/profile/project configuration and per-pass overrides select the reviewer,
+model and effort; `--reviewer`, `--model`, and `--effort` take precedence for one run.
+All configured personas for that round together consume one round. The CLI snapshots
+both inputs, invokes the existing adapters, validates the existing JSON response schema,
+and records findings, notes, pass settings and decisions in `.reviews/drafts/<item>.json`
+with a Markdown companion. Decisions are `addressed`, `rejected`, or `deferred-to-human`;
+record reasons, and leave questions about intent deferred until the owner decides.
+
+Do not commit or promote a draft merely to obtain review. Report an unavailable CLI or
+failed attempt honestly and recover with that CLI; never silently substitute a reviewer.
+Failed attempts consume no round. `draft-status` distinguishes reviewed, changed, failed,
+and not-run evidence and always reports `approved=false`. Edits after review are allowed
+and disclosed as changed inputs; a completed round is never an implementation pass.
 
 **Findings do not authorize changes to intent.** Fix wording, internal inconsistencies,
 and technical errors only when the correction preserves agreed behavior and constraints.
@@ -42,7 +65,9 @@ reconcile two contradictory timeout values when a recorded decision establishes 
 do not introduce retries and their extra latency merely because a reviewer recommends them.
 
 Do not automatically re-review the edits. Another round requires owner authorization
-justified by a concrete unresolved issue, not simply the absence of confirmation.
+justified by a concrete unresolved issue, not simply the absence of confirmation. Record
+it with `draft-start --max-rounds <n> --authorization "<owner ruling>"`; the default draft
+cap is one, independent of the configured implementation cap.
 Return the draft with a short account of substantive changes, remaining questions and
 risks, and which edits lack re-review. Keep it marked Draft and request the owner's review
 and explicit approval. The owner may resolve questions, approve, request another round,

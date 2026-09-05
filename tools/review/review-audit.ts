@@ -182,10 +182,13 @@ function isFindingOrigin(input: unknown): input is FindingOrigin {
   return typeof input === "string" && findingOrigins.some((origin) => origin === input);
 }
 
+export type ReviewCoverageManifest = Pick<ReviewManifest,
+  "files" | "instructionFiles" | "metadataPaths" | "remediationFiles" | "baseDeltaFiles">;
+
 export function parseReviewPass(
   input: unknown,
   expectedPass: ReviewPersonaName,
-  manifest: ReviewManifest,
+  manifest: ReviewCoverageManifest,
   requiredObligations: RequiredReviewObligation[],
 ): ReviewPassResult {
   if (!isRecord(input)) throw new Error("review pass result must be an object");

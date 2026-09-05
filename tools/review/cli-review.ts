@@ -7,6 +7,9 @@
 // Each `start` is independent and reviews the full base..HEAD change; the ledger under
 // .reviews/ carries rounds + per-finding dispositions and fails closed on a dirty tree,
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
+// `draft-*` uses the same adapters for advisory uncommitted snapshots, with isolated
+// JSON evidence and explicit approval kept outside the review result.
+import {runDraftCommand} from "./review-draft.ts";
 import { spawnSync } from "node:child_process";
 import {parseTestCapExitRequest, testCapExitRefusal, testExitReviewStateHash, type TestCapExitEvidence, type TestExitCheck} from "./review-test-evidence.ts";
 import { createHash } from "node:crypto";
@@ -1963,7 +1966,9 @@ async function recordTestCapExit(args: string[]): Promise<void> {
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
-  if (command === "start") {
+  if (command === "draft-start" || command === "draft-status" || command === "draft-disposition") {
+    await runDraftCommand(command, args, resolveReviewPolicy);
+  } else if (command === "start") {
     await startReview(parseStartOptions(args));
   } else if (command === "disposition") {
     await addDisposition(parseDispositionOptions(args));
@@ -1974,7 +1979,7 @@ async function main(): Promise<void> {
   } else if (command === "stats") {
     process.stdout.write(runStats(parseStatsOptions(args)));
   } else {
-    throw new Error("usage: cli-review <start|disposition|test-cap-exit|status|stats> [options]");
+    throw new Error("usage: cli-review <start|disposition|test-cap-exit|status|stats|draft-start|draft-status|draft-disposition> [options]");
   }
 }
 
