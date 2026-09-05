@@ -53,6 +53,9 @@ this file before any unattended work.
   written diagnosis, a tracked item for the suspected defect, and the work left
   `blocked` for the owner to rule on; the exit is never an unreviewed landing. The
   loops-review skill carries the protocol.
+- Optional `review.testBackedCapExit` permits test-backed P1-P3 fixes at the cap; default
+  off. The loops-review skill defines required evidence, risk assessment, and shipping
+  decision prompts. It does not authorize deployment or claim independent re-review.
 - TODO: keep the bundled reviewer, or define your own mechanism here.
 
 ## Merge policy

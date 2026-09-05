@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { DEFAULT_REVIEW_MAX_ROUNDS, loadConfig, resolveReviewConfig, type LoopsConfig, type ReviewClassConfig } from "../config.ts";
+import { DEFAULT_REVIEW_MAX_ROUNDS, loadConfig, resolveReviewConfig, type LoopsConfig, type ReviewClassConfig, type ReviewConfig } from "../config.ts";
 import {
   effectiveMaxRounds,
   liveRounds,
@@ -33,6 +33,7 @@ import {
   type ReviewRoundPolicy,
 } from "./review-ledger.ts";
 import { evaluateReviewStatus } from "./review-status.ts";
+import { testExitReviewStateHash } from "./review-test-evidence.ts";
 
 // ---------------------------------------------------------------------------
 // The measured record: what a snapshot stores and what the report reads.
@@ -78,7 +79,7 @@ export interface StatsRound {
   passes?: StatsPass[];
 }
 
-export type StatsOutcome = "passed" | "cap-exit" | "open" | "legacy";
+export type StatsOutcome = "passed" | "cap-exit" | "test-cap-exit" | "open" | "legacy";
 
 export interface StatsLedger {
   path: string;
@@ -200,7 +201,7 @@ function classesFor(
   config: LoopsConfig | undefined,
   dataRepo: string,
   ledger: ReviewLedger,
-): {classes: ReviewClassConfig[] | undefined} | {refused: true} {
+): {classes: ReviewClassConfig[] | undefined; review: ReviewConfig} | {refused: true} {
   const authority = ledger.authority;
   if (!config || !authority || authority.dataRepo !== canonicalPath(dataRepo)) return {refused: true};
   if (authority.project !== undefined) {
@@ -211,7 +212,8 @@ function classesFor(
     if ((entry.repo ? canonicalPath(entry.repo) : undefined) !== authority.projectRepo) return {refused: true};
   }
   try {
-    return {classes: resolveReviewConfig(config, authority.project, ledger.profile ?? null).classes};
+    const review = resolveReviewConfig(config, authority.project, ledger.profile ?? null);
+    return {classes: review.classes, review};
   } catch {
     return {refused: true};
   }
@@ -225,24 +227,52 @@ function classesFor(
 function outcomeOf(
   ledger: ReviewLedger,
   live: ReviewRound[],
-  binding: {classes: ReviewClassConfig[] | undefined} | {refused: true},
+  binding: {classes: ReviewClassConfig[] | undefined; review: ReviewConfig} | {refused: true},
 ): {outcome: StatsOutcome; cap?: number; policy?: ReviewRoundPolicy} {
   const last = live.at(-1)!;
   const policy = last.audit?.policy;
-  const cap = policy?.maxRounds !== undefined ? effectiveMaxRounds(ledger, policy.maxRounds) : undefined;
-  const provenance = {...(cap !== undefined ? {cap} : {}), ...(policy ? {policy} : {})};
+  const policyCap = policy?.maxRounds !== undefined ? effectiveMaxRounds(ledger, policy.maxRounds) : undefined;
+  const provenance = {...(policyCap !== undefined ? {cap: policyCap} : {}), ...(policy ? {policy} : {})};
   if (ledger.causalScopeVersion === undefined) return {outcome: "legacy", ...provenance};
   // The gate's split: with the binding unresolvable, the loop controls a profiled
   // review ran under are unknown and it blocks outright; an unprofiled ledger is
   // evaluated with no classes, so only its waivers block.
   if ("refused" in binding && ledger.profile !== undefined) return {outcome: "open", ...provenance};
   const classes = "refused" in binding ? undefined : binding.classes;
+  const review = "refused" in binding ? undefined : binding.review;
   const capExit = policy?.capExit
     ? {maxRounds: effectiveMaxRounds(ledger, policy.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS)}
     : undefined;
-  const status = evaluateReviewStatus(ledger, last.headSha, "", classes, policy?.terminalRejection ?? false, capExit);
-  const outcome: StatsOutcome = status.kind !== "passed" ? "open" : status.capExit ? "cap-exit" : "passed";
-  return {outcome, ...provenance};
+  const testCapExit = review?.testBackedCapExit
+    ? {maxRounds: effectiveMaxRounds(ledger, review.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS)}
+    : undefined;
+  const evidence = ledger.testCapExits?.at(-1);
+  // A later independent round invalidates the evidence's state hash. Its reviewed head
+  // must remain the status input so a clean confirmation is never made stale by an
+  // earlier test attempt.
+  const currentEvidence = evidence?.reviewStateHash === testExitReviewStateHash(ledger) ? evidence : undefined;
+  const currentHeadSha = currentEvidence?.headSha ?? last.headSha;
+  const status = evaluateReviewStatus(
+    ledger,
+    currentHeadSha,
+    "",
+    classes,
+    policy?.terminalRejection ?? false,
+    capExit,
+    testCapExit,
+  );
+  const isTestCapExit = status.kind === "passed" && status.testCapExit;
+  const outcome: StatsOutcome = status.kind !== "passed"
+    ? "open"
+    : isTestCapExit
+      ? "test-cap-exit"
+      : status.capExit
+        ? "cap-exit"
+        : "passed";
+  return {
+    outcome,
+    ...(isTestCapExit && currentEvidence ? {cap: currentEvidence.maxRounds} : provenance),
+  };
 }
 
 /** One live ledger file measured, or the reason it is excluded ("Population"). */
@@ -590,6 +620,10 @@ function renderTelemetry(ledgers: StatsLedger[]): string[] {
 }
 
 function terminal(ledger: StatsLedger): boolean {
+  return independentlyReviewedTerminal(ledger) || ledger.outcome === "test-cap-exit";
+}
+
+function independentlyReviewedTerminal(ledger: StatsLedger): boolean {
   return ledger.outcome === "passed" || ledger.outcome === "cap-exit";
 }
 
@@ -599,12 +633,17 @@ function renderOutcome(ledgers: StatsLedger[]): string[] {
   const decided = ledgers.filter((ledger) => ledger.outcome !== undefined);
   if (decided.length === 0) return [];
   const count = (outcome: StatsOutcome): number => decided.filter((ledger) => ledger.outcome === outcome).length;
-  const toPassed = decided.filter(terminal).map((ledger) => ledger.rounds.length);
+  const testCapExits = count("test-cap-exit");
+  const toPassed = decided.filter(independentlyReviewedTerminal).map((ledger) => ledger.rounds.length);
   const capped = decided.filter((ledger) => ledger.cap !== undefined);
   const withinCap = capped.filter((ledger) => terminal(ledger) && ledger.rounds.length <= ledger.cap!).length;
   return [
     [
-      `outcome passed=${count("passed")} cap-exit=${count("cap-exit")} open=${count("open")} legacy=${count("legacy")}`,
+      [
+        `outcome passed=${count("passed")} cap-exit=${count("cap-exit")}`,
+        ...(testCapExits ? [`test-cap-exit=${testCapExits}`] : []),
+        `open=${count("open")} legacy=${count("legacy")}`,
+      ].join(" "),
       ...(toPassed.length ? [`rounds-to-passed-median=${num(median(toPassed))}`] : []),
       `within-cap=${withinCap} cap-unknown=${decided.length - capped.length}`,
     ].join(" "),

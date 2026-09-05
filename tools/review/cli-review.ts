@@ -8,6 +8,7 @@
 // .reviews/ carries rounds + per-finding dispositions and fails closed on a dirty tree,
 // a changed HEAD, a mismatched base, or the round cap. The reviewer never edits/commits.
 import { spawnSync } from "node:child_process";
+import {parseTestCapExitRequest, testCapExitRefusal, testExitReviewStateHash, type TestCapExitEvidence, type TestExitCheck} from "./review-test-evidence.ts";
 import { createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -117,6 +118,7 @@ interface StartOptions {
   terminalRejection?: boolean;
   /** Cap exits (C7); undefined behaves as `false` - the cap blocks as today. */
   capExit?: boolean;
+  testBackedCapExit?: boolean;
   /** C8: the profile the project/global selection names; an item-level selection
    * (authorized by its spec) replaces it at start. */
   profileName?: string;
@@ -333,6 +335,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   severityFloor?: ReviewSeverityFloor;
   terminalRejection?: boolean;
   capExit?: boolean;
+  testBackedCapExit?: boolean;
   personas?: ReviewPersonaConfig[];
   profileName?: string;
   applyProfile?: (name: string) => ReviewConfig;
@@ -360,6 +363,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     ...(review?.severityFloor ? { severityFloor: review.severityFloor } : {}),
     ...(review?.terminalRejection ? { terminalRejection: review.terminalRejection } : {}),
     ...(review?.capExit ? { capExit: review.capExit } : {}),
+    ...(review?.testBackedCapExit ? {testBackedCapExit: true} : {}),
     ...(review?.personas ? { personas: review.personas } : {}),
     ...(profileName !== undefined ? { profileName } : {}),
     ...(applyProfile ? { applyProfile } : {}),
@@ -428,6 +432,7 @@ function parseStartOptions(args: string[]): StartOptions {
     ...(configured.severityFloor ? {severityFloor: configured.severityFloor} : {}),
     ...(configured.terminalRejection ? {terminalRejection: configured.terminalRejection} : {}),
     ...(configured.capExit ? {capExit: configured.capExit} : {}),
+    ...(configured.testBackedCapExit ? {testBackedCapExit: true} : {}),
     ...(configured.personas ? {personas: configured.personas} : {}),
     ...(configured.profileName !== undefined ? {profileName: configured.profileName} : {}),
     ...(configured.applyProfile ? {applyProfile: configured.applyProfile} : {}),
@@ -886,6 +891,7 @@ async function startReview(options: StartOptions): Promise<void> {
         ...(review.severityFloor ? {severityFloor: review.severityFloor} : {severityFloor: undefined}),
         ...(review.terminalRejection ? {terminalRejection: true} : {terminalRejection: undefined}),
         ...(review.capExit ? {capExit: true} : {capExit: undefined}),
+        ...(review.testBackedCapExit ? {testBackedCapExit: true} : {testBackedCapExit: undefined}),
         ...(review.confirmation ? {confirmation: review.confirmation} : {confirmation: undefined}),
         ...(review.personas ? {personas: review.personas} : {personas: undefined}),
       };
@@ -1289,6 +1295,7 @@ async function startReview(options: StartOptions): Promise<void> {
         ...(options.severityFloor !== undefined ? {severityFloor: options.severityFloor} : {}),
         ...(options.terminalRejection !== undefined ? {terminalRejection: options.terminalRejection} : {}),
         ...(options.capExit !== undefined ? {capExit: options.capExit} : {}),
+        ...(options.testBackedCapExit !== undefined ? {testBackedCapExit: options.testBackedCapExit} : {}),
         ...(options.personas !== undefined ? {personas: options.personas} : {}),
         ...(options.confirmation !== undefined ? {confirmation: options.confirmation} : {}),
       });
@@ -1525,6 +1532,7 @@ async function startReview(options: StartOptions): Promise<void> {
             ...(options.severityFloor ? {severityFloor: options.severityFloor} : {}),
             ...(options.terminalRejection ? {terminalRejection: true} : {}),
             ...(options.capExit ? {capExit: true} : {}),
+            ...(options.testBackedCapExit ? {testBackedCapExit: true} : {}),
             ...(options.confirmation ? {confirmation: options.confirmation} : {}),
           },
           metrics,
@@ -1793,7 +1801,9 @@ function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
     const capExit = policy?.capExit
       ? {maxRounds: effectiveMaxRounds(ledger, policy.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS)}
       : undefined;
-    const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes, terminalRejection, capExit);
+    const testExit = policy?.testBackedCapExit && !governing.refusal
+      ? {maxRounds: effectiveMaxRounds(ledger, policy.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS)} : undefined;
+    const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes, terminalRejection, capExit, testExit);
     const latestRound = ledger.rounds.at(-1);
     if (
       status.kind === "blocked" &&
@@ -1864,18 +1874,107 @@ function parseStatusOptions(args: string[]): [string | undefined, string | undef
   return [item, dataRepo];
 }
 
+/** Run operator-specified checks, without invoking a shell or changing checkouts.
+ * The request assesses semantic coverage; successful execution is recorded here. */
+async function recordTestCapExit(args: string[]): Promise<void> {
+  const flags = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (!flag || !value || !["--item", "--data-repo", "--evidence"].includes(flag) || flags.has(flag)) {
+      throw new Error("test-cap-exit accepts --item, --data-repo, and --evidence exactly once");
+    }
+    flags.set(flag, value);
+  }
+  const item = flags.get("--item");
+  const evidencePath = flags.get("--evidence");
+  const dataRepo = resolveDataRepo(flags.get("--data-repo"), process.env, homedir());
+  if (!evidencePath || !dataRepo) throw new Error("test-cap-exit requires --evidence and the original --data-repo");
+  const repository = git(["rev-parse", "--show-toplevel"]);
+  const branch = git(["branch", "--show-current"]);
+  if (!branch) throw new Error("test-cap-exit requires a named branch");
+  const paths = reviewEvidencePaths(repository, branch, item);
+  const releaseLock = await acquireReviewLock(repository, branch);
+  try {
+    if (dirtyOutsideReviewEvidence(repository)) throw new Error("test-cap-exit requires a clean committed working tree");
+    const headSha = git(["rev-parse", "HEAD"]);
+    let ledger = readLedger(paths.jsonPath);
+    if (ledger.item !== item || ledger.branch !== branch) throw new Error("test evidence does not match ledger item/branch");
+    const governing = governingPolicy(ledger, dataRepo);
+    if (governing.refusal) throw new Error(governing.refusal);
+    if (!governing.review?.testBackedCapExit) throw new Error("test-backed cap exit is not enabled by the governing policy");
+    const latest = ledger.rounds.at(-1);
+    if (!latest) throw new Error("test-cap-exit requires a completed review round");
+    const maxRounds = effectiveMaxRounds(ledger, governing.review.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS);
+    let attempt: TestCapExitEvidence = {headSha, reviewedHeadSha: latest.headSha, baseSha: ledger.baseSha,
+      reviewStateHash: testExitReviewStateHash(ledger), recordedAt: new Date().toISOString(), maxRounds, checks: []};
+    // Persist before reading evidence: malformed or unreadable replacement evidence
+    // must invalidate an older success just like interrupted or failed checks.
+    ledger = {...ledger, testCapExits: [...(ledger.testCapExits ?? []), attempt]};
+    await writeLedger(ledger, paths);
+    const request = parseTestCapExitRequest(JSON.parse(readFileSync(resolve(evidencePath), "utf8")));
+    attempt = {...attempt, request};
+    ledger = {...ledger, testCapExits: [...(ledger.testCapExits ?? []), attempt]};
+    await writeLedger(ledger, paths);
+    const refusal = testCapExitRefusal(ledger, headSha, maxRounds, liveRounds(ledger).length, openObligations(ledger), false);
+    if (refusal) throw new Error(refusal);
+    const ancestor = spawnSync("git", ["-C", repository, "merge-base", "--is-ancestor", ledger.baseSha, headSha]);
+    if (ancestor.status !== 0) throw new Error("review base is not an ancestor of current HEAD");
+    const changed = git(["diff", "--no-renames", "--name-only", "-z", latest.headSha, headSha, "--"]).split("\0").filter(Boolean);
+    if (!changed.length) throw new Error("test-cap-exit requires a committed fix and added regression coverage");
+    const covered = new Set(request.fixes.flatMap((fix) => fix.paths));
+    for (const path of changed) if (!covered.has(path)) throw new Error(`uncovered changed path: ${path}`);
+    for (const path of covered) if (!changed.includes(path)) throw new Error(`evidence names unchanged path: ${path}`);
+    for (const fix of request.fixes) {
+      for (const path of fix.tests) {
+        if (!fix.paths.includes(path) || !changed.includes(path)) throw new Error(`regression test must change in the fix delta: ${path}`);
+        if (!/^100(?:644|755) blob /.test(git(["ls-tree", headSha, "--", path]))) throw new Error(`regression test must be a tracked regular file: ${path}`);
+      }
+    }
+    const checks: TestExitCheck[] = [];
+    const commands = [
+      ...request.fixes.map((fix) => ({kind: "regression" as const, obligationId: fix.obligationId, command: fix.command})),
+      {kind: "quality" as const, command: request.qualityCommand},
+    ];
+    for (const command of commands) {
+      const executable = command.command[0];
+      if (!executable) throw new Error("empty check command");
+      const result = spawnSync(executable, command.command.slice(1), {cwd: repository, encoding: "utf8", timeout: 600_000, maxBuffer: MAX_GIT_OUTPUT_BYTES});
+      checks.push({...command, exitCode: result.error ? -1 : result.status ?? -1,
+        stdout: (result.stdout ?? "").slice(-8000), stderr: `${result.stderr ?? ""}${result.error?.message ?? ""}`.slice(-8000)});
+      if (result.error || result.status !== 0) {
+        ledger = {...ledger, testCapExits: [...(ledger.testCapExits ?? []), {...attempt, recordedAt: new Date().toISOString(), checks}]};
+        await writeLedger(ledger, paths);
+        throw new Error(`${command.kind} check failed; no test-backed pass recorded`);
+      }
+    }
+    if (git(["rev-parse", "HEAD"]) !== headSha || git(["branch", "--show-current"]) !== branch || dirtyOutsideReviewEvidence(repository)) {
+      throw new Error("HEAD, branch, or working tree changed during test verification");
+    }
+    const current = readLedger(paths.jsonPath);
+    if (testExitReviewStateHash(current) !== attempt.reviewStateHash) throw new Error("review state changed during test verification");
+    ledger = {...current, testCapExits: [...(current.testCapExits ?? []), {...attempt, recordedAt: new Date().toISOString(), checks}]};
+    await writeLedger(ledger, paths);
+    printReviewStatus(item, dataRepo);
+  } finally {
+    await releaseLock();
+  }
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "start") {
     await startReview(parseStartOptions(args));
   } else if (command === "disposition") {
     await addDisposition(parseDispositionOptions(args));
+  } else if (command === "test-cap-exit") {
+    await recordTestCapExit(args);
   } else if (command === "status") {
     printReviewStatus(...parseStatusOptions(args));
   } else if (command === "stats") {
     process.stdout.write(runStats(parseStatsOptions(args)));
   } else {
-    throw new Error("usage: cli-review <start|disposition|status|stats> [options]");
+    throw new Error("usage: cli-review <start|disposition|test-cap-exit|status|stats> [options]");
   }
 }
 

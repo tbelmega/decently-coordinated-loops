@@ -4,6 +4,7 @@
 // docs/review-ledger-invariants.md. Model-agnostic - a reviewer adapter (reviewers.ts)
 // produces a Review; everything here is pure.
 
+import {parseTestCapExits, renderTestCapExits, type TestCapExitEvidence} from "./review-test-evidence.ts";
 import {DEFAULT_REVIEW_MAX_ROUNDS, type ReviewClassConfig, type ReviewPersonaName} from "../config.ts";
 import type {
   CombinedAuditNote,
@@ -194,6 +195,7 @@ export interface ReviewRoundPolicy {
   severityFloor?: "round-2-plus" | "all-rounds";
   terminalRejection?: boolean;
   capExit?: boolean;
+  testBackedCapExit?: boolean;
   confirmation?: "full" | "scoped";
 }
 
@@ -246,6 +248,8 @@ export interface ReviewLedger {
   patchIds?: string[];
   rounds: ReviewRound[];
   failures?: ReviewFailure[];
+  /** Test-backed completion attempts; independent review history is unchanged. */
+  testCapExits?: TestCapExitEvidence[];
   supersessions?: ReviewSupersession[];
 }
 
@@ -939,6 +943,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
   }
   return {
     version: 1,
+    ...(input.testCapExits !== undefined ? {testCapExits: parseTestCapExits(input.testCapExits)} : {}),
     ...(causalScopeVersion === 1 ? {causalScopeVersion} : {}),
     ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
     ...(authority ? { authority } : {}),
@@ -1655,6 +1660,7 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
       }
     }
   }
+  lines.push(...renderTestCapExits(ledger.testCapExits ?? []));
   return `${lines.join("\n")}\n`;
 }
 
@@ -1813,6 +1819,7 @@ function isReviewRoundPolicy(input: unknown): input is ReviewRoundPolicy {
       policy.severityFloor === "all-rounds") &&
     (policy.terminalRejection === undefined || typeof policy.terminalRejection === "boolean") &&
     (policy.capExit === undefined || typeof policy.capExit === "boolean") &&
+    (policy.testBackedCapExit === undefined || typeof policy.testBackedCapExit === "boolean") &&
     (policy.confirmation === undefined || policy.confirmation === "full" || policy.confirmation === "scoped")
   );
 }

@@ -6,7 +6,7 @@ description: Use for final implementation review when the bundled reviewer is co
 # Local code review
 
 An independent model reviews committed changes and returns findings for you to evaluate
-and disposition. The mechanism is forge-independent (no GitHub or PR), works in trusted
+and decide how to handle. The mechanism is forge-independent (no GitHub or PR), works in trusted
 local Git repositories, and is enabled by configuring a reviewer. **Once configured, it
 is the completion gate for every implemented board item, including attended work.**
 Initiate the loop after all internal tasks and commits are complete and final verification
@@ -56,8 +56,9 @@ matching the reviewed checkout to `projects.*.repo`, never by item slug. `--revi
 are global-only; projects may select a named profile with `review.profile`.
 
 The loop below describes default behavior. Configured `severityFloor` may produce P2/P3
-notes requiring no disposition or obligation; `terminalRejection` and `capExit` alter
-confirmation and cap behavior as specified below. Apply configured exceptions only.
+notes requiring no decision or obligation; `terminalRejection` and `capExit` alter
+confirmation and cap behavior as specified below. `testBackedCapExit` permits the
+test-backed exit described below. Apply configured exceptions only.
 
 ## The loop
 
@@ -73,8 +74,8 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    integration ref as `--base`; for an unlanded stacked parent, use its exact handoff HEAD.
 2. **Start a logical round.** The command records the exact base and reviews
    `<item-base-sha>..HEAD`, producing an item-scoped ledger under `.reviews/`.
-3. **Disposition every finding.** Read the Markdown ledger, verify each finding against
-   the code, and record a reasoned disposition using the scope and disposition rules below.
+3. **Decide how to handle each finding.** Read the Markdown ledger, verify it against
+   the code, and record a reasoned decision using the scope and finding-decision rules below.
 4. **Remediate.** Implement relevant accepted fixes and fulfill documentation obligations
    under the scope and severity policy for that round, rerun checks, and commit.
    **This includes the last authorized round:** the cap limits review rounds, not
@@ -82,20 +83,24 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
    `capExit` already yields `passed` at the reviewed HEAD,
    report its residual obligations instead of requiring another fix/review cycle.
 5. **Confirm.** Start another round against the same base if review is still needed and
-   the cap permits it. At the cap, finish step 4, then escalate before requesting another
-   round; explicitly report that the fixes have not received confirming review.
+   the cap permits it. At the cap, finish step 4 and use a qualifying configured test-backed
+   exit; otherwise present the cap decision brief before escalating for another round.
+   Explicitly report fixes that have not received independent confirmation.
 6. **Report.** Run `status` immediately before handoff. Claim `PASSED` only from its
    current-HEAD passing result. Apply the recovery and escalation rules if blocked.
 
-## Scope and dispositions
+## Scope and finding decisions
+
+A "disposition" is the recorded decision about a finding, such as accept, reject, or
+defer it. The CLI command and stored field retain that name.
 
 The reviewer may inspect callers, siblings, tests, conventions, and dependencies to judge
 whether the delta introduces or worsens a defect, leaves an obligation unmet, violates a
 pattern, or creates duplication. **Broad inspection does not expand remediation scope.**
 
 Every finding has causality `introduced`, `worsened`, `unmet-obligation`, `pre-existing`,
-or `unknown`. The first three belong to this workstream and block until terminally
-dispositioned. Resolve `unknown` using existing evidence and nearby code when inexpensive;
+or `unknown`. The first three belong to this workstream and block until given a non-blocking
+decision. Resolve `unknown` using existing evidence and nearby code when inexpensive;
 record the conclusion with `--causality <kind>`. Do not undertake separate reproduction,
 root-cause investigation, or a base checkout merely to prove an unrelated finding
 pre-existed the branch or to delegate it. If uncertainty could implicate the delta,
@@ -106,7 +111,7 @@ bun "$DCL_HOME/tools/review/cli-review.ts" disposition --item <item-slug> --find
   --status accepted --reason "<technical reason>" --data-repo <data-repo>
 ```
 
-| Disposition | Meaning and review effect |
+| Decision | Meaning and review effect |
 | --- | --- |
 | `accepted` | Accept the defect; creates a remediation obligation requiring confirmation. |
 | `rejected` | Dispute the finding with evidence; requires a clean confirmation round. With `terminalRejection`, rejected P2/P3 findings need none; rejected P0/P1 still do. |
@@ -153,13 +158,13 @@ The reason must cite that contract. Supply `--doc <repo-relative-path>` naming w
 limitation is or will be documented, in the component's doc comment or spec. Before the
 next round, the path must resolve to a tracked regular file at HEAD. Confirmation checks
 that its content honestly covers the finding, not that the defect is fixed. A later round
-may challenge the disposition if the impact exceeds what the cited contract admits.
+may challenge the decision if the impact exceeds what the cited contract admits.
 
 P0/P1 limitations require `--owner` and a reason citing the owner's ruling. For unattended
-P2/P3 limitations, mirror each disposition to an OUTBOX `decision` entry for retroactive
+P2/P3 limitations, mirror each decision to an OUTBOX `decision` entry for retroactive
 ruling under the provisional-decisions house pattern.
 
-The owner may reverse a limitation with an `accepted` disposition, `--owner`, and a reason
+The owner may reverse a limitation with an `accepted` decision, `--owner`, and a reason
 citing the ruling. Both decisions remain recorded; the documentation obligation retires
 and a fresh remediation obligation replaces it. Earlier `documented` results cannot
 satisfy the new obligation.
@@ -168,24 +173,24 @@ satisfy the new obligation.
 
 Use when a correct finding's counterpart fix lands separately, outside this repository's
 reviewed range. Require `--tracks <pointer>`: a board item slug, `repo#branch`, or path
-naming where the fix lands. No pointer, no disposition. Do not use for `introduced`,
+naming where the fix lands. A decision requires a pointer. Do not use for `introduced`,
 `worsened`, or `unmet-obligation` findings; those remain this workstream's responsibility.
 
 Unlike rejection, this concedes the defect; unlike a permanent limitation, it identifies
-a fix elsewhere. The disposition remains reviewer context to prevent blind re-raising.
+a fix elsewhere. The decision remains reviewer context to prevent blind re-raising.
 When either repository may land first, use a runtime precondition: check for the
 cross-repository counterpart and hold when absent instead of assuming it exists.
 
-### Carried and changed dispositions
+### Carried and changed decisions
 
-An exact repeat of a finding automatically inherits its latest eligible disposition:
+An exact repeat of a finding automatically inherits its latest eligible decision:
 `rejected`, `accepted-as-limitation`, `waived-by-policy`, `tracked-elsewhere`, or
 `delegated-follow-up`. It records `carriedFrom: <prior finding id>`, retains that kind's
 review effect, and creates no new obligation; the original obligation still governs.
 `accepted` never carries because re-raising it signals regression; `deferred-to-human`
 never carries because only the owner closes it.
 
-Override an automatically carried disposition with a fresh reasoned disposition. For
+Override an automatically carried decision with a fresh reasoned decision. For
 non-carried decisions, only `deferred-to-human` and `accepted-as-limitation` may be
 superseded: cite the owner's decision for the former; the latter permits only the
 owner-attributed reversal to `accepted` described above. Preserve both decisions in history.
@@ -193,7 +198,7 @@ owner-attributed reversal to `accepted` described above. Preserve both decisions
 ## Change classes and policy authority
 
 Classes waive eligible findings, never files or entire review ranges. With no configured
-exceptions, every finding needs a disposition and every changed file is reviewed.
+exceptions, every finding needs a decision and every changed file is reviewed.
 `waivablePriorities` specifies eligible priorities; optional `guidance` steers the reviewer
 but does not enforce waivers. Priority belongs to the independent reviewer.
 
@@ -240,13 +245,13 @@ Keep invariants and step-back analysis in the unit's doc comment or a design not
 references, not in the ledger, so they survive later rounds and future work.
 
 Confirmation receives every open obligation with its original evidence, direction, and
-disposition reason. The reviewer classifies remediation as `fixed`, `incomplete`, or
+decision reason. The reviewer classifies remediation as `fixed`, `incomplete`, or
 `regressed` using the exact previous-reviewed-HEAD-to-current-HEAD fix delta, and
 documentation as `documented`, `incomplete`, or `regressed` using the named persisted file.
-It also scans for new defects; prior non-accepted dispositions remain context.
+It also scans for new defects; prior non-accepted decisions remain context.
 
 `review.confirmation: "full"` reruns every configured pass over the whole range.
-`"scoped"` requires a fully dispositioned previous round, only remediation obligations
+`"scoped"` requires a previous round with every finding decided, only remediation obligations
 remaining, and a fix delta. It runs only the obligation-classifying pass on that delta,
 skipping integration/adversarial, and records `scope: "remediation-range"` with a narrowed
 manifest. This saves review work but stops looking for regressions outside the fix delta,
@@ -273,14 +278,14 @@ The note must contain:
 ## Recovery, caps, and escalation
 
 A default pass requires a current-HEAD round with no open obligations and either no
-findings or only non-blocking dispositions. Rejections and limitations require clean
+findings or only non-blocking decisions. Rejections and limitations require clean
 confirmation, subject to the configured exceptions above. Deferred findings, failed
-attempts, stale review, and an exhausted cap block completion unless the cap exit applies.
+attempts, stale review, and an exhausted cap block completion unless an applicable
+configured exit supplies current-HEAD completion evidence.
 
 **Cap exit.** With `review.capExit`, `status` may pass at the reviewed HEAD at the cap
 with only P2/P3 residual obligations, reporting `cap_exit=true` and their count. This is
-a real pass; disclose residual obligations instead of escalating it. Undispositioned
-findings, open P0/P1 obligations, unconfirmed P0/P1 rejections, and deferred findings
+a real pass; disclose residual obligations instead of escalating it. Findings without decisions, open P0/P1 obligations, unconfirmed P0/P1 rejections, and deferred findings
 still block. A changed implementation HEAD still requires review.
 
 **Failures and stale reviews are agent recovery work.** Fix failed/incomplete attempts
@@ -303,6 +308,104 @@ never make more rounds the only option:
 | Waive review and land as-is | Requires explicit owner opt-out. Once given: `implemented` / `owner` / `awaiting: review-merge`, `REVIEW: WAIVED`. |
 | Drop the change | `dropped`. |
 | Take no action | Keep the accurate blocked state; nothing lands. |
+
+### Test-backed cap exit
+
+With `review.testBackedCapExit: true` (global, profile, or project; off by default),
+P1-P3 remediation may satisfy the process at the cap without independent re-review.
+The original reviewer priorities remain unchanged. P0 findings, deferred decisions,
+unresolved finding ownership, and documentation obligations do not qualify.
+
+Use this exit only when relevant fixes and meaningful regression coverage are committed,
+the project's full quality gate passes, and no concrete material uncertainty warrants
+more review. Match coverage to the defect: a concurrency fix needs interaction evidence,
+not merely a happy-path test. Explain exposure and recovery; generic uncertainty inherent
+in all code is not itself a reason to block shipment.
+
+Record each exact open obligation, all changed paths since the last reviewed HEAD,
+new/changed regression-test paths, commands, and an assessment of coverage and risk.
+Original failing-test evidence must demonstrate the defect where practical; otherwise
+state why obtaining it was impractical. For example, save this as `.reviews/test-exit.json`:
+
+```json
+{
+  "fixes": [{
+    "obligationId": "E1-R2-F1",
+    "summary": "Preserve keyboard focus when closing the dialog",
+    "paths": ["src/dialog.ts", "tests/dialog.test.ts"],
+    "tests": ["tests/dialog.test.ts"],
+    "command": ["bun", "test", "tests/dialog.test.ts"],
+    "redEvidence": {
+      "kind": "observed-failure",
+      "detail": "The new focus-restoration assertion failed before the fix and passes after it."
+    },
+    "coverage": "Exercises dismissal and verifies focus returns to the invoking control."
+  }],
+  "qualityCommand": ["bun", "run", "check"],
+  "changeSummary": "Only focus restoration and its regression test changed.",
+  "risk": {
+    "remaining": "No material untested behavior identified; presentation regression remains possible.",
+    "exposure": "Dialog users; no persistence or authorization changes.",
+    "recovery": "Revert this commit.",
+    "materialUncertainty": false
+  }
+}
+```
+
+```bash
+bun "$DCL_HOME/tools/review/cli-review.ts" test-cap-exit --item <item-slug> \
+  --data-repo <data-repo> --evidence .reviews/test-exit.json
+```
+
+Commands are argument arrays, executed without a shell. Supply the project's actual full
+quality gate, never a substitute chosen to pass. The CLI runs each regression command
+and the quality command, captures results, and binds evidence to the exact HEAD and
+review state. It requires complete changed-path/obligation coverage and changed, tracked
+regular test files. An incomplete or failed attempt cannot preserve an older test pass.
+
+**Passing checks establish only what they test.** Coverage adequacy, original failure
+evidence, and risk are explicitly implementer assessments; the tool verifies execution
+and structural completeness, not semantic correctness. For impractical original failure
+verification use `redEvidence.kind: "not-practical"` with a concrete explanation. Do not
+use this exit to conceal unresolved material risk or unrelated unassessed changes.
+
+The exit adds no review round and rewrites no finding decision. Subsequent code, review,
+or decision changes invalidate it, as do revoked policy and a raised cap not yet reached.
+It does not implicitly carry through metadata-only commits or a base change. Report
+`REVIEW: PASSED (test-backed cap exit; fixes not independently re-reviewed)` only when
+`status` reports `test_cap_exit=true`. Never use the mechanism under modification to
+certify its own implementation; that change requires independent review.
+
+### Cap decision brief
+
+Before asking the owner to extend the cap or waive confirmation, present a short brief
+in chat/outbox; a ledger link alone is insufficient:
+
+- **Recommendation and reason.** Assess whether current work is good enough to ship.
+- **Unreviewed changes.** For each finding: ID, original priority, defect, implemented fix,
+  and affected behavior. Include other changes since the last reviewed HEAD. Distinguish
+  fixed-but-unconfirmed work, unresolved defects, and policy-exempt notes.
+- **Verification and remaining risk.** Name relevant checks/results and their limits,
+  plausible remaining failures, affected users/data, exposure, and available recovery.
+  Original finding severity is not automatically the residual risk after its tested fix;
+  preserve the priority while explaining what uncertainty remains.
+- **Value of another round, if recommended.** Name the specific material question it
+  could answer, the evidence still missing, proposed round budget, and applicable review
+  scope. Lack of re-review alone, or "more review is safer", is not sufficient justification.
+
+Recommend shipping with explicit waiver when evidence is proportionate to exposure and
+no concrete material risk warrants delay, but the configured automatic exit is unavailable.
+Recommend further review or investigation when a specific consequential uncertainty remains.
+Lead with the recommended option; do not recommend another round by default.
+Offer a smaller scope when a concrete feasible reduction would enable shipping. Keep the
+owner choices and accurate blocked states above; waiver is neither a passed independent
+review nor deployment authorization.
+
+Example: "Recommend ship with waiver. Focus restoration and label truncation fixes lack
+confirming review; both regression checks and the full gate pass. Remaining risk is a
+presentation regression, with no persistence/auth changes and a practical commit revert.
+No identified material question warrants another broad round. Options: ship with waiver,
+authorize another round, drop, or leave blocked."
 
 ### Suspected mechanism defect
 
@@ -332,8 +435,8 @@ with the same symbolic `--base`. The new base must be an ancestor of HEAD.
   against the explicit new-base delta and its intersections with reviewed files.
 - **Changed patch series:** snapshot prior evidence and supersede the base in the same
   ledger. Reset coverage, manifests, and findings for rediscovery, but retain every
-  disposition, typed obligation, and tripwire state. All earlier findings must already
-  be dispositioned, with none deferred. Start a new epoch at round 1; earlier epochs
+  decision, typed obligation, and tripwire state. All earlier findings must already
+  have decisions recorded, with none deferred. Start a new epoch at round 1; earlier epochs
   remain append-only history and do not consume its cap. Failed attempts use the same
   suffix accounting described above.
 
@@ -400,7 +503,7 @@ Evidence includes coverage, pass/origin counts, obligation results, repeated/fir
 provenance, unchanged-HEAD drift, late P0/P1 findings, and round-to-round decline ratio.
 JSON is validated machine state; Markdown is the human surface. **Never hand-edit finding
 text or JSON.** Commands fail closed on dirty trees, changed HEAD, mismatched bases,
-missing dispositions, and the cap. Incomplete attempts never mean "no findings".
+missing finding decisions, and the cap. Incomplete attempts never mean "no findings".
 
 **Landing metadata.** Finish code review before committing `review.metadataPaths` files.
 Later commits changing only those paths preserve a clean review if `status` confirms the
@@ -422,8 +525,9 @@ receipt state `REVIEW: BLOCKED`/`REVIEW: NOT RUN`.
 
 | Passing output | Required handoff disclosure |
 | --- | --- |
-| `residual_notes=n` | Always present; zero unless `severityFloor` produces non-blocking P2/P3 notes. They need no disposition. If nonzero, use `REVIEW: PASSED (residual notes: n)`. |
+| `residual_notes=n` | Always present; zero unless `severityFloor` produces non-blocking P2/P3 notes. They need no decision. If nonzero, use `REVIEW: PASSED (residual notes: n)`. |
 | `cap_exit=true residual_obligations=n` | Configured cap exit; name residual obligations in prose. No open P0/P1 may ship through this exit. |
+| `test_cap_exit=true test_verified_fixes=n independently_reviewed=false` | Name the fixes and test evidence; use `REVIEW: PASSED (test-backed cap exit; fixes not independently re-reviewed)`. |
 | `profile="mvp"` | When bound to a configured profile, include it, e.g. `REVIEW: PASSED (profile: mvp, ...)`. |
 
 Record `links.base-sha` and `links.head-sha` on the item, plus `links.stack-parent` when

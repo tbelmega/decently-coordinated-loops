@@ -12,12 +12,15 @@ import { join } from "node:path";
 import {
   addReviewRound,
   createReviewLedger,
+  parseReviewLedger,
   recordDisposition,
   supersedeLedgerBase,
   type Finding,
   type ReviewLedger,
   type ReviewRoundAudit,
 } from "./review-ledger.ts";
+import { testExitReviewStateHash, type TestCapExitEvidence } from "./review-test-evidence.ts";
+import { evaluateReviewStatus } from "./review-status.ts";
 import { collectStats, discoverLedgers, renderStats, runStats, type StatsLedger } from "./review-stats.ts";
 
 // ---------------------------------------------------------------------------
@@ -314,6 +317,114 @@ describe("Outcome", () => {
     expect(outcomeLine(runStats({dataRepo: ws.dataRepo}))).toBe("outcome passed=0 cap-exit=1 open=0 legacy=0 rounds-to-passed-median=2 within-cap=1 cap-unknown=0");
     write(join(ws.reviews, "p2.json"), capExitLedger("P1"));
     expect(outcomeLine(runStats({dataRepo: ws.dataRepo}))).toBe("outcome passed=0 cap-exit=0 open=1 legacy=0 within-cap=0 cap-unknown=0");
+  });
+
+  function testCapExitLedger(ws: {root: string; dataRepo: string}, authorityDataRepo = ws.dataRepo): ReviewLedger {
+    const reviewedHeadSha = "a".repeat(40);
+    const evidenceHeadSha = "b".repeat(40);
+    let ledger = createReviewLedger({
+      item: "item-test-cap",
+      authority: {dataRepo: authorityDataRepo, project: "proj", projectRepo: join(ws.root, "proj")},
+      branch: "feature",
+      baseRef: "master",
+      baseSha: "c".repeat(40),
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: reviewedHeadSha,
+      model: "reviewer",
+      reviewedAt: "2026-08-24T10:00:00Z",
+      review: {summary: "needs a regression", findings: [finding()]},
+      audit: audit({policy: {maxRounds: 2, testBackedCapExit: true}}),
+    });
+    ledger = recordDisposition(ledger, "E1-R1-F1", "accepted", "add a regression test");
+    const persistedLedger = parseReviewLedger(JSON.parse(JSON.stringify(ledger)));
+    const evidence: TestCapExitEvidence = {
+      headSha: evidenceHeadSha,
+      reviewedHeadSha,
+      baseSha: persistedLedger.baseSha,
+      reviewStateHash: testExitReviewStateHash(persistedLedger),
+      recordedAt: "2026-08-25T10:00:00Z",
+      maxRounds: 1,
+      request: {
+        fixes: [{
+          obligationId: "E1-R1-F1",
+          summary: "add regression coverage",
+          paths: ["tools/review/review-stats.ts"],
+          tests: ["tools/review/review-stats.test.ts"],
+          command: ["bun", "test", "tools/review/review-stats.test.ts"],
+          redEvidence: {kind: "observed-failure", detail: "the regression test failed before the fix"},
+          coverage: "the regression covers the accepted remediation obligation",
+        }],
+        qualityCommand: ["bun", "run", "check"],
+        changeSummary: "add the missing regression coverage",
+        risk: {remaining: "none known", exposure: "the reviewed change", recovery: "revert the change", materialUncertainty: false},
+      },
+      checks: [
+        {kind: "regression", obligationId: "E1-R1-F1", command: ["bun", "test", "tools/review/review-stats.test.ts"], exitCode: 0, stdout: "pass", stderr: ""},
+        {kind: "quality", command: ["bun", "run", "check"], exitCode: 0, stdout: "pass", stderr: ""},
+      ],
+    };
+    return {...persistedLedger, testCapExits: [evidence]};
+  }
+
+  function enableTestCapExit(ws: {root: string; dataRepo: string}): void {
+    writeFileSync(
+      join(ws.dataRepo, "loops.json"),
+      JSON.stringify({
+        projects: {proj: {repo: join(ws.root, "proj")}},
+        review: {reviewer: "codex", maxRounds: 1, testBackedCapExit: true},
+      }),
+    );
+  }
+
+  test("records a verified test-backed cap exit separately from an independently clean confirmation", () => {
+    const ws = makeWorkspace();
+    enableTestCapExit(ws);
+    const ledger = testCapExitLedger(ws);
+    expect(evaluateReviewStatus(
+      ledger,
+      ledger.testCapExits![0]!.headSha,
+      "",
+      undefined,
+      false,
+      undefined,
+      {maxRounds: 1},
+    )).toMatchObject({kind: "passed", testCapExit: true});
+    const parsed = parseReviewLedger(JSON.parse(JSON.stringify(ledger)));
+    expect(testExitReviewStateHash(parsed)).toBe(ledger.testCapExits![0]!.reviewStateHash);
+    write(join(ws.reviews, "test-cap.json"), ledger);
+    const report = runStats({dataRepo: ws.dataRepo});
+    expect(report).toContain("ended clean 0\n");
+    expect(outcomeLine(report)).toBe("outcome passed=0 cap-exit=0 test-cap-exit=1 open=0 legacy=0 within-cap=1 cap-unknown=0");
+  });
+
+  test("requires the current recorded authority before counting a test-backed cap exit", () => {
+    const ws = makeWorkspace();
+    enableTestCapExit(ws);
+    write(join(ws.reviews, "wrong-authority.json"), testCapExitLedger(ws, "/other/data-repo"));
+    expect(outcomeLine(runStats({dataRepo: ws.dataRepo}))).toBe(
+      "outcome passed=0 cap-exit=0 open=1 legacy=0 within-cap=0 cap-unknown=0",
+    );
+  });
+
+  test("uses a later clean review instead of stale test evidence", () => {
+    const ws = makeWorkspace();
+    enableTestCapExit(ws);
+    let ledger = testCapExitLedger(ws);
+    ledger = addReviewRound(ledger, {
+      headSha: "d".repeat(40),
+      model: "reviewer",
+      reviewedAt: "2026-08-26T10:00:00Z",
+      review: {summary: "clean confirmation", findings: []},
+      audit: {
+        ...audit({policy: {maxRounds: 1, testBackedCapExit: true}}),
+        obligations: [{findingId: "E1-R1-F1", status: "fixed", type: "remediation", evidence: "regression passes"}],
+      },
+    });
+    write(join(ws.reviews, "later-clean.json"), ledger);
+    expect(outcomeLine(runStats({dataRepo: ws.dataRepo}))).toBe(
+      "outcome passed=1 cap-exit=0 open=0 legacy=0 rounds-to-passed-median=2 within-cap=0 cap-unknown=0",
+    );
   });
 
   test("a round with no recorded policy is evaluated with the keys off: the same ledger is open, not a cap exit", () => {

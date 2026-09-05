@@ -131,6 +131,9 @@ export interface ReviewConfig {
    * block), and `start` warns when the decline ratio has been non-positive for two
    * consecutive completed rounds. Omit for `false`: the cap blocks as today. */
   capExit?: boolean;
+  /** Permit evidenced P1-P3 remediation at the cap without independent re-review.
+   * Off unless explicitly enabled by the governing policy. */
+  testBackedCapExit?: boolean;
   /** Terminal rejection (C4): with `true`, a rejected P2/P3 finding needs no
    * confirmation round - terminal and non-remediation like waived-by-policy - while
    * a rejected P0/P1 keeps one, its rejection reason handed to the reviewer as the
@@ -152,6 +155,7 @@ export interface ReviewProfileConfig {
   severityFloor?: ReviewSeverityFloor;
   terminalRejection?: boolean;
   capExit?: boolean;
+  testBackedCapExit?: boolean;
   confirmation?: ReviewConfirmation;
   personas?: ReviewPersonaConfig[];
 }
@@ -161,6 +165,7 @@ const PROFILE_ALLOWED_KEYS = [
   "severityFloor",
   "terminalRejection",
   "capExit",
+  "testBackedCapExit",
   "confirmation",
   "personas",
 ] as const;
@@ -181,6 +186,7 @@ export function applyReviewProfile(review: ReviewConfig, name: string): ReviewCo
   if (profile.severityFloor !== undefined) merged.severityFloor = profile.severityFloor;
   if (profile.terminalRejection !== undefined) merged.terminalRejection = profile.terminalRejection;
   if (profile.capExit !== undefined) merged.capExit = profile.capExit;
+  if (profile.testBackedCapExit !== undefined) merged.testBackedCapExit = profile.testBackedCapExit;
   if (profile.confirmation !== undefined) merged.confirmation = profile.confirmation;
   if (profile.personas !== undefined) {
     merged.personas = profile.personas;
@@ -194,11 +200,12 @@ export function applyReviewProfile(review: ReviewConfig, name: string): ReviewCo
  * rather than keyed separately so a dependent feature never runs against undefined
  * priorities. Scoped confirmation under personas depends on it too: its mandatory
  * widening reads obligation P0 grades. */
-export function taxonomyEnabled(review: Pick<ReviewConfig, "severityFloor" | "terminalRejection" | "capExit" | "personas" | "confirmation">): boolean {
+export function taxonomyEnabled(review: Pick<ReviewConfig, "severityFloor" | "terminalRejection" | "capExit" | "testBackedCapExit" | "personas" | "confirmation">): boolean {
   return (
     Boolean(review.severityFloor) ||
     Boolean(review.terminalRejection) ||
     Boolean(review.capExit) ||
+    Boolean(review.testBackedCapExit) ||
     (review.personas !== undefined && review.confirmation === "scoped")
   );
 }
@@ -254,6 +261,7 @@ export function resolveReviewConfig(
   if (override.severityFloor !== undefined) merged.severityFloor = override.severityFloor;
   if (override.terminalRejection !== undefined) merged.terminalRejection = override.terminalRejection;
   if (override.capExit !== undefined) merged.capExit = override.capExit;
+  if (override.testBackedCapExit !== undefined) merged.testBackedCapExit = override.testBackedCapExit;
   // The two pass engines are one replace-wholesale field: an override selecting either
   // engine clears the other, so a merged policy can never carry both (block-level
   // validation already rejects a single block declaring both).
@@ -415,6 +423,9 @@ function validateReviewConfig(review: ReviewConfig, label = "review"): ReviewCon
   }
   if (review.capExit !== undefined && typeof review.capExit !== "boolean") {
     throw new Error(`${label}.capExit must be a boolean`);
+  }
+  if (review.testBackedCapExit !== undefined && typeof review.testBackedCapExit !== "boolean") {
+    throw new Error(`${label}.testBackedCapExit must be a boolean`);
   }
   if (review.personas !== undefined) validateReviewPersonas(review, `${label}.personas`);
   if (review.profile !== undefined && (typeof review.profile !== "string" || review.profile.trim() === "")) {

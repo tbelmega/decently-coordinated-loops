@@ -119,7 +119,11 @@ If the bundled local reviewer is active, run it once from the target project at 
 final handoff of a tracked item. `cli-review.ts status --item <item-slug> --data-repo <data-repo>`
 verifies that a terminal review round covers the current HEAD, or a descendant whose
 intervening commits touch only configured landing-metadata paths, and prints the one-line
-evidence agents place in their completion receipt. Pass the same data repo you passed to
+evidence agents place in their completion receipt. With opt-in `review.testBackedCapExit`,
+`test-cap-exit` can instead verify committed P1-P3 fixes at the cap using regression checks
+and the full quality gate, reporting explicitly that the fixes lack independent re-review.
+The [loops-review skill](skills/loops-review/SKILL.md) defines evidence and risk requirements.
+Pass the same data repo you passed to
 `start`: the gate re-resolves the review policy from it to authorize any class waiver, and
 a waiver authorized by any other one is refused.
 

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, projectLifecycle, resolveReviewConfig, taxonomyEnabled } from "./config.ts";
 import type { LoopsConfig } from "./config.ts";
+import { TEST_IDENTITIES } from "./test-identities.ts";
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "loops-config-"));
@@ -680,5 +681,77 @@ describe("review profiles (C8)", () => {
       JSON.stringify({review: {reviewer: "codex"}, projects: {atlas: {repo: "~/a", review: {profiles: {mvp: {}}}}}}),
     );
     expect(() => loadConfig(dir)).toThrow(/global review block only/);
+  });
+});
+
+describe("testBackedCapExit", () => {
+  const project = TEST_IDENTITIES.projects.integration;
+
+  function loadReviewConfig(review: object, projects: object = {}): LoopsConfig {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, "loops.json"), JSON.stringify({ review, projects }));
+      return loadConfig(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("leaves an absent setting undefined and resolves true and false at every scope", () => {
+    expect(resolveReviewConfig(loadReviewConfig({ reviewer: "codex" })).testBackedCapExit).toBeUndefined();
+    expect(resolveReviewConfig(loadReviewConfig({ reviewer: "codex", testBackedCapExit: true })).testBackedCapExit).toBe(true);
+    expect(resolveReviewConfig(loadReviewConfig({ reviewer: "codex", testBackedCapExit: false })).testBackedCapExit).toBe(false);
+
+    expect(
+      resolveReviewConfig(loadReviewConfig({
+        reviewer: "codex",
+        testBackedCapExit: false,
+        profiles: { testBacked: { testBackedCapExit: true } },
+        profile: "testBacked",
+      })).testBackedCapExit,
+    ).toBe(true);
+    expect(
+      resolveReviewConfig(loadReviewConfig({
+        reviewer: "codex",
+        testBackedCapExit: true,
+        profiles: { ordinary: { testBackedCapExit: false } },
+        profile: "ordinary",
+      })).testBackedCapExit,
+    ).toBe(false);
+
+    expect(
+      resolveReviewConfig(loadReviewConfig(
+        {
+          reviewer: "codex",
+          testBackedCapExit: false,
+          profiles: { ordinary: { testBackedCapExit: false } },
+        },
+        { [project]: { repo: `~/${project}`, review: { profile: "ordinary", testBackedCapExit: true } } },
+      ), project).testBackedCapExit,
+    ).toBe(true);
+    expect(
+      resolveReviewConfig(loadReviewConfig(
+        {
+          reviewer: "codex",
+          testBackedCapExit: true,
+          profiles: { testBacked: { testBackedCapExit: true } },
+        },
+        { [project]: { repo: `~/${project}`, review: { profile: "testBacked", testBackedCapExit: false } } },
+      ), project).testBackedCapExit,
+    ).toBe(false);
+  });
+
+  test("rejects malformed values at every scope", () => {
+    expect(() => loadReviewConfig({ reviewer: "codex", testBackedCapExit: "yes" })).toThrow(
+      "review.testBackedCapExit must be a boolean",
+    );
+    expect(() => loadReviewConfig({
+      reviewer: "codex",
+      profiles: { bad: { testBackedCapExit: 1 } },
+    })).toThrow("review.profiles.bad.testBackedCapExit must be a boolean");
+    expect(() => loadReviewConfig(
+      { reviewer: "codex" },
+      { [project]: { repo: `~/${project}`, review: { testBackedCapExit: null } } },
+    )).toThrow(`projects.${project}.review.testBackedCapExit must be a boolean`);
   });
 });

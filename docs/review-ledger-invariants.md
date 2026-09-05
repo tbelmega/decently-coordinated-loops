@@ -61,6 +61,23 @@ round-coordinate mechanisms. `tools/review/review-ledger.ts` is the enforcement 
 - Status reports active epoch and active completed-round count separately from lifetime
   completed rounds.
 
+### Test-backed cap completion
+
+- Test-backed exits are optional append-only evidence, not independent review rounds.
+- The current governing authority must enable the exit, and its effective cap must be reached.
+- Only P1-P3 remediation obligations qualify; every open obligation must be covered.
+- Missing decisions, deferred findings, unresolved causality, invalid waivers/delegations,
+  documentation obligations, and P0 remediation remain blockers.
+- Evidence binds exact HEAD, reviewed HEAD, base, and every decision-bearing ledger field.
+  Code, review-state, or base changes cannot inherit a test-backed pass.
+- The CLI executes recorded commands and checks complete delta/obligation coverage and
+  changed regular test files. Semantic coverage, red evidence, and risk remain identified
+  implementer assessments, never an independent or mechanically proven judgment.
+- A pending attempt is durable before evidence is read; malformed/unreadable evidence,
+  interruption, failed checks, or newly
+  identified material uncertainty cannot leave an older test pass current.
+- Gate output and statistics distinguish test-backed completion from independent review.
+
 ## Decision
 
 Continue patching this unit. Removing causal dispositions would discard the workstream

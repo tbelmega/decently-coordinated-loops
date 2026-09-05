@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import {TEST_IDENTITIES} from "../test-identities.ts";
 import { DEFAULT_REVIEW_MAX_ROUNDS } from "../config.ts";
 import {
   addReviewRound,
@@ -2712,6 +2713,18 @@ describe("cli-review taxonomy, floor, and cap wiring (C1/C7)", () => {
       LOOPS_REVIEW_DUMP_PROMPT: dump,
     });
     expect(result.status).toBe(0);
+    expect(promptsFrom(dump)).toContain("Priority definitions");
+  });
+
+  test("testBackedCapExit persists policy and emits its severity definitions", () => {
+    const item = TEST_IDENTITIES.items.householdSlideshow;
+    const { repository } = createReviewRepository();
+    const dump = mkdtempSync(`${tmpdir()}/loops-prompt-`);
+    const result = runStart(repository, keyedDataRepo({maxRounds: 2, testBackedCapExit: true}), item, "master", {
+      LOOPS_REVIEW_DUMP_PROMPT: dump,
+    });
+    expect(result.status).toBe(0);
+    expect(readItemLedger(repository, item).rounds[0].audit.policy.testBackedCapExit).toBe(true);
     expect(promptsFrom(dump)).toContain("Priority definitions");
   });
 

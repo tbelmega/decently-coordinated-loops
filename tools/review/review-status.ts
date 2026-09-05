@@ -1,3 +1,4 @@
+import {testCapExitRefusal} from "./review-test-evidence.ts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ReviewClassConfig } from "../config.ts";
@@ -47,6 +48,8 @@ export interface PassedReviewStatus extends ReviewStatusBase {
    * the open P2/P3 obligations shipped as residual. */
   capExit?: boolean;
   residualObligations?: number;
+  testCapExit?: boolean;
+  testVerifiedFixes?: number;
   /** C8: the review profile this ledger is bound to. */
   profile?: string;
 }
@@ -65,6 +68,7 @@ export function evaluateReviewStatus(
   classes?: ReviewClassConfig[],
   terminalRejection = false,
   capExit?: {maxRounds: number},
+  testBackedCapExit?: {maxRounds: number},
 ): ReviewStatus {
   const latestRound = ledger.rounds.at(-1);
   const latestFailure = ledger.failures?.at(-1);
@@ -87,7 +91,9 @@ export function evaluateReviewStatus(
       reason: "review ledger has no completed rounds",
     };
   }
-  if (latestRound.headSha !== currentHeadSha) {
+  const testExit = testBackedCapExit !== undefined && testCapExitRefusal(ledger, currentHeadSha,
+    testBackedCapExit.maxRounds, liveRounds(ledger).length, openObligations(ledger)) === undefined;
+  if (latestRound.headSha !== currentHeadSha && !testExit) {
     return {
       kind: "blocked",
       headSha: currentHeadSha,
@@ -127,6 +133,7 @@ export function evaluateReviewStatus(
       finding.priority === "P2" || finding.priority === "P3";
     const nonBlocking = latestRound.findings.filter(
       (finding) =>
+        (testExit && finding.disposition?.kind === "accepted") ||
         finding.disposition?.kind === "waived-by-policy" ||
         finding.disposition?.kind === "tracked-elsewhere" ||
         finding.disposition?.kind === "delegated-follow-up" ||
@@ -178,7 +185,7 @@ export function evaluateReviewStatus(
   // A clean round certifies nothing while an obligation is still open: an owner
   // reversal of a documented limitation reopens a defect without adding a round, so
   // the pre-reversal clean round must not keep reporting passed.
-  const open = openObligations(ledger);
+  const open = testExit ? [] : openObligations(ledger);
   const residualObligations = atCap
     ? open.filter((obligation) => obligation.priority === "P2" || obligation.priority === "P3")
     : [];
@@ -217,6 +224,7 @@ export function evaluateReviewStatus(
     rounds: liveRounds(ledger).length,
     totalRounds: ledger.rounds.length,
     residualNotes: liveRounds(ledger).reduce((count, round) => count + (round.notes?.length ?? 0), 0),
+    ...(testExit ? {testCapExit: true, testVerifiedFixes: ledger.testCapExits?.at(-1)?.request?.fixes.length ?? 0} : {}),
     ...(ledger.profile ? {profile: ledger.profile} : {}),
   };
 }
@@ -233,6 +241,7 @@ export function renderReviewStatus(status: ReviewStatus): string {
       `total_rounds=${status.totalRounds}`,
       `residual_notes=${status.residualNotes ?? 0}`,
       ...(status.capExit ? [`cap_exit=true`, `residual_obligations=${status.residualObligations ?? 0}`] : []),
+      ...(status.testCapExit ? [`test_cap_exit=true`, `test_verified_fixes=${status.testVerifiedFixes ?? 0}`, `independently_reviewed=false`] : []),
       `head=${status.headSha}`,
       `ledger=${status.ledgerPath}`,
     ].join(" ");
