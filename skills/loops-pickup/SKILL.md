@@ -355,10 +355,14 @@ first, linking back to its source.
   remaining product decision as an explicit question. Do **not** commit specs or
   ADRs to the project repo unattended; draft design lives on the board until the
   owner approves it (loops-board → Specs vs. items). When the draft is
-  approval-ready (open questions answered or explicitly deferrable), request
-  approval async: one outbox entry (type `approval`), set `next-actor: owner`,
-  `awaiting: approve`, and next-step "owner: approve spec draft in item file". On
-  approval, promotion is agent work: commit the approved content to the project's
+  ready for finalization (open questions answered or explicitly deferrable), request
+  finalization async: one outbox entry (type `question`), set `next-actor: owner`,
+  `awaiting: decide`, and next-step "owner: request finalization or continue drafting".
+  Do not initiate draft review while exploring the design. On the owner's finalization
+  request, follow loops-review's advisory draft procedure: one independent round plus
+  relevant fixes, with changes to agreed intent returned as questions. Then request
+  explicit approval (outbox type `approval`, `awaiting: approve`); finalization is not
+  approval. On approval, promotion is agent work: commit the approved content to the project's
   specs location (`PROJECTS.md`) on an agent branch pushed to the project remote,
   record `links.spec` + `links.spec-branch` + `links.spec-sha`, annotate
   `## Refinement` as promoted, flip the state to `spec-filed`; the item is then
