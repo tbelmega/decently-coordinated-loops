@@ -15,6 +15,8 @@ import type {
 } from "./review-audit.ts";
 import {waiverRefusalReason} from "./review-classes.ts";
 import type {ReviewManifest} from "./review-manifest.ts";
+import {isReviewerId} from "./reviewers.ts";
+import type {ReviewRoutingEvidence} from "./reviewer-routing.ts";
 
 export const priorities = ["P0", "P1", "P2", "P3"] as const;
 export const confidenceLevels = ["high", "medium", "low"] as const;
@@ -152,6 +154,7 @@ export interface ReviewRound {
   notes?: CombinedAuditNote[];
   audit?: ReviewRoundAudit;
   stepBack?: ReviewStepBack;
+  routing?: ReviewRoutingEvidence;
 }
 
 /** Token usage one pass reported, recorded only when its reviewer CLI exposed it. */
@@ -224,6 +227,8 @@ export interface ReviewSupersession {
 
 export interface ReviewLedger {
   version: 1;
+  /** Marks ledgers whose active epoch has reviewer-routing lifecycle semantics. */
+  routingVersion?: 1;
   /** Marks ledgers written after causal classification became mandatory. Absent on
    * legacy version 1 evidence, whose unresolved terminal decisions stay readable but
    * cannot clear the status gate. */
@@ -238,6 +243,8 @@ export interface ReviewLedger {
    * authority and never rewritten: disposition and status re-resolve against it, and
    * a mid-review profile change is refused like a mid-review policy-repo change. */
   profile?: string;
+  /** Identity bound to the active epoch. Historical attempts retain their own copy. */
+  implementerIdentity?: import("../config.ts").ReviewImplementerIdentity;
   /** An owner-authorized round cap from `start --max-rounds` (C7), persisted so the
    * raise outlives the invocation: later starts and `status` honor it instead of
    * treating the lower configured cap as already reached. */
@@ -261,6 +268,7 @@ export interface ReviewFailure {
   epoch?: number;
   logicalRound?: number;
   attempt?: string;
+  routing?: ReviewRoutingEvidence;
 }
 
 /** Which configuration may authorize a `waived-by-policy` disposition on this review.
@@ -299,6 +307,7 @@ export interface AddRoundInput {
   notes?: CombinedAuditNote[];
   audit?: ReviewRoundAudit;
   stepBack?: ReviewStepBack;
+  routing?: ReviewRoutingEvidence;
 }
 
 export type ReviewObligationType = "remediation" | "documentation";
@@ -351,7 +360,14 @@ export function isFindingCausality(value: unknown): value is FindingCausality {
 }
 
 export function createReviewLedger(input: CreateLedgerInput): ReviewLedger {
-  return {version: 1, causalScopeVersion: 1, ...input, rounds: []};
+  return {
+    version: 1,
+    routingVersion: 1,
+    causalScopeVersion: 1,
+    implementerIdentity: {},
+    ...input,
+    rounds: [],
+  };
 }
 
 /** Evidence paths (--doc, --step-back) are recorded normalized and repository-relative;
@@ -639,9 +655,106 @@ function parseAuthority(input: unknown): ReviewAuthority | undefined {
   return {dataRepo, ...(project ? {project} : {}), ...(projectRepo ? {projectRepo} : {})};
 }
 
+function parseImplementerIdentity(
+  input: unknown,
+  path: string,
+): import("../config.ts").ReviewImplementerIdentity {
+  if (!isRecord(input)) throw new Error(`${path} must be an object`);
+  const allowed = new Set(["harness", "model", "effort"]);
+  const unknown = Object.keys(input).find((key) => !allowed.has(key));
+  if (unknown) throw new Error(`${path}.${unknown} is not allowed`);
+  const identity: import("../config.ts").ReviewImplementerIdentity = {};
+  for (const field of ["harness", "model", "effort"] as const) {
+    const value = input[field];
+    if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+      throw new Error(`${path}.${field} must be a non-empty string when present`);
+    }
+    if (typeof value === "string") identity[field] = value;
+  }
+  return identity;
+}
+
+function parseRoutingEvidence(input: unknown, path: string): ReviewRoutingEvidence | undefined {
+  if (input === undefined) return undefined;
+  if (!isRecord(input)) throw new Error(`${path} must be an object`);
+  const identity = parseImplementerIdentity(input.identity, `${path}.identity`);
+  if (!isRecord(input.selection)) throw new Error(`${path}.selection must be an object`);
+  const kind = input.selection.kind;
+  let selection: ReviewRoutingEvidence["selection"];
+  if (kind === "default") {
+    selection = {kind};
+  } else if (kind === "alternative") {
+    const index = input.selection.index;
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0) {
+      throw new Error(`${path}.selection.index must be a non-negative integer`);
+    }
+    selection = {
+      kind,
+      index,
+      when: parseImplementerIdentity(input.selection.when, `${path}.selection.when`),
+    };
+  } else {
+    throw new Error(`${path}.selection.kind must be default or alternative`);
+  }
+  const parsePasses = (value: unknown, passesPath: string, required: boolean) => {
+    if (value === undefined && !required) return undefined;
+    if (!Array.isArray(value) || (required && value.length === 0)) {
+      throw new Error(`${passesPath} must be ${required ? "a non-empty" : "an"} array`);
+    }
+    return value.map((pass, index) => {
+      const passPath = `${passesPath}[${index}]`;
+      if (!isRecord(pass) || !isReviewPersonaName(pass.pass) || !isReviewerId(pass.reviewer)) {
+        throw new Error(`${passPath} must name a supported pass and reviewer`);
+      }
+      const model = optionalString(pass, "model", passPath);
+      const effort = optionalString(pass, "effort", passPath);
+      return {
+        pass: pass.pass,
+        reviewer: pass.reviewer,
+        ...(model ? {model} : {}),
+        ...(effort ? {effort} : {}),
+      };
+    });
+  };
+  const finalPasses = parsePasses(input.finalPasses, `${path}.finalPasses`, true)!;
+  const shadowPasses = parsePasses(input.shadowPasses, `${path}.shadowPasses`, false);
+  let explicit: ReviewRoutingEvidence["explicit"];
+  if (input.explicit !== undefined) {
+    if (!isRecord(input.explicit)) throw new Error(`${path}.explicit must be an object`);
+    const reviewer = input.explicit.reviewer;
+    if (reviewer !== undefined && !isReviewerId(reviewer)) {
+      throw new Error(`${path}.explicit.reviewer must be a supported reviewer`);
+    }
+    const model = optionalString(input.explicit, "model", `${path}.explicit`);
+    const effort = optionalString(input.explicit, "effort", `${path}.explicit`);
+    explicit = {
+      ...(isReviewerId(reviewer) ? {reviewer} : {}),
+      ...(model ? {model} : {}),
+      ...(effort ? {effort} : {}),
+    };
+  }
+  const retryOf = optionalString(input, "retryOf", path);
+  if (input.legacyInitialization !== undefined && input.legacyInitialization !== true) {
+    throw new Error(`${path}.legacyInitialization must be true when present`);
+  }
+  return {
+    identity,
+    selection,
+    finalPasses,
+    ...(shadowPasses ? {shadowPasses} : {}),
+    ...(explicit && Object.keys(explicit).length > 0 ? {explicit} : {}),
+    ...(retryOf ? {retryOf} : {}),
+    ...(input.legacyInitialization === true ? {legacyInitialization: true} : {}),
+  };
+}
+
 export function parseReviewLedger(input: unknown): ReviewLedger {
   if (!isRecord(input)) throw new Error("review ledger must be an object");
   if (input.version !== 1) throw new Error("review ledger version must be 1");
+  if (input.routingVersion !== undefined && input.routingVersion !== 1) {
+    throw new Error("review ledger routingVersion must be 1 when present");
+  }
+  const routingVersion = input.routingVersion === 1 ? 1 : undefined;
   if (input.causalScopeVersion !== undefined && input.causalScopeVersion !== 1) {
     throw new Error("review ledger causalScopeVersion must be 1 when present");
   }
@@ -814,6 +927,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       }
       notes = roundInput.notes;
     }
+    const routing = parseRoutingEvidence(roundInput.routing, `${path}.routing`);
     return {
       number,
       ...(typeof epoch === "number" ? {epoch} : {}),
@@ -826,6 +940,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
       ...(notes ? {notes} : {}),
       ...(audit ? {audit} : {}),
       ...(stepBack ? {stepBack} : {}),
+      ...(routing ? {routing} : {}),
     };
   });
   if (input.failures !== undefined && !Array.isArray(input.failures)) {
@@ -858,6 +973,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
         if (attempt !== undefined && !/^[a-z]+$/.test(attempt)) {
           throw new Error(`${path}.attempt must be a lowercase alphabetic suffix when present`);
         }
+        const routing = parseRoutingEvidence(failureInput.routing, `${path}.routing`);
         return {
           headSha: requiredString(failureInput, "headSha", path),
           model: requiredString(failureInput, "model", path),
@@ -866,6 +982,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
           ...(typeof failureInput.epoch === "number" ? {epoch: failureInput.epoch} : {}),
           ...(typeof failureInput.logicalRound === "number" ? {logicalRound: failureInput.logicalRound} : {}),
           ...(attempt ? {attempt} : {}),
+          ...(routing ? {routing} : {}),
         };
       })
     : undefined;
@@ -943,11 +1060,15 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
   }
   return {
     version: 1,
+    ...(routingVersion === 1 ? {routingVersion} : {}),
     ...(input.testCapExits !== undefined ? {testCapExits: parseTestCapExits(input.testCapExits)} : {}),
     ...(causalScopeVersion === 1 ? {causalScopeVersion} : {}),
     ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
     ...(authority ? { authority } : {}),
     ...(optionalString(input, "profile", "review ledger") ? { profile: String(input.profile) } : {}),
+    ...(input.implementerIdentity !== undefined
+      ? {implementerIdentity: parseImplementerIdentity(input.implementerIdentity, "review ledger implementerIdentity")}
+      : {}),
     ...(input.maxRoundsOverride !== undefined
       ? (() => {
           if (typeof input.maxRoundsOverride !== "number" || !Number.isInteger(input.maxRoundsOverride) || input.maxRoundsOverride < 1) {
@@ -1060,9 +1181,14 @@ export function supersedeLedgerBase(
   // series is reviewed against its own configured cap, and the owner re-authorizes if
   // the new epoch needs more rounds too. Dropped explicitly rather than by omission,
   // because everything else here is deliberately carried forward.
-  const {maxRoundsOverride: _superseded, ...carried} = ledger;
+  const {
+    maxRoundsOverride: _superseded,
+    implementerIdentity: _supersededIdentity,
+    ...carried
+  } = ledger;
   return {
     ...carried,
+    ...(ledger.routingVersion === 1 ? {implementerIdentity: {}} : {}),
     baseRef: next.baseRef,
     baseSha: next.baseSha,
     ...(next.patchIds ? {patchIds: next.patchIds} : {}),
@@ -1124,6 +1250,7 @@ export function addReviewRound(ledger: ReviewLedger, input: AddRoundInput): Revi
         ...(input.notes ? {notes: input.notes} : {}),
         ...(input.audit ? {audit: input.audit} : {}),
         ...(input.stepBack ? {stepBack: input.stepBack} : {}),
+        ...(input.routing ? {routing: input.routing} : {}),
       },
     ],
   };
@@ -1502,6 +1629,25 @@ export function effectiveMaxRounds(ledger: Pick<ReviewLedger, "maxRoundsOverride
   return Math.max(configured, ledger.maxRoundsOverride ?? 0);
 }
 
+function renderIdentity(identity: import("../config.ts").ReviewImplementerIdentity): string {
+  return (["harness", "model", "effort"] as const)
+    .flatMap((field) => identity[field] ? [`${field}=${identity[field]}`] : [])
+    .join(", ") || "none supplied";
+}
+
+function renderRouting(routing: ReviewRoutingEvidence): string {
+  const selection = routing.selection.kind === "alternative"
+    ? `alternative ${routing.selection.index}`
+    : "default";
+  const passes = routing.finalPasses.map((pass) =>
+    `${pass.pass}=${pass.reviewer}/${pass.model ?? "default"}/${pass.effort ?? "default"}`,
+  ).join(", ");
+  const shadow = routing.shadowPasses?.map((pass) =>
+    `${pass.pass}=${pass.reviewer}/${pass.model ?? "default"}/${pass.effort ?? "default"}`,
+  ).join(", ");
+  return `${selection}; ${passes}${shadow !== undefined ? `; shadow ${shadow || "none"}` : ""}${routing.retryOf ? `; retry of ${routing.retryOf}` : ""}${routing.legacyInitialization ? "; legacy routing initialization" : ""}`;
+}
+
 export function renderReviewLedger(ledger: ReviewLedger): string {
   const lines = [
     "# Local review",
@@ -1512,6 +1658,9 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     `- Branch: \`${ledger.branch}\``,
     `- Base ref: \`${ledger.baseRef}\``,
     `- Base SHA: \`${ledger.baseSha}\``,
+    ...(ledger.implementerIdentity
+      ? [`- Implementer identity: ${renderIdentity(ledger.implementerIdentity)}`]
+      : []),
     // The authority any policy waiver in this ledger is bound to, on the human surface
     // so the owner can see which policy authorized it without reading the JSON.
     ...(ledger.authority
@@ -1540,6 +1689,7 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
       lines.push(
         "",
         `- Round ${logicalRound}-${attempt} (epoch ${epoch}), ${failure.attemptedAt}: \`${failure.headSha.slice(0, 12)}\` with \`${failure.model}\`: ${failure.reason}`,
+        ...(failure.routing ? [`  - Routing: ${renderRouting(failure.routing)}`] : []),
       );
     }
   }
@@ -1554,6 +1704,7 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
       `- Head SHA: \`${round.headSha}\``,
       `- Model: \`${round.model}\``,
       `- Reviewed at: ${round.reviewedAt}`,
+      ...(round.routing ? [`- Routing: ${renderRouting(round.routing)}`] : []),
       ...(round.stepBack
         ? [`- Step-back note: ${round.stepBack.path} (triggered by rounds ${round.stepBack.triggerRounds.map((sequence) => reviewRoundIdentifier(ledger, sequence)).join(", ")})`]
         : []),

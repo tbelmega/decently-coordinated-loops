@@ -25,8 +25,8 @@ export interface ReviewRequest {
   prompt: string;
   /** Explicit model id, or undefined to use the CLI's own default. */
   model?: string;
-  /** Reasoning-effort override, or undefined to use the CLI's own default. Only the
-   * codex adapter consumes this (via -c model_reasoning_effort); others ignore it. */
+  /** Reasoning-effort override, or undefined to use the CLI's own default. Codex and
+   * Claude consume it; Cursor has no supported effort flag. */
   effort?: string;
   /** Repository root to run the reviewer in. */
   cwd: string;
@@ -271,6 +271,26 @@ const codex: Reviewer = {
   },
 };
 
+export function buildClaudeArgs(options: {
+  model?: string;
+  effort?: string;
+  schema: Record<string, unknown>;
+  prompt: string;
+}): string[] {
+  return [
+    "-p",
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.effort ? ["--effort", options.effort] : []),
+    "--permission-mode",
+    "plan",
+    "--output-format",
+    "json",
+    "--json-schema",
+    JSON.stringify(options.schema),
+    options.prompt,
+  ];
+}
+
 const claude: Reviewer = {
   id: "claude",
   binEnv: "CLAUDE_BIN",
@@ -280,17 +300,12 @@ const claude: Reviewer = {
     // ref, so strip it; the returned parsed object is in `structured_output`.
     const schema = { ...schemaObject() };
     delete schema.$schema;
-    const args = [
-      "-p",
-      ...(request.model ? ["--model", request.model] : []),
-      "--permission-mode",
-      "plan",
-      "--output-format",
-      "json",
-      "--json-schema",
-      JSON.stringify(schema),
-      request.prompt,
-    ];
+    const args = buildClaudeArgs({
+      model: request.model,
+      effort: request.effort,
+      schema,
+      prompt: request.prompt,
+    });
     return parseClaudeOutput(await runCaptured(resolveBin(claude), args, request.cwd, "claude"));
   },
 };

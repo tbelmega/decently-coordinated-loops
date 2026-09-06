@@ -86,6 +86,10 @@ Set `loops.json → review` in the data repo:
 "review": {
   "reviewer": "claude",
   "model": "<optional model id>",
+  "effort": "<optional effort>",
+  "alternatives": [
+    {"when": {"harness": "codex", "model": "gpt"}, "reviewer": "claude", "model": "opus", "effort": "high"}
+  ],
   "maxRounds": 5,
   "auditPasses": ["diff", "integration", "adversarial"],
   "metadataPaths": ["docs/landing-state.md"],
@@ -102,6 +106,8 @@ Set `loops.json → review` in the data repo:
 | --- | --- |
 | `reviewer` | Installed `codex`, `claude`, or `cursor` CLI. `bun run setup` detects installed CLIs and offers configuration. |
 | `model` | Optional; defaults to the reviewer CLI's model. |
+| `effort` | Optional; forwarded by Codex and Claude. Cursor does not support effort in alternative-selected tuples. |
+| `alternatives` | Ordered reviewer replacements selected by literal, case-sensitive implementer identity prefixes; no match keeps the default tuple. |
 | `maxRounds` | Positive integer; defaults to 3. |
 | `auditPasses` | Non-empty subset of the three example passes; defaults to all three. |
 | `metadataPaths` | Safe repo-relative exact paths or recursive `directory/**` patterns for landing bookkeeping; omit when none. |
@@ -109,10 +115,15 @@ Set `loops.json → review` in the data repo:
 | `confirmation` | `"full"` by default; `"scoped"` narrows eligible confirmation rounds. |
 
 The keys listed above may be overridden under `projects.<name>.review`: fields merge,
-but lists replace wholesale (an override of `classes` supplies its complete set). The
+but lists replace wholesale (an override of `classes` or `alternatives` supplies its complete set;
+`alternatives: []` disables inherited alternatives). The
 project is resolved by
-matching the reviewed checkout to `projects.*.repo`, never by item slug. `--reviewer` and
-`--model` override configuration for one run. Profile definitions (`review.profiles`)
+matching the reviewed checkout to `projects.*.repo`, never by item slug. Alternatives combine
+fields inside one `when` with AND, use separate entries for OR, and stop at the first match.
+`when` accepts non-empty `harness`, `model`, and `effort` prefixes. A selected alternative
+replaces reviewer, model, and effort across every active persona; omitted model or effort uses
+the selected adapter's default. `--reviewer`, `--model`, and `--effort` override the final
+selection field by field for one run. Profile definitions (`review.profiles`)
 are global-only; projects may select a named profile with `review.profile`.
 
 The loop below describes default behavior. Configured `severityFloor` may produce P2/P3
@@ -126,8 +137,17 @@ Run from the **target repository (not the data repo)**, on the branch under revi
 
 ```bash
 bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
-  --base <integration-ref-or-stack-parent-sha> --data-repo <data-repo>
+  --base <integration-ref-or-stack-parent-sha> --data-repo <data-repo> \
+  --implementer-harness <harness> --implementer-model <model> \
+  --implementer-effort <effort>
 ```
+
+Supply the responsible implementer's known identity fields on the first implementation-review
+start. Omit genuinely unknown fields; the CLI warns when configured conditions need them and
+falls back to the default. Identity is explicit self-report, not authenticated provenance, and is
+never inferred from Git, assignee, launcher, or reviewer. It is fixed for the review epoch:
+continuations may repeat identical values or omit them, while changing or adding a value requires
+a changed-base epoch.
 
 1. **Prepare.** Run the project's typecheck and tests, commit, and ensure a clean working
    tree. After the pre-review sync/rebase required by loops-pickup, use the refreshed
@@ -350,7 +370,12 @@ still block. A changed implementation HEAD still requires review.
 
 **Failures and stale reviews are agent recovery work.** Fix failed/incomplete attempts
 and retry `start`, leaving the item in place. They consume no round and use the pending
-round's alphabetic suffix, such as `1-a`. A stale review requires a fresh round and
+round's alphabetic suffix, such as `1-a`. A retry reuses the failed attempt's saved final
+pass tuples, so a configuration edit cannot silently change its reviewer. Newly supplied
+explicit reviewer, model, or effort flags still override their corresponding saved fields and
+are recorded as intentional changes. A new logical round resolves current alternatives again.
+Legacy failed attempts without routing evidence initialize routing once from current config and
+record that fact without consuming another round. A stale review requires a fresh round and
 consumes one; `start` refuses a same-base rerun after a clean round. If recovery needs a
 round beyond the cap, escalate rather than extending it yourself.
 

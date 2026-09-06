@@ -36,7 +36,7 @@ this file before any unattended work.
   (clean, or every finding carrying a non-blocking disposition), or a descendant whose
   intervening commits touch only configured `review.metadataPaths`. Optionally set the
   positive integer `review.maxRounds` (public default 3), a non-empty
-  `review.auditPasses` subset, safe repo-relative landing metadata patterns,
+  `review.auditPasses` subset, ordered conditional reviewer alternatives, safe repo-relative landing metadata patterns,
   `review.classes` that waive findings on record-keeping surfaces (drawn by function,
   never by file extension), and `review.confirmation: "scoped"` to narrow a qualifying
   confirmation round to the fix delta. Every key can be overridden per project under

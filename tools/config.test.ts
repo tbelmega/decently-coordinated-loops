@@ -249,8 +249,66 @@ describe("resolveReviewConfig", () => {
     expect(resolveReviewConfig(loops, "atlas").metadataPaths).toEqual(["docs/evidence/**"]);
   });
 
+  test("replaces reviewer alternatives wholesale, including an empty disabling list", () => {
+    const loops = config({
+      atlas: {repo: "~/atlas", review: {alternatives: []}},
+    });
+    loops.review.alternatives = [
+      {when: {harness: "codex"}, reviewer: "claude", model: "opus", effort: "high"},
+    ];
+    expect(resolveReviewConfig(loops, "atlas").alternatives).toEqual([]);
+    expect(resolveReviewConfig(loops).alternatives).toHaveLength(1);
+  });
+
   test("does not resolve an inherited Object property name", () => {
     expect(resolveReviewConfig(config({}), "constructor")).toEqual(config({}).review);
+  });
+});
+
+describe("review alternatives validation", () => {
+  function load(alternatives: unknown): LoopsConfig {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, "loops.json"), JSON.stringify({review: {alternatives}}));
+      return loadConfig(root);
+    } finally {
+      rmSync(root, {recursive: true, force: true});
+    }
+  }
+
+  test("accepts ordered prefix conditions with optional model and effort", () => {
+    const alternatives = [
+      {when: {harness: "codex", model: "gpt"}, reviewer: "claude", model: "opus", effort: "high"},
+      {when: {effort: "max"}, reviewer: "codex"},
+    ];
+    expect(load(alternatives).review.alternatives).toEqual(alternatives as never);
+    expect(load([]).review.alternatives).toEqual([]);
+  });
+
+  test("rejects malformed alternatives and unknown keys", () => {
+    const invalid = [
+      "claude",
+      [{}],
+      [{when: {}, reviewer: "claude"}],
+      [{when: {harness: ""}, reviewer: "claude"}],
+      [{when: {provider: "openai"}, reviewer: "claude"}],
+      [{when: {harness: "codex"}, reviewer: "unknown"}],
+      [{when: {harness: "codex"}, reviewer: "claude", model: ""}],
+      [{when: {harness: "codex"}, reviewer: "claude", extra: true}],
+    ];
+    for (const alternatives of invalid) expect(() => load(alternatives)).toThrow(/alternatives/);
+  });
+
+  test("profiles cannot define alternatives", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, "loops.json"), JSON.stringify({
+        review: {profiles: {bad: {alternatives: []}}},
+      }));
+      expect(() => loadConfig(root)).toThrow(/not an allowed profile field/);
+    } finally {
+      rmSync(root, {recursive: true, force: true});
+    }
   });
 });
 

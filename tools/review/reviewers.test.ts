@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildClaudeArgs,
   buildCodexArgs,
   getReviewer,
   isReviewerId,
@@ -149,6 +150,24 @@ describe("buildCodexArgs", () => {
     const args = buildCodexArgs({ ...fixed, model: "gpt-5.6-sol", effort: "high" }).join(" ");
     expect(args).toContain("--model gpt-5.6-sol");
     expect(args).toContain('-c model_reasoning_effort="high"');
+  });
+});
+
+describe("buildClaudeArgs", () => {
+  test("forwards model and effort before the read-only structured-output arguments", () => {
+    const args = buildClaudeArgs({model: "opus", effort: "high", schema: {type: "object"}, prompt: "review"});
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("opus");
+    expect(args).toContain("--effort");
+    expect(args[args.indexOf("--effort") + 1]).toBe("high");
+    expect(args).toContain("plan");
+    expect(args.at(-1)).toBe("review");
+  });
+
+  test("omits optional model and effort flags when absent", () => {
+    const args = buildClaudeArgs({schema: {}, prompt: "review"});
+    expect(args).not.toContain("--model");
+    expect(args).not.toContain("--effort");
   });
 });
 

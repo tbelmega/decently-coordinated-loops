@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {isReviewerId, type ReviewerId} from "./review/reviewers.ts";
 
 /** Where a project's lifecycle ends. `deploy` keeps the full tail
  * (`tested -> delivered -> accepted`): the owner releases the change and accepts it, and
@@ -95,6 +96,19 @@ export interface ReviewClassConfig {
   guidance?: string;
 }
 
+export interface ReviewImplementerIdentity {
+  harness?: string;
+  model?: string;
+  effort?: string;
+}
+
+export interface ReviewAlternativeConfig {
+  when: ReviewImplementerIdentity;
+  reviewer: ReviewerId;
+  model?: string;
+  effort?: string;
+}
+
 /** Local code-review adapter selection. Empty (no `reviewer`) means review is not
  * activated for this instance; `bun run setup` offers to fill it in. */
 export interface ReviewConfig {
@@ -105,6 +119,9 @@ export interface ReviewConfig {
   /** Reasoning-effort override passed to the reviewer CLI (codex: model_reasoning_effort);
    * omit to use the CLI's own default. */
   effort?: string;
+  /** Ordered reviewer replacements selected from explicit implementer identity.
+   * The first literal prefix match wins; a project list replaces this list wholesale. */
+  alternatives?: ReviewAlternativeConfig[];
   /** Maximum review rounds for one item and patch series. A patch-equivalent rebase
    * retains the count while a changed patch series starts new evidence, so a reused
    * or long-lived branch does not inherit an earlier item's rounds. Omit to use DCL's
@@ -254,6 +271,7 @@ export function resolveReviewConfig(
   if (override.reviewer !== undefined) merged.reviewer = override.reviewer;
   if (override.model !== undefined) merged.model = override.model;
   if (override.effort !== undefined) merged.effort = override.effort;
+  if (override.alternatives !== undefined) merged.alternatives = override.alternatives;
   if (override.maxRounds !== undefined) merged.maxRounds = override.maxRounds;
   if (override.metadataPaths !== undefined) merged.metadataPaths = override.metadataPaths;
   if (override.classes !== undefined) merged.classes = override.classes;
@@ -367,6 +385,43 @@ function validateReviewClasses(classes: unknown, label: string): void {
   }
 }
 
+function validateReviewAlternatives(alternatives: unknown, label: string): void {
+  if (!Array.isArray(alternatives)) throw new Error(`${label} must be an array`);
+  const allowedEntryKeys = new Set(["when", "reviewer", "model", "effort"]);
+  const allowedConditionKeys = new Set(["harness", "model", "effort"]);
+  for (const [index, entry] of alternatives.entries()) {
+    const path = `${label}[${index}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new Error(`${path} must be an object`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    const unknownEntryKey = Object.keys(candidate).find((key) => !allowedEntryKeys.has(key));
+    if (unknownEntryKey) throw new Error(`${path}.${unknownEntryKey} is not allowed`);
+    if (typeof candidate.when !== "object" || candidate.when === null || Array.isArray(candidate.when)) {
+      throw new Error(`${path}.when must be an object`);
+    }
+    const when = candidate.when as Record<string, unknown>;
+    const unknownConditionKey = Object.keys(when).find((key) => !allowedConditionKeys.has(key));
+    if (unknownConditionKey) throw new Error(`${path}.when.${unknownConditionKey} is not allowed`);
+    if (Object.keys(when).length === 0) throw new Error(`${path}.when must contain at least one condition`);
+    for (const key of allowedConditionKeys) {
+      const value = when[key];
+      if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+        throw new Error(`${path}.when.${key} must be a non-empty string when present`);
+      }
+    }
+    if (!isReviewerId(candidate.reviewer)) {
+      throw new Error(`${path}.reviewer must be one of codex, claude, cursor`);
+    }
+    for (const key of ["model", "effort"] as const) {
+      const value = candidate[key];
+      if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+        throw new Error(`${path}.${key} must be a non-empty string when present`);
+      }
+    }
+  }
+}
+
 /** `label` names the block in errors: the global "review", or "projects.<name>.review" -
  * an instance carries a dozen projects, and a bare message leaves the owner hunting. */
 function validateReviewConfig(review: ReviewConfig, label = "review"): ReviewConfig {
@@ -385,6 +440,9 @@ function validateReviewConfig(review: ReviewConfig, label = "review"): ReviewCon
   }
   if (review.effort !== undefined && (typeof review.effort !== "string" || review.effort.trim() === "")) {
     throw new Error(`${label}.effort must be a non-empty string`);
+  }
+  if (review.alternatives !== undefined) {
+    validateReviewAlternatives(review.alternatives, `${label}.alternatives`);
   }
   if (
     review.auditPasses !== undefined &&

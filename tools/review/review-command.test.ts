@@ -168,6 +168,31 @@ function createFakeCodex(): string {
   return executable;
 }
 
+function createFakeClaude(): string {
+  const directory = mkdtempSync(`${tmpdir()}/loops-fake-claude-`);
+  const executable = `${directory}/claude`;
+  writeFileSync(
+    executable,
+    [
+      "#!/usr/bin/env bun",
+      'import {appendFileSync} from "node:fs";',
+      "const args = Bun.argv.slice(2);",
+      "const prompt = args.at(-1);",
+      'if (!prompt) throw new Error("missing prompt");',
+      'const inputLine = prompt.split("\\n").find((line) => line.startsWith("AUDIT_INPUT="));',
+      'if (!inputLine) throw new Error("missing audit input");',
+      'const audit = JSON.parse(inputLine.slice("AUDIT_INPUT=".length));',
+      'if (process.env.FAKE_CLAUDE_ARGS) appendFileSync(process.env.FAKE_CLAUDE_ARGS, `${JSON.stringify({pass: audit.pass, model: args[args.indexOf("--model") + 1], effort: args[args.indexOf("--effort") + 1]})}\\n`);',
+      'if (process.env.FAKE_CLAUDE_FAIL) process.exit(1);',
+      'const review = {pass: audit.pass, summary: "clean", coverage: {files: [...audit.manifest.files, ...(audit.manifest.metadataFiles ?? [])], instructionFiles: audit.manifest.instructionFiles, callsites: []}, obligations: [], findings: [], notes: []};',
+      'process.stdout.write(JSON.stringify({is_error: false, structured_output: review}));',
+      "",
+    ].join("\n"),
+  );
+  chmodSync(executable, 0o755);
+  return executable;
+}
+
 function runStart(
   repository: string,
   dataRepo: string,
@@ -1234,7 +1259,7 @@ describe("cli-review start", () => {
     const {repository, baseSha} = createReviewRepository();
     const item = "base-delta-cap";
     const dataRepo = createReviewDataRepo(1);
-    expect(runStart(repository, dataRepo, item, baseSha).status).toBe(0);
+    expect(runStart(repository, dataRepo, item, baseSha, {}, ["--implementer-harness", "codex"]).status).toBe(0);
 
     git(repository, ["switch", "-q", "master"]);
     writeFileSync(`${repository}/base-two.txt`, "new base\n");
@@ -1472,7 +1497,7 @@ describe("cli-review start", () => {
     git(repository, ["commit", "-q", "-m", "Change reviewed patch"]);
     const newBaseSha = git(repository, ["rev-parse", "master"]);
 
-    const restarted = runStart(repository, dataRepo, item);
+    const restarted = runStart(repository, dataRepo, item, "master", {}, ["--implementer-harness", "claude"]);
     expect(restarted.status).toBe(0);
     expect(restarted.stdout).toContain("Review round 1 (epoch 2)");
     const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
@@ -1482,6 +1507,7 @@ describe("cli-review start", () => {
     expect(superseded.supersessions).toHaveLength(1);
     expect(superseded.supersessions[0]).toMatchObject({afterRound: 1, baseSha});
     expect(superseded.rounds[1]).toMatchObject({epoch: 2, logicalRound: 1});
+    expect(superseded.implementerIdentity).toEqual({harness: "claude"});
     expect(superseded.rounds[1].audit.kind).toBe("full");
     expect(readdirSync(dirname(paths.jsonPath)).some((name) => name.startsWith("superseded-"))).toBe(true);
   });
@@ -2495,6 +2521,277 @@ describe("cli-review scoped confirmation", () => {
     const ledger = readLedgerJson(repository, item);
     expect(ledger.rounds[1].audit.scope).toBeUndefined();
     expect(ledger.rounds[1].audit.manifest.baseSha).toBe(baseSha);
+  });
+});
+
+describe("cli-review conditional reviewer routing", () => {
+  function routingDataRepo(review: Record<string, unknown>): string {
+    const dataRepo = mkdtempSync(`${tmpdir()}/loops-review-routing-`);
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review})}\n`);
+    return dataRepo;
+  }
+
+  test("a matching alternative can supply the reviewer and forwards Claude model and effort", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = routingDataRepo({
+      alternatives: [{when: {harness: "codex", model: "gpt"}, reviewer: "claude", model: "opus", effort: "high"}],
+    });
+    const argsLog = `${mkdtempSync(`${tmpdir()}/loops-claude-args-`)}/args.log`;
+    const result = runStart(repository, dataRepo, "routed", "master", {
+      CLAUDE_BIN: createFakeClaude(),
+      FAKE_CLAUDE_ARGS: argsLog,
+    }, ["--implementer-harness", "codex-cli", "--implementer-model", "gpt-5.6-sol"]);
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(argsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      {pass: "diff", model: "opus", effort: "high"},
+      {pass: "integration", model: "opus", effort: "high"},
+      {pass: "adversarial", model: "opus", effort: "high"},
+    ]);
+    const routing = readItemLedger(repository, "routed").rounds[0].routing;
+    expect(routing.selection).toEqual({kind: "alternative", index: 0, when: {harness: "codex", model: "gpt"}});
+    expect(routing.finalPasses.every((pass: any) => pass.reviewer === "claude")).toBe(true);
+  });
+
+  test("rejects an identity option whose apparent value is another flag", () => {
+    const {repository} = createReviewRepository();
+    const result = runStart(repository, routingDataRepo({reviewer: "codex"}), "bad-identity", "master", {}, [
+      "--implementer-harness", "--implementer-model", "gpt",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unknown or incomplete argument: --implementer-harness");
+  });
+
+  test("no match without a default fails, while an explicit reviewer alone succeeds", () => {
+    const first = createReviewRepository();
+    const dataRepo = routingDataRepo({alternatives: [{when: {harness: "claude"}, reviewer: "codex"}]});
+    const noMatch = runStart(first.repository, dataRepo, "no-match", "master", {}, [
+      "--implementer-harness", "codex",
+    ]);
+    expect(noMatch.status).toBe(1);
+    expect(noMatch.stderr).toContain("no reviewer configured");
+
+    const second = createReviewRepository();
+    expect(runStart(second.repository, routingDataRepo({}), "explicit", "master", {}, ["--reviewer", "codex"]).status).toBe(0);
+  });
+
+  test("missing identity fields warn and preserve the configured default", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = routingDataRepo({
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex", model: "gpt"}, reviewer: "claude"}],
+    });
+    const result = runStart(repository, dataRepo, "missing-identity");
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("missing implementer identity fields: harness, model");
+    expect(readItemLedger(repository, "missing-identity").rounds[0].routing.selection).toEqual({kind: "default"});
+  });
+
+  test("a failed-attempt retry keeps its saved tuples across config edits and accepts explicit overrides", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = routingDataRepo({
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex", model: "saved-model", effort: "high"}],
+    });
+    const identityArgs = ["--implementer-harness", "codex-cli"];
+    expect(runStart(repository, dataRepo, "retry-routing", "master", {FAKE_SKIP_FILE: "1"}, identityArgs).status).toBe(1);
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review: {
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex", model: "changed-model", effort: "low"}],
+    }})}\n`);
+    const retry = runStart(repository, dataRepo, "retry-routing", "master", {}, [
+      ...identityArgs,
+      "--effort", "medium",
+    ]);
+    expect(retry.status).toBe(0);
+    const ledger = readItemLedger(repository, "retry-routing");
+    expect(ledger.rounds[0].routing.finalPasses.every((pass: any) => pass.model === "saved-model" && pass.effort === "medium")).toBe(true);
+    expect(ledger.rounds[0].routing.retryOf).toBe("E1-R1-a");
+  });
+
+  test("a default-only failed attempt also pins its retry tuple across config edits", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = routingDataRepo({reviewer: "codex", model: "saved-default", effort: "high"});
+    expect(runStart(repository, dataRepo, "default-retry", "master", {FAKE_SKIP_FILE: "1"}).status).toBe(1);
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review: {
+      reviewer: "codex", model: "changed-default", effort: "low",
+    }})}\n`);
+    expect(runStart(repository, dataRepo, "default-retry").status).toBe(0);
+    const ledger = readItemLedger(repository, "default-retry");
+    expect(ledger.failures[0].routing.finalPasses.every((pass: any) => pass.model === "saved-default")).toBe(true);
+    expect(ledger.rounds[0].routing.finalPasses.every((pass: any) => pass.model === "saved-default" && pass.effort === "high")).toBe(true);
+  });
+
+  test("a new identity-less epoch rejects later identity addition", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = routingDataRepo({reviewer: "codex"});
+    expect(runStart(repository, dataRepo, "fixed-empty-identity", "master", {FAKE_SKIP_FILE: "1"}).status).toBe(1);
+    const before = readItemLedger(repository, "fixed-empty-identity");
+    const result = runStart(repository, dataRepo, "fixed-empty-identity", "master", {}, [
+      "--implementer-harness", "codex",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("implementer harness conflicts");
+    expect(readItemLedger(repository, "fixed-empty-identity")).toEqual(before);
+  });
+
+  test("a legacy failure initializes routing without consuming an extra round", () => {
+    const {repository, baseSha, headSha} = createReviewRepository();
+    const item = "legacy-routing-init";
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    mkdirSync(dirname(paths.jsonPath), {recursive: true});
+    const legacy = {
+      version: 1,
+      item,
+      branch: "feature/review-receipt",
+      baseRef: "master",
+      baseSha,
+      rounds: [],
+      failures: [{headSha, model: "old", attemptedAt: "2026-09-05T00:00:00Z", reason: "timeout"}],
+    };
+    writeFileSync(paths.jsonPath, `${JSON.stringify(legacy)}\n`);
+    const result = runStart(repository, routingDataRepo({reviewer: "codex", model: "current"}), item, "master", {}, [
+      "--implementer-harness", "codex",
+    ]);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    const ledger = readItemLedger(repository, item);
+    expect(ledger.rounds).toHaveLength(1);
+    expect(ledger.rounds[0]).toMatchObject({epoch: 1, logicalRound: 1});
+    expect(ledger.rounds[0].routing.legacyInitialization).toBe(true);
+  });
+
+  test("a new logical round resolves the current alternative configuration", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = routingDataRepo({
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex", model: "round-one"}],
+    });
+    const identityArgs = ["--implementer-harness", "codex-cli"];
+    expect(runStart(repository, dataRepo, "new-round-routing", "master", {
+      FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+    }, identityArgs).status).toBe(0);
+    expect(runDisposition(repository, "new-round-routing", "E1-R1-F1", "rejected", "not a defect").status).toBe(0);
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review: {
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex", model: "round-two"}],
+    }})}\n`);
+    expect(runStart(repository, dataRepo, "new-round-routing", "master", {}, identityArgs).status).toBe(0);
+    const rounds = readItemLedger(repository, "new-round-routing").rounds;
+    expect(rounds[0].routing.finalPasses.every((pass: any) => pass.model === "round-one")).toBe(true);
+    expect(rounds[1].routing.finalPasses.every((pass: any) => pass.model === "round-two")).toBe(true);
+  });
+
+  test("a conflicting identity is rejected without appending evidence", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = routingDataRepo({
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex"}],
+    });
+    expect(runStart(repository, dataRepo, "identity-conflict", "master", {FAKE_SKIP_FILE: "1"}, ["--implementer-harness", "codex"]).status).toBe(1);
+    const before = readItemLedger(repository, "identity-conflict");
+    const conflict = runStart(repository, dataRepo, "identity-conflict", "master", {}, ["--implementer-harness", "claude"]);
+    expect(conflict.status).toBe(1);
+    expect(conflict.stderr).toContain("implementer harness conflicts");
+    expect(readItemLedger(repository, "identity-conflict")).toEqual(before);
+  });
+
+  test("an alternative replaces every persona tuple", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = createPersonaDataRepo({
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex", model: "routed-persona", effort: "low"}],
+    });
+    expect(runStart(repository, dataRepo, "persona-routing", "master", {}, [
+      "--implementer-harness", "codex-cli",
+    ]).status).toBe(0);
+    const routing = readItemLedger(repository, "persona-routing").rounds[0].routing;
+    expect(routing.finalPasses.map((pass: any) => pass.pass)).toEqual(["diff", "adversarial"]);
+    expect(routing.finalPasses.every((pass: any) =>
+      pass.reviewer === "codex" && pass.model === "routed-persona" && pass.effort === "low"
+    )).toBe(true);
+  });
+
+  test("rejects Cursor effort and never falls through a failed selected adapter", () => {
+    const first = createReviewRepository();
+    const cursor = runStart(first.repository, routingDataRepo({
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex"}, reviewer: "cursor", effort: "high"}],
+    }), "cursor-effort", "master", {}, ["--implementer-harness", "codex"]);
+    expect(cursor.status).toBe(1);
+    expect(cursor.stderr).toContain("cursor reviewer does not support effort");
+
+    const supported = createReviewRepository();
+    const claudeArgs = `${mkdtempSync(`${tmpdir()}/loops-claude-override-`)}/args.log`;
+    expect(runStart(supported.repository, routingDataRepo({
+      alternatives: [{when: {harness: "codex"}, reviewer: "cursor", model: "routed-model", effort: "high"}],
+    }), "cursor-overridden", "master", {
+      CLAUDE_BIN: createFakeClaude(),
+      FAKE_CLAUDE_ARGS: claudeArgs,
+    }, ["--implementer-harness", "codex", "--reviewer", "claude"]).status).toBe(0);
+    expect(readFileSync(claudeArgs, "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      {pass: "diff", model: "routed-model", effort: "high"},
+      {pass: "integration", model: "routed-model", effort: "high"},
+      {pass: "adversarial", model: "routed-model", effort: "high"},
+    ]);
+    const overridden = readItemLedger(supported.repository, "cursor-overridden").rounds[0].routing;
+    expect(overridden.explicit).toEqual({reviewer: "claude"});
+    expect(overridden.finalPasses.every((pass: any) =>
+      pass.reviewer === "claude" && pass.model === "routed-model" && pass.effort === "high"
+    )).toBe(true);
+
+    const second = createReviewRepository();
+    const codexLog = `${mkdtempSync(`${tmpdir()}/loops-codex-fallback-`)}/passes.log`;
+    const failed = runStart(second.repository, routingDataRepo({
+      reviewer: "codex",
+      alternatives: [{when: {harness: "codex"}, reviewer: "claude"}],
+    }), "no-fallback", "master", {
+      CLAUDE_BIN: createFakeClaude(),
+      FAKE_CLAUDE_FAIL: "1",
+      FAKE_CODEX_LOG: codexLog,
+    }, ["--implementer-harness", "codex"]);
+    expect(failed.status).toBe(1);
+    expect(existsSync(codexLog)).toBe(false);
+    expect(readItemLedger(second.repository, "no-fallback").failures[0].routing.selection.kind).toBe("alternative");
+  });
+
+  test("a scoped retry pins both its blocking and shadow persona tuples", () => {
+    const {repository} = createReviewRepository();
+    const dataRepo = createPersonaDataRepo({
+      confirmation: "scoped",
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex", model: "saved-route", effort: "high"}],
+    });
+    const identity = ["--implementer-harness", "codex-cli"];
+    expect(runStart(repository, dataRepo, "shadow-routing", "master", {
+      FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+    }, identity).status).toBe(0);
+    expect(runDisposition(repository, "shadow-routing", "E1-R1-F1", "accepted", "fix it", [
+      "--data-repo", dataRepo,
+    ]).status).toBe(0);
+    writeFileSync(`${repository}/change.txt`, "review me, fixed\n");
+    git(repository, ["add", "change.txt"]);
+    git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+    expect(runStart(repository, dataRepo, "shadow-routing", "master", {
+      FAKE_FAIL_PASS: "confirmation",
+    }, [...identity, "--shadow-full"]).status).toBe(1);
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify({review: {
+      reviewer: "codex",
+      maxRounds: 5,
+      confirmation: "scoped",
+      personas: [
+        {name: "diff", fromRound: 1, toRound: 1, model: "new-persona", effort: "low"},
+        {name: "adversarial", fromRound: 1, toRound: 1, model: "new-persona", effort: "low"},
+        {name: "confirmation", fromRound: 2, model: "new-confirmation", effort: "low"},
+      ],
+      alternatives: [{when: {harness: "codex"}, reviewer: "codex", model: "changed-route", effort: "low"}],
+    }})}\n`);
+    expect(runStart(repository, dataRepo, "shadow-routing", "master", {}, [
+      ...identity, "--shadow-full",
+    ]).status).toBe(0);
+    const ledger = readItemLedger(repository, "shadow-routing");
+    expect(ledger.failures[0].routing.finalPasses[0].model).toBe("saved-route");
+    expect(ledger.failures[0].routing.shadowPasses.every((pass: any) => pass.model === "saved-route")).toBe(true);
+    expect(ledger.rounds[1].routing.finalPasses[0].model).toBe("saved-route");
+    expect(ledger.rounds[1].routing.shadowPasses.every((pass: any) => pass.model === "saved-route")).toBe(true);
   });
 });
 

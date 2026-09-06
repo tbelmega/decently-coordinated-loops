@@ -25,9 +25,11 @@ import {
   taxonomyEnabled,
   type LoopsConfig,
   type ReviewAuditPass,
+  type ReviewAlternativeConfig,
   type ReviewClassConfig,
   type ReviewConfig,
   type ReviewConfirmation,
+  type ReviewImplementerIdentity,
   type ReviewPersonaConfig,
   type ReviewPersonaName,
   type ReviewSeverityFloor,
@@ -83,6 +85,13 @@ import {
 import { acquireReviewLock } from "./review-lock.ts";
 import { writeFileAtomically } from "./atomic-write.ts";
 import { getReviewer, isReviewerId, reviewerIds, type Reviewer } from "./reviewers.ts";
+import {
+  bindImplementerIdentity,
+  matchReviewerAlternative,
+  planReviewerPasses,
+  type ReviewPassTemplate,
+  type ReviewRoutingEvidence,
+} from "./reviewer-routing.ts";
 import { reviewPrompt, type ReviewContextDocument } from "./review-prompt.ts";
 import {
   evaluateReviewStatus,
@@ -103,10 +112,12 @@ interface PlannedPass {
 interface StartOptions {
   baseRef: string;
   item?: string;
-  reviewer: Reviewer;
+  reviewer?: Reviewer;
   model?: string;
   /** Reasoning-effort override from config or `--effort`; undefined uses the CLI default. */
   effort?: string;
+  alternatives?: ReviewAlternativeConfig[];
+  implementerIdentity: ReviewImplementerIdentity;
   /** Effective round cap from config or an owner-authorized `--max-rounds` override. */
   maxRounds?: number;
   /** Step-back note path answering an armed remediation-churn tripwire (C1). */
@@ -328,7 +339,7 @@ function resolveReviewPolicy(dataRepoFlag?: string): {
 /** Resolves which reviewer + model to use: explicit flags win, else the resolved
  * review policy (see resolveReviewPolicy). */
 function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string }): {
-  reviewer: Reviewer;
+  reviewer?: Reviewer;
   model?: string;
   effort?: string;
   maxRounds?: number;
@@ -344,19 +355,15 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
   applyProfile?: (name: string) => ReviewConfig;
   authority?: ReviewAuthority;
   dataRepo?: string;
+  alternatives?: ReviewAlternativeConfig[];
 } {
   const { review, dataRepo, project, projectRepo, profileName, applyProfile } = resolveReviewPolicy(flags.dataRepo);
   const id = flags.reviewer ?? review?.reviewer;
-  if (!id) {
-    throw new Error(
-      "no reviewer configured - set review.reviewer in loops.json (run setup) or pass --reviewer <" +
-        reviewerIds.join("|") +
-        ">",
-    );
+  if (id !== undefined && !isReviewerId(id)) {
+    throw new Error(`unknown reviewer "${id}" - expected one of ${reviewerIds.join(", ")}`);
   }
-  if (!isReviewerId(id)) throw new Error(`unknown reviewer "${id}" - expected one of ${reviewerIds.join(", ")}`);
   return {
-    reviewer: getReviewer(id),
+    ...(isReviewerId(id) ? {reviewer: getReviewer(id)} : {}),
     model: flags.model ?? review?.model,
     effort: flags.effort ?? review?.effort,
     maxRounds: review?.maxRounds,
@@ -368,6 +375,7 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
     ...(review?.capExit ? { capExit: review.capExit } : {}),
     ...(review?.testBackedCapExit ? {testBackedCapExit: true} : {}),
     ...(review?.personas ? { personas: review.personas } : {}),
+    ...(review?.alternatives !== undefined ? {alternatives: review.alternatives} : {}),
     ...(profileName !== undefined ? { profileName } : {}),
     ...(applyProfile ? { applyProfile } : {}),
     ...(dataRepo
@@ -384,7 +392,16 @@ function resolveReviewer(flags: { reviewer?: string; dataRepo?: string; model?: 
 }
 
 function parseStartOptions(args: string[]): StartOptions {
-  const flags: { reviewer?: string; dataRepo?: string; model?: string; effort?: string; item?: string } = {};
+  const flags: {
+    reviewer?: string;
+    dataRepo?: string;
+    model?: string;
+    effort?: string;
+    item?: string;
+    implementerHarness?: string;
+    implementerModel?: string;
+    implementerEffort?: string;
+  } = {};
   let baseRef = "";
   let maxRounds: number | undefined;
   let stepBack: string | undefined;
@@ -401,6 +418,9 @@ function parseStartOptions(args: string[]): StartOptions {
     else if (arg === "--reviewer" && value) flags.reviewer = value;
     else if (arg === "--model" && value) flags.model = value;
     else if (arg === "--effort" && value) flags.effort = value;
+    else if (arg === "--implementer-harness" && value && !value.startsWith("--")) flags.implementerHarness = value;
+    else if (arg === "--implementer-model" && value && !value.startsWith("--")) flags.implementerModel = value;
+    else if (arg === "--implementer-effort" && value && !value.startsWith("--")) flags.implementerEffort = value;
     else if (arg === "--item" && value) flags.item = value;
     else if (arg === "--step-back" && value) stepBack = value;
     else if (arg === "--max-rounds" && value) {
@@ -418,9 +438,15 @@ function parseStartOptions(args: string[]): StartOptions {
   return {
     baseRef,
     item: flags.item,
-    reviewer: configured.reviewer,
+    ...(configured.reviewer ? {reviewer: configured.reviewer} : {}),
     model: configured.model,
     effort: configured.effort,
+    ...(configured.alternatives !== undefined ? {alternatives: configured.alternatives} : {}),
+    implementerIdentity: {
+      ...(flags.implementerHarness ? {harness: flags.implementerHarness} : {}),
+      ...(flags.implementerModel ? {model: flags.implementerModel} : {}),
+      ...(flags.implementerEffort ? {effort: flags.implementerEffort} : {}),
+    },
     maxRounds: maxRounds ?? configured.maxRounds,
     ...(maxRounds !== undefined ? {maxRoundsFlag: maxRounds} : {}),
     ...(flags.reviewer !== undefined && isReviewerId(flags.reviewer)
@@ -854,7 +880,6 @@ async function startReview(options: StartOptions): Promise<void> {
     const headSha = git(["rev-parse", "--verify", "HEAD^{commit}"]);
     git(["merge-base", "--is-ancestor", resolvedBaseSha, headSha]);
     const paths = reviewEvidencePaths(repository, branch, options.item);
-    const modelLabel = options.model ?? `${options.reviewer.id} (default)`;
     const context = loadReviewContext(repository, options.dataRepo, options.item);
     // C8 item-level profile selection: honored only when the linked spec is a tracked
     // file at HEAD whose own front matter names the profile. A selection failing any
@@ -906,6 +931,7 @@ async function startReview(options: StartOptions): Promise<void> {
     const currentPatchIds = gitPatchIds(repository, resolvedBaseSha, headSha);
     let ledger: ReviewLedger;
     let baseSha: string;
+    let freshRoutingEpoch = false;
     let auditKind: ReviewRoundAudit["kind"] = "full";
     let baseDeltaRange: {baseSha: string; headSha: string} | undefined;
     try {
@@ -937,6 +963,7 @@ async function startReview(options: StartOptions): Promise<void> {
             patchIds: currentPatchIds,
             archivedAt: new Date().toISOString(),
           });
+          freshRoutingEpoch = true;
         }
       } else {
         baseSha = ledger.baseSha;
@@ -964,6 +991,7 @@ async function startReview(options: StartOptions): Promise<void> {
           baseSha,
           patchIds: currentPatchIds,
         });
+        freshRoutingEpoch = true;
       } else {
         throw error;
       }
@@ -1001,6 +1029,15 @@ async function startReview(options: StartOptions): Promise<void> {
     }
     const classes = governing.review?.classes;
 
+    const legacyRoutingInitialization = ledger.routingVersion !== 1;
+    const implementerIdentity = bindImplementerIdentity(
+      freshRoutingEpoch ? undefined : ledger.implementerIdentity,
+      options.implementerIdentity,
+      freshRoutingEpoch || legacyRoutingInitialization,
+    );
+    ledger = {...ledger, routingVersion: 1, implementerIdentity};
+    let attemptRouting: ReviewRoutingEvidence | undefined;
+    let modelLabel = options.model ?? `${options.reviewer?.id ?? "reviewer"} (default)`;
     try {
       const obligations = openObligations(ledger);
       // The same-HEAD remediation guard holds on EVERY path, not only same-base: a
@@ -1154,22 +1191,6 @@ async function startReview(options: StartOptions): Promise<void> {
       const usingPersonas = options.personas !== undefined;
       const personaCovers = (persona: ReviewPersonaConfig, round: number): boolean =>
         persona.fromRound <= round && (persona.toRound === undefined || round <= persona.toRound);
-      // Precedence per persona: an explicit run-level flag first (one-run override),
-      // then the persona's own value, then the resolved review block.
-      const plannedPersona = (persona: ReviewPersonaConfig): PlannedPass => {
-        const reviewer = options.reviewerFlag
-          ?? (persona.reviewer !== undefined && isReviewerId(persona.reviewer)
-            ? getReviewer(persona.reviewer)
-            : options.reviewer);
-        const model = options.modelFlag ?? persona.model ?? options.model;
-        const effort = options.effortFlag ?? persona.effort ?? options.effort;
-        return {
-          pass: persona.name,
-          reviewer,
-          ...(model ? {model} : {}),
-          ...(effort ? {effort} : {}),
-        };
-      };
       // C3: every persona whose range covers this logical round runs, concurrently;
       // a round no persona covers fails closed. The legacy auditPasses path keeps
       // today's sequential engine untouched.
@@ -1242,16 +1263,110 @@ async function startReview(options: StartOptions): Promise<void> {
           obligations.some((obligation) => obligation.priority === "P0");
       }
       const scopedRange = widenedScope ? undefined : scopedEligible;
-      const plannedPasses: PlannedPass[] = usingPersonas
-        ? (scopedRange && confirmationPersona
-            ? [plannedPersona(confirmationPersona)]
-            : roundPersonas.map(plannedPersona))
+      const activePersonas = usingPersonas
+        ? (scopedRange && confirmationPersona ? [confirmationPersona] : roundPersonas)
+        : [];
+      const templates: ReviewPassTemplate[] = usingPersonas
+        ? activePersonas.map((persona) => ({
+            pass: persona.name,
+            ...(persona.reviewer !== undefined && isReviewerId(persona.reviewer)
+              ? {reviewer: persona.reviewer}
+              : options.reviewer ? {reviewer: options.reviewer.id} : {}),
+            ...(persona.model ?? options.model ? {model: persona.model ?? options.model} : {}),
+            ...(persona.effort ?? options.effort ? {effort: persona.effort ?? options.effort} : {}),
+          }))
         : (scopedRange ? [obligationPass] : configuredPasses).map((pass) => ({
             pass,
-            reviewer: options.reviewer,
+            ...(options.reviewer ? {reviewer: options.reviewer.id} : {}),
             ...(options.model ? {model: options.model} : {}),
             ...(options.effort ? {effort: options.effort} : {}),
           }));
+      const identity = ledger.implementerIdentity ?? {};
+      const previousFailure = ledger.failures?.at(-1);
+      const pendingFailure =
+        previousFailure?.epoch === pendingEpoch &&
+        previousFailure.logicalRound === pendingLogicalRound
+          ? previousFailure
+          : undefined;
+      const retryEvidence = pendingFailure?.routing;
+      const matched = retryEvidence
+        ? undefined
+        : matchReviewerAlternative(options.alternatives ?? [], identity);
+      if (!retryEvidence && (options.alternatives?.length ?? 0) > 0) {
+        const referenced = new Set(
+          options.alternatives?.flatMap((alternative) => Object.keys(alternative.when)) ?? [],
+        );
+        const missing = ["harness", "model", "effort"].filter(
+          (field) => referenced.has(field) && identity[field as keyof ReviewImplementerIdentity] === undefined,
+        );
+        if (missing.length > 0) {
+          process.stderr.write(`reviewer alternatives could not evaluate missing implementer identity fields: ${missing.join(", ")}\n`);
+        }
+      }
+      const explicit = {
+        ...(options.reviewerFlag ? {reviewer: options.reviewerFlag.id} : {}),
+        ...(options.modelFlag ? {model: options.modelFlag} : {}),
+        ...(options.effortFlag ? {effort: options.effortFlag} : {}),
+      };
+      const selections = planReviewerPasses({
+        templates,
+        ...(matched ? {alternative: matched.alternative} : {}),
+        ...(retryEvidence ? {saved: retryEvidence.finalPasses} : {}),
+        explicit,
+        alternativesEnabled:
+          matched !== undefined || retryEvidence?.selection.kind === "alternative",
+      });
+      const plannedPasses: PlannedPass[] = selections.map((selection) => ({
+        pass: selection.pass,
+        reviewer: getReviewer(selection.reviewer),
+        ...(selection.model ? {model: selection.model} : {}),
+        ...(selection.effort ? {effort: selection.effort} : {}),
+      }));
+      const selection = retryEvidence?.selection ?? (matched
+        ? {kind: "alternative" as const, index: matched.index, when: matched.alternative.when}
+        : {kind: "default" as const});
+      attemptRouting = {
+        identity,
+        selection,
+        finalPasses: selections,
+        ...(Object.keys(explicit).length > 0 ? {explicit} : {}),
+        ...(retryEvidence && pendingFailure?.attempt
+          ? {retryOf: `E${pendingEpoch}-R${pendingLogicalRound}-${pendingFailure.attempt}`}
+          : {}),
+        ...(legacyRoutingInitialization ? {legacyInitialization: true as const} : {}),
+      };
+      const firstSelection = selections[0];
+      modelLabel = firstSelection.model
+        ? `${firstSelection.reviewer}/${firstSelection.model}`
+        : `${firstSelection.reviewer} (default)`;
+      let shadowPlanned: PlannedPass[] = [];
+      if (usingPersonas && scopedRange && options.shadowFull) {
+        const shadowTemplates: ReviewPassTemplate[] = (options.personas ?? [])
+          .filter((persona) => personaCovers(persona, 1) && persona.name !== "confirmation")
+          .map((persona) => ({
+            pass: persona.name,
+            ...(persona.reviewer !== undefined && isReviewerId(persona.reviewer)
+              ? {reviewer: persona.reviewer}
+              : options.reviewer ? {reviewer: options.reviewer.id} : {}),
+            ...(persona.model ?? options.model ? {model: persona.model ?? options.model} : {}),
+            ...(persona.effort ?? options.effort ? {effort: persona.effort ?? options.effort} : {}),
+          }));
+        const shadowSelections = planReviewerPasses({
+          templates: shadowTemplates,
+          ...(matched ? {alternative: matched.alternative} : {}),
+          ...(retryEvidence?.shadowPasses ? {saved: retryEvidence.shadowPasses} : {}),
+          explicit,
+          alternativesEnabled:
+            retryEvidence?.selection.kind === "alternative" || matched !== undefined,
+        });
+        shadowPlanned = shadowSelections.map((shadowSelection) => ({
+          pass: shadowSelection.pass,
+          reviewer: getReviewer(shadowSelection.reviewer),
+          ...(shadowSelection.model ? {model: shadowSelection.model} : {}),
+          ...(shadowSelection.effort ? {effort: shadowSelection.effort} : {}),
+        }));
+        attemptRouting = {...attemptRouting, shadowPasses: shadowSelections};
+      }
       // The reviewer sees, and the ledger records, exactly the range that was audited:
       // a manifest still spanning base..head would demand coverage of files this round
       // never asked about, and would overstate what the round proves.
@@ -1410,9 +1525,6 @@ async function startReview(options: StartOptions): Promise<void> {
       let shadowElapsedMs: number | undefined;
       const shadowStats: ReviewPassStats[] = [];
       if (usingPersonas && scopedRange && options.shadowFull) {
-        const shadowPlanned = (options.personas ?? [])
-          .filter((persona) => personaCovers(persona, 1) && persona.name !== "confirmation")
-          .map(plannedPersona);
         if (shadowPlanned.length > 0) {
           const shadowStarted = Date.now();
           const settledShadow = await Promise.allSettled(
@@ -1542,6 +1654,7 @@ async function startReview(options: StartOptions): Promise<void> {
           ...(shadow ? {shadow} : {}),
         },
         ...(stepBack ? {stepBack} : {}),
+        ...(attemptRouting ? {routing: attemptRouting} : {}),
       });
       ledger = carryForwardDispositions(ledger);
       await writeLedger(ledger, paths);
@@ -1555,6 +1668,7 @@ async function startReview(options: StartOptions): Promise<void> {
         model: modelLabel,
         attemptedAt: new Date().toISOString(),
         reason,
+        ...(attemptRouting ? {routing: attemptRouting} : {}),
       });
       await writeLedger(ledger, paths);
       throw error;

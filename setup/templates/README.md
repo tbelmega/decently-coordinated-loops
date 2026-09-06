@@ -41,7 +41,10 @@ bun "{{DCL_HOME}}/tools/review/cli-review.ts" start --base <branch> --data-repo 
 Once configured, agents run the review automatically at the final handoff of a tracked
 item. Set the optional positive integer `review.maxRounds` to override DCL's default
 cap of 3. Each logical round defaults to validated `diff`, `integration`, and
-`adversarial` passes; `review.auditPasses` may select a non-empty subset. Optional
+`adversarial` passes; `review.auditPasses` may select a non-empty subset. Ordered
+`review.alternatives` may replace the reviewer tuple from explicit implementer identity
+prefixes supplied to `cli-review start`; the first match wins and the configured reviewer
+remains the fallback. Optional
 `review.metadataPaths` exact paths or `directory/**` patterns identify landing-only
 bookkeeping that may be committed after a clean review. Optional `review.classes` waive
 findings on record-keeping surfaces, and `review.confirmation: "scoped"` narrows a

@@ -1833,6 +1833,54 @@ describe("renderReviewLedger", () => {
   });
 });
 
+describe("review routing evidence", () => {
+  const routing = {
+    identity: {harness: "codex", model: "gpt-5.6-sol"},
+    selection: {kind: "alternative" as const, index: 0, when: {harness: "codex"}},
+    finalPasses: [{pass: "diff" as const, reviewer: "claude" as const, model: "opus", effort: "high"}],
+    shadowPasses: [{pass: "adversarial" as const, reviewer: "claude" as const, model: "opus", effort: "high"}],
+  };
+
+  test("new ledgers bind an empty identity for the epoch while legacy ledgers remain readable", () => {
+    const current = createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"});
+    expect(current.routingVersion).toBe(1);
+    expect(current.implementerIdentity).toEqual({});
+    const legacy = {...current};
+    delete legacy.routingVersion;
+    delete legacy.implementerIdentity;
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(legacy)))).toEqual(legacy);
+  });
+
+  test("round-trips optional epoch identity and per-attempt routing evidence", () => {
+    let ledger = createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"});
+    ledger = {...ledger, implementerIdentity: routing.identity};
+    ledger = recordReviewFailure(ledger, {
+      headSha: "h1", model: "claude/opus", attemptedAt: "t1", reason: "timeout", routing,
+    });
+    ledger = addReviewRound(ledger, {
+      headSha: "h1", model: "claude/opus", reviewedAt: "t2", review: {summary: "clean", findings: []}, routing,
+    });
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(ledger)))).toEqual(ledger);
+    const markdown = renderReviewLedger(ledger);
+    expect(markdown).toContain("Implementer identity: harness=codex, model=gpt-5.6-sol");
+    expect(markdown).toContain("Routing: alternative 0");
+    expect(markdown).toContain("diff=claude/opus/high");
+  });
+
+  test("a changed-base epoch clears only the active identity binding", () => {
+    const ledger = {...createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}), implementerIdentity: routing.identity};
+    const next = supersedeLedgerBase(ledger, {baseRef: "new-base", baseSha: "new", archivedAt: "t2"});
+    expect(next.implementerIdentity).toEqual({});
+  });
+
+  test("rejects malformed nested routing evidence without breaking legacy omission", () => {
+    const legacy = createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"});
+    expect(parseReviewLedger(JSON.parse(JSON.stringify(legacy)))).toEqual(legacy);
+    const malformed = {...legacy, implementerIdentity: {harness: ""}};
+    expect(() => parseReviewLedger(malformed)).toThrow(/implementerIdentity/);
+  });
+});
+
 describe("round notes (C1)", () => {
   test("notes round-trip through the parser and render in their own section", () => {
     const ledger = addReviewRound(
