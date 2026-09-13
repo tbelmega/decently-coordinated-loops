@@ -113,7 +113,9 @@ enumerate every real exit with the board transition it requires:
   \`awaiting: review-merge\`
 - drop the change - \`dropped\`
 
-Never make "approve more rounds" the only option the owner can see.
+Never make "approve more rounds" the only option the owner can see. Before offering
+these exits, give the owner the loops-review cap decision brief: your recommendation,
+each finding still unresolved or fixed but not re-reviewed, and the remaining risk.
 
 **Before printing the receipt, leave the item in a state that is still accurate if the
 owner never replies** - state, next-actor, awaiting, next-step, and the recorded

@@ -479,6 +479,11 @@ describe("generated receipt contract", () => {
       expect(flat).toContain(
         'Never make "approve more rounds" the only option the owner can see.',
       );
+      expect(flat).toContain(
+        "Before offering these exits, give the owner the loops-review cap decision brief: " +
+          "your recommendation, each finding still unresolved or fixed but not re-reviewed, " +
+          "and the remaining risk.",
+      );
     },
   );
 
