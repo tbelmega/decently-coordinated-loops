@@ -1,0 +1,109 @@
+# Glossary
+
+DCL uses the terms below with specific operational meanings across its skills, procedures, and agent instructions.
+
+- **Accepted as limitation**: A review disposition that retains a finding as a documented limitation, creating a documentation obligation instead of a remediation obligation.
+- **Accepted state**: The terminal board state asserting that the owner tested a delivered release and accepted it.
+- **Base supersession**: Replacement of the base for a changed patch series, which begins a new review epoch while preserving the earlier ledger history.
+- **Blocked state**: The board state indicating that progress is waiting on an owner decision, another item, or an outage.
+- **Board item**: The canonical item file that records a work-stream's lifecycle, assignment, dependencies, current next step, and append-only history.
+- **Cadence**: The configured interval or schedule at which a periodic dispatcher fires.
+- **Cap exit**: A configured terminal review outcome that permits specifically allowed residual obligations at the review-round cap.
+- **Capability gate**: The eligibility check that determines whether the available agent or worker tier fits an item's recorded requirements.
+- **Carried decision**: An eligible finding disposition inherited automatically when the same finding recurs in a later review round.
+- **Causal scope**: The ledger rules that identify what caused a finding and whether it belongs to the current work-stream.
+- **Change class**: An owner-configured functional category that can authorize defined review handling, including limited waivers, for matching changes.
+- **Claim**: An assignment or state change that becomes authoritative across machines only after its data-repo commit is pushed successfully.
+- **Clean review**: A current-HEAD review result with no blocking findings or unresolved obligations under the configured policy.
+- **Cleanup work**: Trust-maintenance work that checks stale specifications, follow-ups, research, or board records against current evidence.
+- **Completion receipt**: The required four-line handoff summary reporting implementation, verification, review, and the next step or options.
+- **Confirmation round**: A later review round that checks required remediation or documentation, confirms qualifying rejected decisions, scans for regression, and looks for new defects.
+- **Current-HEAD status**: A review verdict evaluated against the repository's exact current `HEAD`, not merely the last commit a reviewer examined.
+- **Current-workstream causality**: A finding classification that attributes the problem to the current change and can therefore create a remediation obligation.
+- **Data repo**: The private repository that stores board items, queues, project registration, and owner-specific configuration and policy.
+- **DCL clone**: The shared repository containing the workflow skills, tools, and templates, distinct from a user's private data repo.
+- **Decision notice**: An outbox record of a reversible provisional decision that lets work continue while preserving the owner's ability to reverse it.
+- **Decision-bearing field**: Persisted review data whose value affects the gate and must therefore be covered or revalidated by evidence.
+- **Delegated follow-up**: A finding disposition that assigns remediation to a separate active board item under the review policy's validation rules.
+- **Delegated landing**: A merge policy that authorizes an agent to fast-forward reviewed work onto the integration branch under specified safeguards.
+- **Delivered state**: The board state asserting that verified work was released to the owner's target environment and now awaits acceptance.
+- **Dependency gate**: The rule that an item is not ready until each required `depends-on` target has landed or qualifies as its exact stack parent.
+- **Descriptive item**: An item that documents existing behavior and therefore depends on the implementation items whose behavior it describes.
+- **Deterministic manifest**: The persisted reproducible inventory of files, hunks, instructions, and linked context supplied to a review round.
+- **Dispatcher**: A long-lived session that holds a recurring job and invokes unattended pickup on its configured schedule.
+- **Disposition**: The persisted decision describing how a review finding is handled, such as accepted, rejected, waived, or deferred.
+- **Documentation obligation**: A review requirement to record an accepted limitation honestly at its declared tracked path and obtain confirmation of that documentation.
+- **Dropped state**: The terminal board state indicating that a work-stream was abandoned.
+- **Equality gate**: The publication check that proves an exported staged tree exactly matches the reviewed commit tree.
+- **Exact lease**: A compare-and-swap ref update that permits landing only while the integration ref still equals the expected commit.
+- **Exempt shortcut**: A historical proposal for passing review without invoking a reviewer when a configured exemption covered the complete change; it is not part of the current mechanism.
+- **Failed review attempt**: A durable unsuccessful reviewer invocation attached to a pending logical round that does not consume the round cap.
+- **Finalization**: Advisory review of a refined draft before it is presented to the owner for approval.
+- **Firing**: One complete periodic-dispatch cycle, including prior-obligation handling and substantive eligible work.
+- **Gate-exempt obligation**: A cross-project duty that applies regardless of whether the current checkout passes the board participation gate.
+- **Governance mode**: Review mode in which declared instruction-file changes are evaluated as proposed rules against an owner-approved spec.
+- **Hermetic gate**: Verification that runs without credentials, deployments, or environment-dependent services.
+- **Idea state**: The board state for work that has been captured but has not yet reached an approved specification or implementation.
+- **Implemented state**: The board state asserting that the change is complete on its working branch and review has been requested under the configured policy.
+- **In-progress state**: The board state indicating that implementation or other substantive work is actively underway.
+- **Inbox dump zone**: The intentionally unstructured section of `INBOX.md` where the owner records raw thoughts for later processing.
+- **Instruction file**: Executed prose, such as `AGENTS.md` or a skill, whose content directs agent behavior.
+- **Land or landed**: To establish as a Git fact that a change is present on the project's integration branch, whether by ancestry or the configured equivalence check.
+- **Landed adapter**: The configured integration check used to determine whether an item's recorded change has landed.
+- **Lifecycle tail**: The project-specific sequence after verification, ending at `tested` for no-deploy projects or continuing through delivery and acceptance.
+- **Linked spec**: The owner-approved specification used as the acceptance authority for a reviewed change range.
+- **Logical review round**: One numbered review cycle in an epoch, including reviewer passes, findings, dispositions, and required remediation.
+- **Mechanism defect**: A suspected failure in the review system itself that ordinary changes to the implementation cannot resolve.
+- **Merged state**: The board state recorded after landing that transfers responsibility to agent-owned integrated verification, not a generic Git merge event.
+- **Metadata path**: A configured landing or bookkeeping path whose isolated change may preserve otherwise current review evidence.
+- **Metadata-only commit**: A commit changing only configured landing or bookkeeping paths, which may preserve an otherwise clean review.
+- **No-deploy lifecycle**: A project lifecycle in which agent verification at `tested` is terminal because no release event exists.
+- **One-shot prompt**: A scheduled prompt intended to run once, commonly to trigger post-firing compaction.
+- **One-way door**: An archival transition that automated sync does not reverse and that requires a deliberate manual file move to reopen.
+- **Orchestrator mode**: Pickup mode in which the coordinating agent may route implementation to an eligible worker while retaining board responsibility.
+- **Outbox entry**: A numbered structured question, proposal, approval request, or decision notice awaiting owner handling.
+- **Owner**: The human identified by the data repo's house rules who controls the decisions and operations reserved to that role.
+- **Owner-owned landing**: A merge policy in which reviewed work remains at `implemented` and awaits the owner's integration action.
+- **Participation gate**: The checkout registration check that decides whether normal board operations apply to the current repository.
+- **Patch-equivalent rebase**: A base rewrite that preserves the reviewed patch's effective content and may retain review evidence where policy permits.
+- **Periodic dispatch**: Recurring unattended pickup that must perform preflight and substantive eligible work during each firing.
+- **Permanent slot**: A documented persistent worktree and branch lane used for a bounded sequence of unlanded items.
+- **Pointer grammar**: The restricted syntax accepted for repository and branch references in cross-workstream review dispositions.
+- **Prescriptive item**: An item that directs future construction, such as a specification or plan, and therefore does not depend on implementation it describes.
+- **Prior-obligation sweep**: The required resolution or accurate parking of unfinished duties from earlier work before a dispatcher begins new work.
+- **Promoted refinement**: An approved board-side draft committed to the project's spec location, after which that spec becomes authoritative.
+- **Pure projection**: A generated representation, such as `BOARD.md`, that is derived from canonical files and must not override them.
+- **Quality gate**: The project's required typecheck, test, and related checks run on implementation work before review.
+- **Refinement**: Board-side design work that turns an unclear item into an implementable proposal without prematurely committing a project spec.
+- **Remediation obligation**: A required correction or response created by an accepted review finding.
+- **Remediation-churn tripwire**: The guard that requires a written step-back analysis before another round after two consecutive reviews are dominated by remediation findings.
+- **Review cap**: The maximum number of logical review rounds authorized for one review epoch.
+- **Review epoch**: A sequence of logical rounds sharing one base lineage, reset when the reviewed patch series is superseded.
+- **Review ledger**: The item-scoped JSON evidence and Markdown report stored under `.reviews/` in the target repository.
+- **Review policy authority**: The recorded data repo and project configuration identity allowed to govern review classes, waivers, and related decisions.
+- **Review-base tag**: A local Git tag that fixes the starting commit of an item's review range.
+- **Review-merge**: The `awaiting` category indicating that reviewed implementation needs owner-owned landing.
+- **Routing**: Applying an outbox answer to its source item or specification and then removing the answered entry.
+- **Self mode**: Pickup mode in which the active agent claims only work that fits its own capability and assignment lane.
+- **Session-bound cron**: A recurring schedule whose jobs exist only within the conversation session that created them.
+- **Source of truth**: The canonical artifact whose contents prevail when a derived artifact disagrees, particularly item files over `BOARD.md`.
+- **Spec gate**: The rule that unattended authorization does not substitute for a concrete, reachable, owner-approved implementation specification.
+- **Spec-filed state**: The board state asserting that an owner-approved specification is committed and reachable at the item's recorded spec link.
+- **Spec-sized**: Too broad or decision-heavy to implement from the item alone, requiring an approved spec or an explicit owner waiver.
+- **Stack parent**: The preceding item whose exact unlanded reviewed head is the deliberate base of a child item in the same slot.
+- **Stagger offset**: A deliberate schedule shift that prevents several dispatchers from firing simultaneously.
+- **Stale review**: Review evidence that no longer applies because its branch, base, `HEAD`, or non-metadata content changed.
+- **Stopped ask**: An outbox question or approval request that blocks progress and must be surfaced directly to the owner at attended handoff.
+- **Substantive eligible work**: Work that materially advances a ready item, excluding preflight, routing, bookkeeping, or parking by themselves.
+- **Tail**: Short form for the project-specific lifecycle tail after agent verification.
+- **Terminal state**: A lifecycle state that finishes or abandons a work-stream and routes it out of the active board.
+- **Test-backed cap exit**: A configured cap exit that relies on committed regression evidence and the full quality gate instead of another review round.
+- **Tested state**: The state asserting that landed work passed the project's integrated verification gate, terminal for a no-deploy lifecycle.
+- **Tracked elsewhere**: A review disposition that points to a separately landing fix outside the reviewed range using a board item, `repo#branch`, or path.
+- **Unattended pickup**: Selection and progression of eligible board work without live owner interaction.
+- **Verification pickup**: Pickup of a `merged` item to test its landed integration-branch state rather than continue implementation.
+- **Verify gate**: The project-specific checks run against landed integration-branch work before moving an item to `tested`.
+- **Waived by policy**: A finding disposition permitted by an owner-configured change class for the finding's priority and scope.
+- **Work-stream**: A coherent tracked body of work represented by one board item.
+- **Wrap gap**: The shortened interval between the last firing of one day and the first firing of the next after an interval is converted to clock times.
+- **Zero-context hunk**: A diff hunk recorded without surrounding unchanged lines so the manifest captures only changed content.
