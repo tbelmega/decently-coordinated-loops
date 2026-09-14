@@ -35,7 +35,9 @@ Draft and intent paths may be outside the checkout or uncommitted:
 
 ```bash
 bun "$DCL_HOME/tools/review/cli-review.ts" draft-start --item <item-slug> \
-  --draft <draft-path> --intent <recorded-decisions-path> --data-repo <data-repo>
+  --draft <draft-path> --intent <recorded-decisions-path> --data-repo <data-repo> \
+  --implementer-harness <harness> --implementer-model <model> \
+  --implementer-effort <effort>
 bun "$DCL_HOME/tools/review/cli-review.ts" draft-disposition --item <item-slug> \
   --finding D1-F1 --status addressed --reason "<what changed within agreed intent>" \
   --data-repo <data-repo>
@@ -45,6 +47,13 @@ bun "$DCL_HOME/tools/review/cli-review.ts" draft-status --item <item-slug> \
 
 The same global/profile/project configuration and per-pass overrides select the reviewer,
 model and effort; `--reviewer`, `--model`, and `--effort` take precedence for one run.
+Supply every known identity field for the model responsible for producing the reviewed
+draft on each `draft-start`. Here, implementer identity includes research, brainstorming,
+specification, documentation, and code work; it is not limited to code implementation.
+The identity is explicit self-report and is recorded per draft attempt because the
+responsible model can change between revisions. Omit genuinely unknown fields. The CLI
+warns when configured alternatives reference fields that were not supplied, and it uses
+the default plan when no alternative matches.
 All configured personas for that round together consume one round. The CLI snapshots
 both inputs, invokes the existing adapters, validates the existing JSON response schema,
 and records findings, notes, pass settings and decisions in `.reviews/drafts/<item>.json`
@@ -142,10 +151,12 @@ bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
   --implementer-effort <effort>
 ```
 
-Supply the responsible implementer's known identity fields on the first implementation-review
-start. Omit genuinely unknown fields; the CLI warns when configured conditions need them and
-falls back to the default. Identity is explicit self-report, not authenticated provenance, and is
-never inferred from Git, assignee, launcher, or reviewer. It is fixed for the review epoch:
+Supply every known identity field for the model responsible for producing the reviewed work on
+the first implementation-review start. Here, implementer identity includes research,
+brainstorming, specification, documentation, and code work; it is not limited to code
+implementation. Omit genuinely unknown fields; the CLI warns when configured conditions need
+them and falls back to the default. Identity is explicit self-report, not authenticated
+provenance, and is never inferred from Git, assignee, launcher, or reviewer. It is fixed for the review epoch:
 continuations may repeat identical values or omit them, while changing or adding a value requires
 a changed-base epoch.
 

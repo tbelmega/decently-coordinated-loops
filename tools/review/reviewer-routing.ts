@@ -79,6 +79,16 @@ export function matchReviewerAlternative(
   return undefined;
 }
 
+export function missingReviewerAlternativeIdentityFields(
+  alternatives: readonly ReviewAlternativeConfig[],
+  identity: ReviewImplementerIdentity,
+): (keyof ReviewImplementerIdentity)[] {
+  const referenced = new Set(alternatives.flatMap((alternative) => Object.keys(alternative.when)));
+  return (["harness", "model", "effort"] as const).filter(
+    (field) => referenced.has(field) && identity[field] === undefined,
+  );
+}
+
 export function planReviewerPasses(input: {
   templates: ReviewPassTemplate[];
   alternative?: ReviewAlternativeConfig;

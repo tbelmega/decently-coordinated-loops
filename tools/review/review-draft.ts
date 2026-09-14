@@ -11,13 +11,14 @@ import {createHash} from "node:crypto";
 import {existsSync, mkdirSync, readFileSync, realpathSync, statSync} from "node:fs";
 import {isAbsolute, join, relative, resolve} from "node:path";
 import {execFileSync} from "node:child_process";
-import {reviewAuditPasses, reviewPersonaNames, type ReviewConfig, type ReviewPersonaName} from "../config.ts";
+import {reviewAuditPasses, reviewPersonaNames, type ReviewConfig, type ReviewImplementerIdentity, type ReviewPersonaName} from "../config.ts";
 import {combineReviewPasses, parseReviewPass, type CombinedAuditFinding, type CombinedAuditNote, type ReviewPassResult, type ReviewCoverageManifest} from "./review-audit.ts";
 import {parseItemFileText} from "../parse.ts";
 import {priorityDefinitions} from "./review-prompt.ts";
 import {getReviewer, isReviewerId, type ReviewerId} from "./reviewers.ts";
 import {acquireReviewLock} from "./review-lock.ts";
 import {writeFileAtomically} from "./atomic-write.ts";
+import {matchReviewerAlternative, missingReviewerAlternativeIdentityFields, planReviewerPasses, type ReviewPassTemplate, type ReviewRoutingSelection} from "./reviewer-routing.ts";
 
 interface DraftPolicy {
   review?: ReviewConfig;
@@ -30,11 +31,13 @@ interface Snapshot {path: string; content: string; digest: string}
 interface PassPlan {pass: ReviewPersonaName; reviewer: ReviewerId; model?: string; effort?: string}
 interface DraftPass extends PassPlan {result: ReviewPassResult}
 interface DraftFinding extends CombinedAuditFinding {id: string}
+interface DraftRoutingEvidence {identity: ReviewImplementerIdentity; selection: ReviewRoutingSelection}
 interface DraftAttempt {
   round: number;
   state: "running" | "completed" | "failed";
   startedAt: string;
   authorization?: string;
+  routing?: DraftRoutingEvidence;
   draft?: Snapshot;
   intent?: Snapshot;
   planned: PassPlan[];
@@ -77,6 +80,32 @@ function list(value: unknown): unknown[] {
 function positive(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw new Error("invalid draft round limit or number");
   return value;
+}
+function nonNegative(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("invalid draft alternative index");
+  return value;
+}
+function identity(value: unknown, allowEmpty = true): ReviewImplementerIdentity {
+  const input = object(value);
+  const allowed = new Set(["harness", "model", "effort"]);
+  const unknown = Object.keys(input).find((key) => !allowed.has(key));
+  if (unknown) throw new Error(`invalid draft work identity field: ${unknown}`);
+  const result: ReviewImplementerIdentity = {
+    ...(input.harness !== undefined ? {harness: string(input.harness)} : {}),
+    ...(input.model !== undefined ? {model: string(input.model)} : {}),
+    ...(input.effort !== undefined ? {effort: string(input.effort)} : {}),
+  };
+  if (!allowEmpty && Object.keys(result).length === 0) throw new Error("invalid empty draft alternative condition");
+  return result;
+}
+function routing(value: unknown): DraftRoutingEvidence {
+  const input = object(value), selection = object(input.selection);
+  if (selection.kind === "default") {
+    if (Object.keys(selection).length !== 1) throw new Error("invalid default draft routing selection");
+    return {identity: identity(input.identity), selection: {kind: "default"}};
+  }
+  if (selection.kind !== "alternative") throw new Error("invalid draft routing selection");
+  return {identity: identity(input.identity), selection: {kind: "alternative", index: nonNegative(selection.index), when: identity(selection.when, false)}};
 }
 function digest(content: string): string {return createHash("sha256").update(content).digest("hex");}
 function snapshot(path: string): Snapshot {
@@ -131,6 +160,7 @@ function parseRecord(value: unknown): DraftRecord {
     const attempt: DraftAttempt = {round, state: entry.state, startedAt: string(entry.startedAt), planned, passes, findings: [], notes: [],
       severityFloor: entry.severityFloor, ...(draft ? {draft} : {}), ...(intent ? {intent} : {}),
       ...(entry.authorization !== undefined ? {authorization: string(entry.authorization)} : {}),
+      ...(entry.routing !== undefined ? {routing: routing(entry.routing)} : {}),
       ...(entry.error !== undefined ? {error: string(entry.error)} : {})};
     combined(attempt);
     return attempt;
@@ -161,6 +191,10 @@ function markdown(record: DraftRecord): string {
     `Draft: ${literal(record.draftPath)}`, `Intent: ${literal(record.intentPath)}`, ...record.attempts.flatMap((attempt) => ["",
       `## Round ${attempt.round} attempt: ${attempt.state}`, `Started: ${literal(attempt.startedAt)}`,
       ...(attempt.authorization ? [`Owner authorization: ${literal(attempt.authorization)}`] : []),
+      ...(attempt.routing ? [
+        `Work identity: ${literal(attempt.routing.identity.harness ?? "unknown")} / ${literal(attempt.routing.identity.model ?? "unknown")} / ${literal(attempt.routing.identity.effort ?? "unknown")}`,
+        `Routing: ${attempt.routing.selection.kind === "alternative" ? `alternative ${attempt.routing.selection.index}` : "default"}`,
+      ] : []),
       ...(attempt.error ? [`Failure: ${literal(attempt.error)}`] : []),
       ...(attempt.draft ? [`Draft digest: ${attempt.draft.digest}`] : []),
       ...(attempt.intent ? [`Intent digest: ${attempt.intent.digest}`] : []),
@@ -195,7 +229,7 @@ function status(record: DraftRecord | undefined, path: string): void {
 
 export async function runDraftCommand(command: string, args: string[], resolvePolicy: (dataRepo?: string) => DraftPolicy): Promise<void> {
   const common = ["--item", "--data-repo"];
-  const allowed = command === "draft-start" ? [...common, "--draft", "--intent", "--reviewer", "--model", "--effort", "--max-rounds", "--authorization"]
+  const allowed = command === "draft-start" ? [...common, "--draft", "--intent", "--reviewer", "--model", "--effort", "--implementer-harness", "--implementer-model", "--implementer-effort", "--max-rounds", "--authorization"]
     : command === "draft-disposition" ? [...common, "--finding", "--status", "--reason"] : common;
   const flags = new Map<string, string>();
   for (let index = 0; index < args.length; index += 2) {
@@ -263,16 +297,42 @@ export async function runDraftCommand(command: string, args: string[], resolvePo
     try {
       attempt.draft = snapshot(draftPath); attempt.intent = snapshot(intentPath);
       const review = policy.review ?? {};
+      const workIdentity: ReviewImplementerIdentity = {
+        ...(flags.has("--implementer-harness") ? {harness: flags.get("--implementer-harness")!} : {}),
+        ...(flags.has("--implementer-model") ? {model: flags.get("--implementer-model")!} : {}),
+        ...(flags.has("--implementer-effort") ? {effort: flags.get("--implementer-effort")!} : {}),
+      };
+      const alternatives = review.alternatives ?? [];
+      const missing = missingReviewerAlternativeIdentityFields(alternatives, workIdentity);
+      if (missing.length > 0) {
+        process.stderr.write(`reviewer alternatives could not evaluate missing implementer identity fields: ${missing.join(", ")}\n`);
+      }
+      const matched = matchReviewerAlternative(alternatives, workIdentity);
+      attempt.routing = {
+        identity: workIdentity,
+        selection: matched ? {kind: "alternative", index: matched.index, when: matched.alternative.when} : {kind: "default"},
+      };
       attempt.severityFloor = review.severityFloor === "all-rounds" || (review.severityFloor === "round-2-plus" && round >= 2);
       const personas = review.personas?.filter((persona) => persona.fromRound <= round && (persona.toRound === undefined || round <= persona.toRound))
         ?? (review.auditPasses ?? reviewAuditPasses).map((name) => ({name}));
       if (!personas.length) throw new Error(`no configured persona covers draft round ${round}`);
-      attempt.planned = personas.map((persona) => {
-        const reviewer = flags.get("--reviewer") ?? ("reviewer" in persona ? persona.reviewer : undefined) ?? review.reviewer;
-        if (!isReviewerId(reviewer)) throw new Error("no valid reviewer configured for draft review");
-        const model = flags.get("--model") ?? ("model" in persona ? persona.model : undefined) ?? review.model;
-        const effort = flags.get("--effort") ?? ("effort" in persona ? persona.effort : undefined) ?? review.effort;
-        return {pass: persona.name, reviewer, ...(model ? {model} : {}), ...(effort ? {effort} : {})};
+      const explicitReviewer = flags.get("--reviewer");
+      if (explicitReviewer !== undefined && !isReviewerId(explicitReviewer)) throw new Error("no valid reviewer configured for draft review");
+      const templates = personas.map((persona): ReviewPassTemplate => {
+        const reviewer = ("reviewer" in persona ? persona.reviewer : undefined) ?? review.reviewer;
+        const model = ("model" in persona ? persona.model : undefined) ?? review.model;
+        const effort = ("effort" in persona ? persona.effort : undefined) ?? review.effort;
+        return {pass: persona.name, ...(isReviewerId(reviewer) ? {reviewer} : {}), ...(model ? {model} : {}), ...(effort ? {effort} : {})};
+      });
+      attempt.planned = planReviewerPasses({
+        templates,
+        ...(matched ? {alternative: matched.alternative} : {}),
+        explicit: {
+          ...(explicitReviewer ? {reviewer: explicitReviewer as ReviewerId} : {}),
+          ...(flags.has("--model") ? {model: flags.get("--model")!} : {}),
+          ...(flags.has("--effort") ? {effort: flags.get("--effort")!} : {}),
+        },
+        alternativesEnabled: matched !== undefined,
       });
       await save(record, directory);
       const coverage = {files: manifest(attempt.draft, attempt.intent).files, instructionFiles: [], callsites: []};

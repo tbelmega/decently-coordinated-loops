@@ -58,12 +58,63 @@ function createFakeCodex(): string {
   return executable;
 }
 
+function createFakeClaude(): string {
+  const directory = mkdtempSync(join(tmpdir(), "loops-draft-fake-claude-"));
+  const executable = join(directory, "claude");
+  writeFileSync(
+    executable,
+    [
+      "#!/usr/bin/env bun",
+      "const args = Bun.argv.slice(2);",
+      "const prompt = args.at(-1);",
+      'if (!prompt) throw new Error("missing prompt");',
+      'const marker = "DRAFT_REVIEW_INPUT\\n";',
+      "const markerIndex = prompt.indexOf(marker);",
+      'if (markerIndex < 0) throw new Error("missing draft input");',
+      "const input = JSON.parse(prompt.slice(markerIndex + marker.length));",
+      'if (process.env.FAKE_DRAFT_CLAUDE_FAIL) process.exit(7);',
+      'const review = {pass: input.pass, summary: "draft reviewed", coverage: input.coverage, obligations: [], findings: [], notes: []};',
+      "process.stdout.write(JSON.stringify({is_error: false, structured_output: review}));",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(executable, 0o755);
+  return executable;
+}
+
+function createFakeCursor(): string {
+  const directory = mkdtempSync(join(tmpdir(), "loops-draft-fake-cursor-"));
+  const executable = join(directory, "cursor-agent");
+  writeFileSync(
+    executable,
+    [
+      "#!/usr/bin/env bun",
+      "const args = Bun.argv.slice(2);",
+      "const prompt = args.at(-1);",
+      'if (!prompt) throw new Error("missing prompt");',
+      'const marker = "DRAFT_REVIEW_INPUT\\n";',
+      'const suffix = "\\nReturn ONLY a JSON object";',
+      "const markerIndex = prompt.indexOf(marker);",
+      "const suffixIndex = prompt.indexOf(suffix, markerIndex);",
+      'if (markerIndex < 0 || suffixIndex < 0) throw new Error("missing draft input");',
+      "const input = JSON.parse(prompt.slice(markerIndex + marker.length, suffixIndex));",
+      'const review = {pass: input.pass, summary: "draft reviewed", coverage: input.coverage, obligations: [], findings: [], notes: []};',
+      "process.stdout.write(JSON.stringify({is_error: false, result: JSON.stringify(review)}));",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(executable, 0o755);
+  return executable;
+}
+
 interface Fixture {
   repository: string;
   dataRepo: string;
   draft: string;
   intent: string;
   fakeCodex: string;
+  fakeClaude: string;
+  fakeCursor: string;
   recordPath: string;
   markdownPath: string;
   run: (command: string, args?: string[], environment?: Record<string, string>) => SpawnSyncReturns<string>;
@@ -93,11 +144,13 @@ function fixture(review: Record<string, unknown> = {reviewer: "codex"}): Fixture
     JSON.stringify({projects: {[project]: {repo: repository}}, review}),
   );
   const fakeCodex = createFakeCodex();
+  const fakeClaude = createFakeClaude();
+  const fakeCursor = createFakeCursor();
   const run = (command: string, args: string[] = [], environment: Record<string, string> = {}): SpawnSyncReturns<string> =>
     spawnSync(
       process.execPath,
       [CLI, command, "--item", item, "--data-repo", dataRepo, ...args],
-      {cwd: repository, encoding: "utf8", env: {...process.env, CODEX_BIN: fakeCodex, ...environment}},
+      {cwd: repository, encoding: "utf8", env: {...process.env, CODEX_BIN: fakeCodex, CLAUDE_BIN: fakeClaude, CURSOR_AGENT_BIN: fakeCursor, ...environment}},
     );
   return {
     repository,
@@ -105,6 +158,8 @@ function fixture(review: Record<string, unknown> = {reviewer: "codex"}): Fixture
     draft,
     intent,
     fakeCodex,
+    fakeClaude,
+    fakeCursor,
     recordPath: join(repository, ".reviews", "drafts", `${item}.json`),
     markdownPath: join(repository, ".reviews", "drafts", `${item}.md`),
     run,
@@ -330,5 +385,118 @@ describe("draft review CLI", () => {
     const passes = array(attempt.passes, "passes").map((entry) => object(entry, "pass"));
     expect(passes).toHaveLength(2);
     for (const pass of passes) expect(pass).toMatchObject({reviewer: "codex", model: "flag-model", effort: "high"});
+  });
+
+  test("routes every draft persona through the first matching work identity alternative", () => {
+    const f = fixture({
+      reviewer: "codex",
+      model: "default-model",
+      effort: "medium",
+      alternatives: [
+        {when: {model: "gpt-"}, reviewer: "claude", model: "opus", effort: "high"},
+        {when: {harness: "codex"}, reviewer: "codex", model: "later-model", effort: "low"},
+      ],
+    });
+
+    expect(start(f, ["--implementer-harness", "codex", "--implementer-model", "gpt-5.6-sol", "--implementer-effort", "medium"]).status).toBe(0);
+    const attempt = completedAttempts(f)[0]!;
+    expect(attempt.routing).toEqual({
+      identity: {harness: "codex", model: "gpt-5.6-sol", effort: "medium"},
+      selection: {kind: "alternative", index: 0, when: {model: "gpt-"}},
+    });
+    for (const pass of array(attempt.passes, "passes").map((entry) => object(entry, "pass"))) {
+      expect(pass).toMatchObject({reviewer: "claude", model: "opus", effort: "high"});
+    }
+    expect(readFileSync(f.markdownPath, "utf8")).toContain("Work identity: codex / gpt\\-5\\.6\\-sol / medium");
+    expect(readFileSync(f.markdownPath, "utf8")).toContain("Routing: alternative 0");
+  });
+
+  test("uses the default draft plan and warns when alternative identity is missing", () => {
+    const f = fixture({
+      reviewer: "codex",
+      model: "default-model",
+      alternatives: [{when: {model: "gpt-"}, reviewer: "claude", model: "opus", effort: "high"}],
+    });
+
+    const result = start(f);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("reviewer alternatives could not evaluate missing implementer identity fields: model");
+    expect(completedAttempts(f)[0]!.routing).toEqual({identity: {}, selection: {kind: "default"}});
+    for (const pass of array(completedAttempts(f)[0]!.passes, "passes").map((entry) => object(entry, "pass"))) {
+      expect(pass).toMatchObject({reviewer: "codex", model: "default-model"});
+    }
+  });
+
+  test("preserves an unmatched Cursor default plan with configured effort", () => {
+    const f = fixture({
+      reviewer: "cursor",
+      model: "default-model",
+      effort: "high",
+      alternatives: [{when: {model: "gpt-"}, reviewer: "claude", model: "opus", effort: "high"}],
+    });
+
+    const result = start(f, ["--implementer-model", "claude-opus"]);
+    expect(result.status).toBe(0);
+    expect(completedAttempts(f)[0]!.routing).toEqual({identity: {model: "claude-opus"}, selection: {kind: "default"}});
+    for (const pass of array(completedAttempts(f)[0]!.passes, "passes").map((entry) => object(entry, "pass"))) {
+      expect(pass).toMatchObject({reviewer: "cursor", model: "default-model", effort: "high"});
+    }
+  });
+
+  test("keeps explicit draft reviewer options above a matching alternative", () => {
+    const f = fixture({
+      reviewer: "codex",
+      model: "default-model",
+      alternatives: [{when: {model: "gpt-"}, reviewer: "claude", model: "opus", effort: "high"}],
+    });
+
+    expect(start(f, ["--implementer-model", "gpt-6-astra", "--reviewer", "codex", "--model", "explicit-model", "--effort", "medium"]).status).toBe(0);
+    expect(completedAttempts(f)[0]!.routing).toEqual({
+      identity: {model: "gpt-6-astra"},
+      selection: {kind: "alternative", index: 0, when: {model: "gpt-"}},
+    });
+    for (const pass of array(completedAttempts(f)[0]!.passes, "passes").map((entry) => object(entry, "pass"))) {
+      expect(pass).toMatchObject({reviewer: "codex", model: "explicit-model", effort: "medium"});
+    }
+  });
+
+  test("records a selected draft reviewer failure without falling back to the default", () => {
+    const f = fixture({
+      reviewer: "codex",
+      alternatives: [{when: {model: "gpt-"}, reviewer: "claude", model: "opus", effort: "high"}],
+    });
+
+    const result = start(f, ["--implementer-model", "gpt-5.6-sol"], {FAKE_DRAFT_CLAUDE_FAIL: "1"});
+    expect(result.status).not.toBe(0);
+    const attempt = completedAttempts(f)[0]!;
+    expect(attempt).toMatchObject({state: "failed", error: "claude exited with code 7"});
+    expect(array(attempt.planned, "planned")[0]).toMatchObject({reviewer: "claude", model: "opus", effort: "high"});
+    expect(array(attempt.passes, "passes")).toHaveLength(0);
+  });
+
+  test("accepts legacy draft attempts without routing evidence and records identity on a new attempt", () => {
+    const f = fixture({
+      reviewer: "codex",
+      alternatives: [{when: {model: "gpt-"}, reviewer: "claude", model: "opus", effort: "high"}],
+    });
+    expect(start(f)).toHaveProperty("status", 0);
+    const legacy = record(f);
+    const first = object(array(legacy.attempts, "attempts")[0], "attempt");
+    delete first.routing;
+    writeFileSync(f.recordPath, JSON.stringify(legacy, null, 2) + "\n");
+
+    expect(start(f, ["--max-rounds", "2", "--authorization", "owner approved a second round", "--implementer-model", "gpt-5.6-terra"]).status).toBe(0);
+    expect(completedAttempts(f)[0]!.routing).toBeUndefined();
+    expect(completedAttempts(f)[1]!.routing).toEqual({
+      identity: {model: "gpt-5.6-terra"},
+      selection: {kind: "alternative", index: 0, when: {model: "gpt-"}},
+    });
+  });
+
+  test("rejects an incomplete draft identity option before creating evidence", () => {
+    const f = fixture();
+    const result = start(f, ["--implementer-model"]);
+    expect(result.status).not.toBe(0);
+    expect(existsSync(f.recordPath)).toBe(false);
   });
 });

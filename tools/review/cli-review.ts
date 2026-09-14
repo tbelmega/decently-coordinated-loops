@@ -88,6 +88,7 @@ import { getReviewer, isReviewerId, reviewerIds, type Reviewer } from "./reviewe
 import {
   bindImplementerIdentity,
   matchReviewerAlternative,
+  missingReviewerAlternativeIdentityFields,
   planReviewerPasses,
   type ReviewPassTemplate,
   type ReviewRoutingEvidence,
@@ -1293,12 +1294,7 @@ async function startReview(options: StartOptions): Promise<void> {
         ? undefined
         : matchReviewerAlternative(options.alternatives ?? [], identity);
       if (!retryEvidence && (options.alternatives?.length ?? 0) > 0) {
-        const referenced = new Set(
-          options.alternatives?.flatMap((alternative) => Object.keys(alternative.when)) ?? [],
-        );
-        const missing = ["harness", "model", "effort"].filter(
-          (field) => referenced.has(field) && identity[field as keyof ReviewImplementerIdentity] === undefined,
-        );
+        const missing = missingReviewerAlternativeIdentityFields(options.alternatives ?? [], identity);
         if (missing.length > 0) {
           process.stderr.write(`reviewer alternatives could not evaluate missing implementer identity fields: ${missing.join(", ")}\n`);
         }
