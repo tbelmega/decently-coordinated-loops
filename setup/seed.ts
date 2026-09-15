@@ -267,6 +267,7 @@ function packageJsonText(root: string): string {
       scripts: {
         check: scriptFor("cli-check"),
         sync: scriptFor("cli-sync"),
+        "check-integration-status": scriptFor("cli-landed"),
         landed: scriptFor("cli-landed"),
         ready: scriptFor("cli-ready"),
         restamp: scriptFor("cli-restamp"),
@@ -431,7 +432,7 @@ const projectEntries = projects
 
 - repo: \`${p.repo}\`
 - integration branch: \`${branch}\`
-- quality gate: TODO
+- mechanical quality gate: TODO
 - verify gate: TODO
 - specs / follow-ups: TODO
 - notes: TODO

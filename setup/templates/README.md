@@ -22,7 +22,10 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 
 - `bun run check` - report-only board integrity check.
 - `bun run sync` - regenerate `BOARD.md` and move item files per their state.
-- `bun run landed` - check which items' work has landed on the integration branch.
+- `bun run check-integration-status` - check which items' work is integrated into the
+  integration branch. Add `--apply` to record observed integration as the existing
+  `merged` board state. This command does not perform Git integration.
+- `bun run landed` - compatibility alias for `bun run check-integration-status`.
 - `bun run ready` - the dependency gate: which items' `depends-on` targets are satisfied.
 - `bun run restamp` - advance `.loops-version` after reviewing a DCL upgrade.
 - `bun run setup` - wire this machine to this repo: refresh the harness config block and

@@ -54,7 +54,7 @@ written, so they can rename any `.claude-*` directory that is not really a profi
    becomes real:
    - `HOUSE-RULES.md`: harness/model roster, review mechanism, merge policy,
      guardrail additions.
-   - `PROJECTS.md`: each project's quality gate, verify gate, tracker locations
+   - `PROJECTS.md`: each project's mechanical quality gate, verify gate, tracker locations
      (and matching `loops.json` entries: repo path, integration branch, landed
      adapter).
 3. For a new repo: have the user add a git remote and push; origin is the source
@@ -66,6 +66,7 @@ written, so they can rename any `.claude-*` directory that is not really a profi
 
 ## Updating an instance
 
-`git pull` in the DCL clone, re-run `./install.sh`. If the DCL clone moved, also
-re-run `setup/seed.ts <data-repo> --join` (or set `DCL_HOME` in the environment to
-override the path baked into the data repo's `package.json`).
+`git pull` in the DCL clone, re-run `./install.sh`, then run
+`bun setup/seed.ts <data-repo> --join`. The join adds newly generated commands while
+preserving existing scripts and data. If the DCL clone moved, this also refreshes
+the path baked into the data repo's `package.json`; `DCL_HOME` may override it.

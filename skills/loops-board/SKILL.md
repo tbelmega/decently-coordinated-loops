@@ -43,10 +43,10 @@ plus `blocked` (waiting on a decision, another item, or an outage) and `dropped`
 
 | State | Meaning | Folder |
 | --- | --- | --- |
-| `idea` / `spec-filed` / `in-progress` | pre-landing lifecycle | `items/` |
+| `idea` / `spec-filed` / `in-progress` | pre-integration lifecycle | `items/` |
 | `implemented` | change complete on its agent branch; review requested per `HOUSE-RULES.md → Review mechanism` | `items/` |
-| `merged` | landed on the project's integration branch; item becomes agent-owned for verification | `items/` |
-| `tested` | agent-verified per the project's verify gate (loops-pickup → "Verify a landed item") | `for-delivery/`, or `archive/` where the project's tail ends here (below) |
+| `merged` | integrated into the project's integration branch; item becomes agent-owned for verification | `items/` |
+| `tested` | agent-verified per the project's verify gate (loops-pickup → "Verify an integrated item") | `for-delivery/`, or `archive/` where the project's tail ends here (below) |
 | `delivered` | released to the owner's staging/production environment | `for-delivery/` |
 | `accepted` | owner tested the release and accepted | `archive/` |
 | `blocked` | waiting on a decision / another item / outage | `items/` |
@@ -103,11 +103,11 @@ is derived from state, and holding the file back would park it in the limbo the 
 exists to empty), so an unnormalized item is archived carrying a delivery nobody can perform.
 `bun run check` names every such item, before and after the move, until it is edited.
 
-Recording `merged` is a single move that also sets `next-actor: agent`,
+Recording `merged` after integration is a single move that also sets `next-actor: agent`,
 `autonomy: auto`, and `next-step: "Verify per the project verify gate, then flip to
-tested"`, so a landed item is immediately agent-pickable with nothing owed by the
-owner. `bun run landed --apply` writes exactly these. The post-implementation actor
-depends on the instance merge policy: owner-owned landings wait in `review-merge`,
+tested"`, so an integrated item is immediately agent-pickable with nothing owed by the
+owner. `bun run check-integration-status --apply` writes exactly these. The post-implementation actor
+depends on the instance merge policy: owner-owned integration waits in `review-merge`,
 while explicitly delegated landings remain agent-owned:
 
 | State | next-actor | awaiting |
@@ -186,13 +186,14 @@ One short paragraph of context: what this is and why.
 
 ## Dependencies & readiness
 
-`depends-on` lists the items whose **landed** output an item needs to be correct. It
+`depends-on` lists the items whose **integrated** output an item needs to be correct. It
 is a durable structural fact set at filing time, not a status; "blocked on a
 dependency" is derived from this field and the targets' landed status, never stored
 separately, so it can't go stale.
 
 A target is **satisfied** only when its work is on the project's integration branch:
-`bun run landed` reports it LANDED, or its state is `merged`/`tested`/`delivered`/
+`bun run check-integration-status` reports it LANDED, or its state is
+`merged`/`tested`/`delivered`/
 `accepted`. A target still in `implemented` is **not** satisfied (review requested ≠
 landed; nor is `dropped`). Exception: deliberate stacking within one permanent slot
 may build on an unlanded target when the new item records that target as
@@ -236,7 +237,7 @@ and survives the item's archival.
   the `## Refinement` section as promoted (the spec is now the source of truth),
   flip the state to `spec-filed`, and log it.
 - **A `spec-filed` spec must be reachable by other agents.** Flip to `spec-filed`
-  only when the spec commit is landed on the project's integration branch, or
+  only when the spec commit is integrated into the project's integration branch, or
   pushed on an agent branch recorded as `links.spec-branch` (+ `links.spec-sha`); a
   spec that exists only in a local checkout is not filed. Implementation of the
   item bases on that recorded branch/commit (continuing it as a stack where the
@@ -323,12 +324,15 @@ Run from the data-repo root:
   Exits non-zero on findings.
 - `bun run sync` - regenerate `BOARD.md`, route orphan rows to `OUTBOX.md`, move
   item files per state, append `ARCHIVE.md` rows.
-- `bun run landed [--apply]` - check which items' work has landed on the integration
-  branch; `--apply` records observed landings (`implemented → merged`).
+- `bun run check-integration-status [--apply]` - check which items' work is integrated
+  into the integration branch; `--apply` records observed integration
+  (`implemented → merged`) but does not perform Git integration. `bun run landed`
+  remains a compatibility alias.
 - `bun run ready` - the dependency gate: which active items have all their
   `depends-on` targets satisfied (state ∈ `merged`/`tested`/`delivered`/`accepted`)
   vs. blocked by an unsatisfied or missing target. Board-state only; confirm an
-  in-flight (`implemented`) target's real landed status with `bun run landed`.
+  in-flight (`implemented`) target's real integration status with
+  `bun run check-integration-status`.
 - `bun run restamp` - advance `.loops-version` to the DCL clone's current HEAD after
   reviewing an upgrade, clearing the version-drift note `check` prints.
 

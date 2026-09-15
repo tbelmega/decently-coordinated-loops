@@ -1,4 +1,4 @@
-// Pure logic for the PR merge-status check (`bun run landed`).
+// Pure logic for the integration-status check (`bun run check-integration-status`).
 // No IO here - the gh shell-out and token file reads live in cli-landed.ts, so
 // everything below is unit-testable without network or filesystem access.
 import { isMap, isNode, isScalar, parseDocument } from "yaml";
@@ -50,7 +50,7 @@ export function statusKey(item: ItemFile): string | null {
   return statusKeyFor(item.project, identity);
 }
 
-/** What `bun run landed` must do to check one item, and - crucially - the key its
+/** What `bun run check-integration-status` must do to check one item, and - crucially - the key its
  *  result must be stored under. The key is ALWAYS `statusKey(item)`, because that is
  *  what buildMergeReport / itemsToFlipMerged look the result up by. The git adapter
  *  must not key by branch: an item that also carries a `links.pr` would then be
@@ -195,7 +195,7 @@ export function buildMergeReport(
 }
 
 /** Pure: the `implemented` items whose work is reported landed (MERGED) - the flip
- *  candidates for `bun run landed --apply`. Only `implemented` items are eligible;
+ *  candidates for `bun run check-integration-status --apply`. Only `implemented` items are eligible;
  *  anything already at `merged`/`tested`/… is left alone (idempotent), and an item
  *  with no fetched-MERGED status is skipped. Sorted by slug for deterministic output. */
 export function itemsToFlipMerged(

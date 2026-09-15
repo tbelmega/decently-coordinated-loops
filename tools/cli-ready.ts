@@ -6,7 +6,8 @@
 //
 // Board-state only: an `implemented` target counts as unsatisfied here (review
 // requested ≠ landed). When any dependency rides on an in-flight target, confirm its
-// real landed status with `bun run landed` before claiming (loops-pickup). Read-only -
+// real integration status with `bun run check-integration-status` before claiming
+// (loops-pickup). Read-only -
 // mutates nothing. Always exits 0; a dangling target is an integrity error reported by
 // `bun run check`, not here.
 import { existsSync } from "node:fs";
@@ -61,6 +62,6 @@ if (blocked.length) {
 
 if (readiness.some((r) => r.deps.some((d) => d.targetState === "implemented"))) {
   console.log(
-    "\nNote: an `implemented` target is not satisfied by board state alone (review requested ≠ landed) - confirm real landed status with `bun run landed` before claiming.",
+    "\nNote: an `implemented` target is not satisfied by board state alone (review requested ≠ integrated) - confirm real integration status with `bun run check-integration-status` before claiming.",
   );
 }

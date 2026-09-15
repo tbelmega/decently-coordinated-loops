@@ -10,7 +10,7 @@ For draft finalization, use the separate advisory procedure below. For implement
 it returns findings for you to evaluate and decide how to handle. The mechanism is
 forge-independent (no GitHub or PR), works in trusted local Git repositories, and is
 enabled by configuring a reviewer. **Once configured, it
-is the completion gate for every implemented board item, including attended work.**
+is the agentic review gate for every implemented board item, including attended work.**
 Initiate the loop after all internal tasks and commits are complete and final verification
 passes, without waiting for the owner to request it. This satisfies the review request
 in `loops-pickup` under `HOUSE-RULES.md → Review mechanism`.
@@ -82,7 +82,7 @@ risks, and which edits lack re-review. Keep it marked Draft and request the owne
 and explicit approval. The owner may resolve questions, approve, request another round,
 continue drafting, or stop; taking no action leaves the draft unapproved.
 
-This is advisory design review, separate from the implementation completion gate and its
+This is advisory design review, separate from the implementation agentic review gate and its
 ledger, round budget, pass status, and test-backed exit. Do not report an implementation
 pass or waive the later implementation review because a draft was reviewed. Only explicit
 owner approval permits promotion to an approved spec; follow the project's promotion rules.
@@ -237,7 +237,7 @@ bun "$DCL_HOME/tools/review/cli-review.ts" disposition --item <source-item> \
 ```
 
 For urgent owner attention, use `--urgency urgent --escalation "<chat/outbox evidence>"`.
-Urgency changes escalation, not the current workstream's merge gate. The committed item
+Urgency changes escalation, not the current workstream's agentic review gate. The committed item
 is the durable handoff, not a demand for extra proof. When DCL orchestrates review, this
 scope rule takes precedence over standalone review-receiving rules that would sweep and
 fix sibling findings.
@@ -413,7 +413,7 @@ The original reviewer priorities remain unchanged. P0 findings, deferred decisio
 unresolved finding ownership, and documentation obligations do not qualify.
 
 Use this exit only when relevant fixes and meaningful regression coverage are committed,
-the project's full quality gate passes, and no concrete material uncertainty warrants
+the project's mechanical quality gate passes, and no concrete material uncertainty warrants
 more review. Match coverage to the defect: a concurrency fix needs interaction evidence,
 not merely a happy-path test. Explain exposure and recovery; generic uncertainty inherent
 in all code is not itself a reason to block shipment.
@@ -454,7 +454,7 @@ bun "$DCL_HOME/tools/review/cli-review.ts" test-cap-exit --item <item-slug> \
 ```
 
 Commands are argument arrays, executed without a shell. Supply the project's actual full
-quality gate, never a substitute chosen to pass. The CLI runs each regression command
+mechanical quality gate, never a substitute chosen to pass. The CLI runs each regression command
 and the quality command, captures results, and binds evidence to the exact HEAD and
 review state. It requires complete changed-path/obligation coverage and changed, tracked
 regular test files. An incomplete or failed attempt cannot preserve an older test pass.
@@ -498,7 +498,7 @@ owner choices and accurate blocked states above; waiver is neither a passed inde
 review nor deployment authorization.
 
 Example: "Recommend ship with waiver. Focus restoration and label truncation fixes lack
-confirming review; both regression checks and the full gate pass. Remaining risk is a
+confirming review; both regression checks and the mechanical quality gate pass. Remaining risk is a
 presentation regression, with no persistence/auth changes and a practical commit revert.
 No identified material question warrants another broad round. Options: ship with waiver,
 authorize another round, drop, or leave blocked."
@@ -524,7 +524,7 @@ Use a directory outside the repo: prompts embed the whole diff, and a dump insid
 
 ## Changed review base
 
-After rebasing onto a moved integration branch, rerun the full quality gate and review
+After rebasing onto a moved integration branch, rerun the mechanical quality gate and review
 with the same symbolic `--base`. The new base must be an ancestor of HEAD.
 
 - **Patch-equivalent rebase:** retain the ledger and run integration/adversarial passes

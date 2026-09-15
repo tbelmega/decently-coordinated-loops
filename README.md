@@ -113,7 +113,7 @@ Run from the data-repo root:
 | --- | --- |
 | `bun run check` | Report-only integrity check: board vs item files, closed-set validation, version-stamp drift. |
 | `bun run sync` | Regenerate `BOARD.md` from the item files, move items between `items/`/`for-delivery/`/`archive/` per state. Lock-guarded and idempotent, so agents can run it freely. |
-| `bun run landed [--apply]` | Detect which items' work has landed on the integration branch, via the forge API (`github` adapter) or pure git patch-id comparison (`git` adapter). Recorded `base-sha..head-sha` ranges keep stacked items independent as their branch advances. `--apply` records the landings. |
+| `bun run check-integration-status [--apply]` | Detect which items' work is integrated into the integration branch, via the forge API (`github` adapter) or pure git patch-id comparison (`git` adapter). Recorded `base-sha..head-sha` ranges keep stacked items independent as their branch advances. `--apply` records observed integration as the existing `merged` board state. It does not perform Git integration. `bun run landed` is retained as a compatibility alias. |
 
 If the bundled local reviewer is active, run it once from the target project at the
 final handoff of a tracked item. `cli-review.ts status --item <item-slug> --data-repo <data-repo>`
@@ -121,7 +121,7 @@ verifies that a terminal review round covers the current HEAD, or a descendant w
 intervening commits touch only configured landing-metadata paths, and prints the one-line
 evidence agents place in their completion receipt. With opt-in `review.testBackedCapExit`,
 `test-cap-exit` can instead verify committed P1-P3 fixes at the cap using regression checks
-and the full quality gate, reporting explicitly that the fixes lack independent re-review.
+and the mechanical quality gate, reporting explicitly that the fixes lack independent re-review.
 The [loops-review skill](skills/loops-review/SKILL.md) defines evidence and risk requirements.
 Pass the same data repo you passed to
 `start`: the gate re-resolves the review policy from it to authorize any class waiver, and
@@ -145,14 +145,15 @@ either side and re-run `bun run sync`.
   pushed; a rejected push means re-read and re-decide. Within one checkout, sync is
   serialized by a lock file.
 - **Git primitives, not forge assumptions**: the workflow is defined over agent
-  branches, a review mechanism you plug in, and rebase landings. Any git remote works:
+  branches, a review mechanism you plug in, and rebase integration. Any git remote works:
   GitHub, Bitbucket, GitLab, AWS CodeCommit, or a bare repository on a machine you own.
   GitHub PRs are one configuration, not a dependency: the default `landedAdapter` is
-  `git`, which decides what has landed by patch-id comparison and never calls a forge
+  `git`, which decides what is integrated by patch-id comparison and never calls a forge
   API. The bundled reviewer is forge-free by design.
-- **Contracts live in skills, not in your data files**, so `git pull` here
-  upgrades every instance on the machine, and your data repo stays pure data plus
-  local policy.
+- **Contracts live in skills, not in your data files**, so `git pull` here updates
+  the shared contracts. After pulling, run `./install.sh` and
+  `bun setup/seed.ts <data-repo> --join` to refresh harness wiring and add newly
+  generated commands while your data repo stays pure data plus local policy.
 
 ## Node instead of bun
 

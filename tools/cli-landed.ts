@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-// `bun run landed` - check every board item that carries a work ref (a review URL
-// or a branch) against whether its work has landed on the project's integration
+// `bun run check-integration-status` - check every board item that carries a work
+// ref (a review URL or a branch) against whether its work is integrated into the project's integration
 // branch, so agents don't have to reason per-item about which repo/ref to look at.
 //
 // Two adapters, selected per project in loops.json (`landedAdapter`, project
@@ -208,11 +208,11 @@ const flippable = itemsToFlipMerged(checkable, statusByKey);
 
 if (apply) {
   if (!flippable.length) {
-    console.log("\n--apply: no implemented item has newly landed work. Nothing to record.");
+    console.log("\n--apply: no implemented item has newly integrated work. Nothing to record.");
     process.exit(0);
   }
   // Take the same lock `bun run sync` uses: both rewrite BOARD.md and item files, so
-  // an overlapping sync and `landed --apply` must not interleave their writes.
+  // an overlapping sync and integration-status apply must not interleave their writes.
   await withLock(
     ROOT,
     () => {
@@ -229,20 +229,20 @@ if (apply) {
       }
       writeFileSync(BOARD_PATH, prepared.boardText);
     },
-    "landed --apply run",
+    "check-integration-status --apply run",
   );
 
   console.log(
-    `\n--apply: recorded ${flippable.length} landing(s) (implemented → merged, now agent-owned for verification):`,
+    `\n--apply: recorded ${flippable.length} integration(s) (implemented → merged, now agent-owned for verification):`,
   );
   for (const item of flippable) console.log(`  ✓ ${item.slug}`);
-  console.log("\nAdd the landing to each item's ## Log, then verify per the loops-pickup skill.");
+  console.log("\nAdd the integration to each item's ## Log, then verify per the loops-pickup skill.");
   process.exit(0);
 }
 
 if (report.stale.length) {
   console.log(
-    `\n${report.stale.length} item(s) have landed work but are still awaiting review-merge - record with \`bun run landed --apply\`:`,
+    `\n${report.stale.length} item(s) have integrated work but are still awaiting review-merge - record with \`bun run check-integration-status --apply\`:`,
   );
   for (const row of report.stale) {
     console.log(`  - ${row.slug} (landed ${row.mergedAt ?? "?"}) - ${row.ref}`);

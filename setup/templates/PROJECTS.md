@@ -15,7 +15,7 @@ Entry template - copy for each new project:
 
 - repo: `~/path/to/repo`
 - integration branch: `master`
-- quality gate: `<command(s) agents run before requesting review>`
+- mechanical quality gate: `<command(s) agents run before requesting review>`
 - verify gate: `<how a merged item is verified - hermetic commands, then functional checks>`
 - specs / follow-ups: `<where design docs and follow-up trackers live>`
 - review mechanism: `<per-project override of HOUSE-RULES.md's review mechanism, if any>`

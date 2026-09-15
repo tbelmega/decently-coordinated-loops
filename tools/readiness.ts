@@ -7,7 +7,8 @@
 // `merged`/`tested`/`delivered`/`accepted`. In-flight states (`implemented`,
 // `spec-filed`, …) are NOT satisfied here - an `implemented` target means review
 // requested, not landed. Confirm real landed status for in-flight targets with
-// `bun run landed` before claiming (loops-pickup dependency gate); that dynamic check
+// `bun run check-integration-status` before claiming (loops-pickup dependency gate);
+// that dynamic check
 // is deliberately out of this pure module.
 import type { ItemFile } from "./types.ts";
 

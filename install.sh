@@ -22,10 +22,10 @@
 #   chaining setup/seed.ts, which also installs the agent-config block into the
 #   harness global configs (block content carries the data-repo path and owner).
 #
-# Idempotent - re-run after every `git pull` of this repo. If you move this
-# clone, re-run install.sh and `setup/seed.ts <data-repo> --join` (or set
-# DCL_HOME in your environment to override the paths baked into a data repo's
-# package.json).
+# Idempotent - re-run after every `git pull` of this repo, then run
+# `bun setup/seed.ts <data-repo> --join` to add newly generated data-repo commands.
+# If you move this clone, the join also refreshes paths baked into the data repo's
+# package.json; DCL_HOME may override them.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

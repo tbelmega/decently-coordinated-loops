@@ -87,7 +87,7 @@ defects were narrow boundary omissions in centralized mechanisms:
 `dispositionRequiresResolvedCausality` now defines every disposition that needs a resolved
 cause, legacy and explicit attempt coordinates are checked against chronology within an
 epoch, supersession boundaries are ordered, and the status gate revalidates delegated board
-items. Focused tests cover each named boundary, while the full gate covers the surrounding
+items. Focused tests cover each named boundary, while the mechanical quality gate covers the surrounding
 parser, renderer, status, CLI, and supersession behavior.
 
 ## Covered open obligations

@@ -90,7 +90,7 @@ replaces the audit with an equality gate, which is a proof rather than a search.
    will see. Check specifically that the requirements, the supported platforms and the
    list of wired harnesses still match `setup/harnesses.ts`.
 
-4. **Run the gate.** `bun run check` green, and `./install.sh` exercised against a
+4. **Run the mechanical quality gate.** `bun run check` green, and `./install.sh` exercised against a
    throwaway `HOME` if the installer changed.
 
 ## After the push

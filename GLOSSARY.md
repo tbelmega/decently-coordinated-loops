@@ -4,6 +4,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 
 - **Accepted as limitation**: A review disposition that retains a finding as a documented limitation, creating a documentation obligation instead of a remediation obligation.
 - **Accepted state**: The terminal board state asserting that the owner tested a delivered release and accepted it.
+- **Agentic review gate**: The independent model review required after substantive production-code, test-logic, prose-authoring, or skill-authoring changes. It is slower and more expensive than the mechanical quality gate.
 - **Base supersession**: Replacement of the base for a changed patch series, which begins a new review epoch while preserving the earlier ledger history.
 - **Blocked state**: The board state indicating that progress is waiting on an owner decision, another item, or an outage.
 - **Board item**: The canonical item file that records a work-stream's lifecycle, assignment, dependencies, current next step, and append-only history.
@@ -25,7 +26,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Decision notice**: An outbox record of a reversible provisional decision that lets work continue while preserving the owner's ability to reverse it.
 - **Decision-bearing field**: Persisted review data whose value affects the gate and must therefore be covered or revalidated by evidence.
 - **Delegated follow-up**: A finding disposition that assigns remediation to a separate active board item under the review policy's validation rules.
-- **Delegated landing**: A merge policy that authorizes an agent to fast-forward reviewed work onto the integration branch under specified safeguards.
+- **Delegated integration**: A merge policy that authorizes an agent to fast-forward reviewed work onto the integration branch under specified safeguards. Delegated landing is a synonym retained in existing configuration and policy wording.
 - **Delivered state**: The board state asserting that verified work was released to the owner's target environment and now awaits acceptance.
 - **Dependency gate**: The rule that an item is not ready until each required `depends-on` target has landed or qualifies as its exact stack parent.
 - **Descriptive item**: An item that documents existing behavior and therefore depends on the implementation items whose behavior it describes.
@@ -42,19 +43,21 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Firing**: One complete periodic-dispatch cycle, including prior-obligation handling and substantive eligible work.
 - **Gate-exempt obligation**: A cross-project duty that applies regardless of whether the current checkout passes the board participation gate.
 - **Governance mode**: Review mode in which declared instruction-file changes are evaluated as proposed rules against an owner-approved spec.
-- **Hermetic gate**: Verification that runs without credentials, deployments, or environment-dependent services.
+- **Hermetic verification**: Verification that runs without credentials, deployments, or environment-dependent services. It commonly begins with the mechanical quality gate but may include additional functional checks.
 - **Idea state**: The board state for work that has been captured but has not yet reached an approved specification or implementation.
 - **Implemented state**: The board state asserting that the change is complete on its working branch and review has been requested under the configured policy.
 - **In-progress state**: The board state indicating that implementation or other substantive work is actively underway.
 - **Inbox dump zone**: The intentionally unstructured section of `INBOX.md` where the owner records raw thoughts for later processing.
 - **Instruction file**: Executed prose, such as `AGENTS.md` or a skill, whose content directs agent behavior.
-- **Land or landed**: To establish as a Git fact that a change is present on the project's integration branch, whether by ancestry or the configured equivalence check.
-- **Landed adapter**: The configured integration check used to determine whether an item's recorded change has landed.
+- **Integrate or integrated**: To establish as a Git fact that a change is present on the project's integration branch, whether by ancestry, fast-forward, or the configured equivalence check. This does not imply creation of a merge commit.
+- **Land or landed**: A synonym for integrate or integrated. Retained where it is part of an existing command, configuration key, or persisted wording.
+- **Landed adapter**: The legacy-named configured integration check used to determine whether an item's recorded change is integrated.
 - **Lifecycle tail**: The project-specific sequence after verification, ending at `tested` for no-deploy projects or continuing through delivery and acceptance.
 - **Linked spec**: The owner-approved specification used as the acceptance authority for a reviewed change range.
 - **Logical review round**: One numbered review cycle in an epoch, including reviewer passes, findings, dispositions, and required remediation.
 - **Mechanism defect**: A suspected failure in the review system itself that ordinary changes to the implementation cannot resolve.
-- **Merged state**: The board state recorded after landing that transfers responsibility to agent-owned integrated verification, not a generic Git merge event.
+- **Mechanical quality gate**: The project's required typecheck, lint, unit or integration tests, build, and similar deterministic checks. These checks are normally cheap to invoke and should have concise output, ideally behind one command such as `bun run check`.
+- **Merged state**: The stable board-state label recorded after integration. It transfers responsibility to agent-owned integrated verification and does not imply creation of a Git merge commit.
 - **Metadata path**: A configured landing or bookkeeping path whose isolated change may preserve otherwise current review evidence.
 - **Metadata-only commit**: A commit changing only configured landing or bookkeeping paths, which may preserve an otherwise clean review.
 - **No-deploy lifecycle**: A project lifecycle in which agent verification at `tested` is terminal because no release event exists.
@@ -73,7 +76,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Prior-obligation sweep**: The required resolution or accurate parking of unfinished duties from earlier work before a dispatcher begins new work.
 - **Promoted refinement**: An approved board-side draft committed to the project's spec location, after which that spec becomes authoritative.
 - **Pure projection**: A generated representation, such as `BOARD.md`, that is derived from canonical files and must not override them.
-- **Quality gate**: The project's required typecheck, test, and related checks run on implementation work before review.
+- **Quality gate**: A legacy synonym for mechanical quality gate. Use the full canonical term because bare `quality gate` and `full quality gate` previously blurred mechanical checks with the agentic review gate.
 - **Refinement**: Board-side design work that turns an unclear item into an implementable proposal without prematurely committing a project spec.
 - **Remediation obligation**: A required correction or response created by an accepted review finding.
 - **Remediation-churn tripwire**: The guard that requires a written step-back analysis before another round after two consecutive reviews are dominated by remediation findings.
@@ -97,12 +100,12 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Substantive eligible work**: Work that materially advances a ready item, excluding preflight, routing, bookkeeping, or parking by themselves.
 - **Tail**: Short form for the project-specific lifecycle tail after agent verification.
 - **Terminal state**: A lifecycle state that finishes or abandons a work-stream and routes it out of the active board.
-- **Test-backed cap exit**: A configured cap exit that relies on committed regression evidence and the full quality gate instead of another review round.
-- **Tested state**: The state asserting that landed work passed the project's integrated verification gate, terminal for a no-deploy lifecycle.
+- **Test-backed cap exit**: A configured cap exit that relies on committed regression evidence and the mechanical quality gate instead of another review round.
+- **Tested state**: The state asserting that integrated work passed the project's end-to-end, functional, or consumer verification in the most appropriate production-like context. For a deployed product this may be a dev, Sandbox, staging, or production environment. For a library or DCL itself it is the closest meaningful integrated or consumer check. The mechanical quality gate alone does not establish this state. It is terminal for a no-deploy lifecycle.
 - **Tracked elsewhere**: A review disposition that points to a separately landing fix outside the reviewed range using a board item, `repo#branch`, or path.
 - **Unattended pickup**: Selection and progression of eligible board work without live owner interaction.
-- **Verification pickup**: Pickup of a `merged` item to test its landed integration-branch state rather than continue implementation.
-- **Verify gate**: The project-specific checks run against landed integration-branch work before moving an item to `tested`.
+- **Verification pickup**: Pickup of a `merged` item to test its integrated branch state rather than continue implementation.
+- **Verify gate**: The project-specific end-to-end, functional, or consumer checks run against integrated work before moving an item to `tested`.
 - **Waived by policy**: A finding disposition permitted by an owner-configured change class for the finding's priority and scope.
 - **Work-stream**: A coherent tracked body of work represented by one board item.
 - **Wrap gap**: The shortened interval between the last firing of one day and the first firing of the next after an interval is converted to clock times.

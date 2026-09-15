@@ -102,6 +102,8 @@ describe("seed: new mode", () => {
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
     expect(pkg.scripts.check).toContain("cli-check.ts");
     expect(pkg.scripts.check).toContain(DCL_HOME);
+    expect(pkg.scripts["check-integration-status"]).toContain("cli-landed.ts");
+    expect(pkg.scripts.landed).toBe(pkg.scripts["check-integration-status"]);
 
     const projects = readFileSync(join(dir, "PROJECTS.md"), "utf8");
     expect(projects).toContain("## atlas");
@@ -340,14 +342,18 @@ describe("seed: bun run setup (reviewer activation after the first seed)", () =>
   // R1-F1/R1-F6: the audience for `bun run setup` is repos that already exist. Join's
   // writeNew never touches an existing package.json, so without this the command reaches
   // only repos seeded after it was added - the exact inverse of who needs it.
-  test("join adds missing generated scripts to an existing package.json", () => {
+  test("an upgrade join adds new generated scripts to a pre-change package.json", () => {
     const dir = seedNewRepo(["--skip-harness"]);
     const legacy = {
       name: "data",
       private: true,
       scripts: {
         check: 'bun "/somewhere/tools/cli-check.ts"',
-        board: "bun run tools/board/cli-board.ts",
+        sync: 'bun "/somewhere/tools/cli-sync.ts"',
+        landed: 'bun "/somewhere/tools/cli-landed.ts"',
+        ready: 'bun "/somewhere/tools/cli-ready.ts"',
+        restamp: 'bun "/somewhere/tools/cli-restamp.ts"',
+        setup: 'bun "/somewhere/setup/seed.ts" --join .',
       },
       customField: "kept",
     };
@@ -358,10 +364,11 @@ describe("seed: bun run setup (reviewer activation after the first seed)", () =>
 
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
     expect(pkg.scripts.setup).toContain("--join");
-    // user-defined script and field survive; an existing generated script is not rewritten
-    expect(pkg.scripts.board).toBe("bun run tools/board/cli-board.ts");
+    expect(pkg.scripts["check-integration-status"]).toContain("cli-landed.ts");
+    const { "check-integration-status": added, ...preservedScripts } = pkg.scripts;
+    expect(added).toContain("cli-landed.ts");
+    expect(preservedScripts).toEqual(legacy.scripts);
     expect(pkg.customField).toBe("kept");
-    expect(pkg.scripts.check).toBe('bun "/somewhere/tools/cli-check.ts"');
   });
 
   test("join leaves an already-complete package.json byte-identical", () => {

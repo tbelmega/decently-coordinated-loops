@@ -19,7 +19,7 @@ the workflow, that's the skills under `skills/`.)
 
 ## Rules
 
-- **Quality gate:** `bun run check` (typecheck + all tests) must be green before
+- **Mechanical quality gate:** `bun run check` (typecheck + all tests) must be green before
   any commit. New tool logic is written test-first.
 - **Runtime compatibility:** production code uses only `node:` imports, with no
   Bun-only APIs (tests may use them; they run under `bun test`).

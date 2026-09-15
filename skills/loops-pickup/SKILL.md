@@ -29,14 +29,15 @@ Before claiming anything new, in order:
    mechanism lists):
    - **Unaddressed review feedback**: iterating on it takes priority over claiming
      new work; see deliver/iterate step 3.
-   - **Landed silently** - the owner merges without notifying agents. Detect with
-     `bun run landed` and record with `--apply` (or by hand: state `merged`,
+   - **Integrated silently** - the owner integrates without notifying agents. Detect with
+     `bun run check-integration-status` and record with `--apply` (or by hand: state `merged`,
      `next-actor: agent`, `autonomy: auto`, next-step per loops-board), then treat
-     it as a verification pickup (see "Verify a landed item").
-4. **Acquire your documented permanent slot, if the project uses one.** Run landed
+     it as a verification pickup (see "Verify an integrated item").
+4. **Acquire your documented permanent slot, if the project uses one.** Run the
+   integration-status check
    detection before changing branch state. Delete a local named stack branch only
-   after its exact `base-sha..head-sha` range reports LANDED and that landing is
-   recorded on the board. When the whole stack has landed, return the worktree to
+   after its exact `base-sha..head-sha` range reports LANDED and that integration is
+   recorded on the board. When the whole stack is integrated, return the worktree to
    its persistent base branch and bring that branch level with the integration
    branch. Branch position by itself is never the cleanup proof.
 
@@ -45,7 +46,7 @@ dispatch wakeup, steps 1-4 are one mandatory preflight sweep, not alternative
 stopping points. Handle every applicable step in order, then continue through
 project and item selection and perform substantive eligible work in the same
 firing. Routing a queue entry, updating or syncing board state, recording a
-landing, parking work, or maintaining a slot does not by itself complete the
+integration, parking work, or maintaining a slot does not by itself complete the
 wakeup. The sole exception is continuation of substantial work in progress
 inherited from the previous turn: for example, an implementation left half-done
 when that agent exhausted its usage limit. That continuation may be the firing's
@@ -68,12 +69,13 @@ the same lifecycle stage, choose the lowest-risk one.
 
 **Dependency gate, applying to every item including `auto`.** An item with any
 unsatisfied `depends-on` target is not eligible; skip it, whatever its autonomy or
-how low-risk it looks. A "documentation" item describing code not yet landed is the
+how low-risk it looks. A "documentation" item describing code not yet integrated is the
 classic trap. `bun run ready` lists which active items clear this gate on board state
 and which are blocked (and by what). A target is satisfied only when its work is on
 the integration branch (loops-board → "Dependencies & readiness"); `ready` treats an
 in-flight `implemented` target as unsatisfied, so resolve its real landed status with
-`bun run landed` or git before claiming; board state alone doesn't prove a landing.
+  `bun run check-integration-status` or git before claiming; board state alone does
+  not prove integration.
 
 An item is eligible for unattended pickup when **either**:
 
@@ -86,7 +88,7 @@ An item is eligible for unattended pickup when **either**:
      decisions (states, copy, API shapes are specified or derivable from existing
      conventions);
   3. scope fits one repo and roughly one session;
-  4. you can run the target project's full quality gate locally (the command is in
+  4. you can run the target project's mechanical quality gate locally (the command is in
      its `PROJECTS.md` entry);
   5. it clears every guardrail below.
 
@@ -100,7 +102,7 @@ against self-qualification criteria 2 and 3 (no product decisions to invent, sco
 fits one repo and roughly one session) even when `auto` made it eligible. An item
 that fails either criterion is **spec-sized**: unless it has an owner-approved spec
 (state `spec-filed` or later, with the spec reachable per loops-board → Specs vs.
-items: landed, or pushed on the item's recorded `links.spec-branch`, which the
+items: integrated, or pushed on the item's recorded `links.spec-branch`, which the
 implementation then bases on) or carries the owner's explicit `spec: waived`, it is
 not implementable, whatever its autonomy. Its pickup
 converts to spec-drafting: take it through refinement (purpose-clear branch, below)
@@ -116,7 +118,7 @@ exists.
 
 **`merged` items are their own work-type.** Any `merged` item is eligible (it is
 `autonomy: auto` / `next-actor: agent` by construction) but its work is
-*verification*, not implementation; take it through "Verify a landed item" instead
+*verification*, not implementation; take it through "Verify an integrated item" instead
 of steps 3-5. Under the flow principle, this later lifecycle stage takes precedence
 over starting new implementation.
 
@@ -165,7 +167,7 @@ board item first if none exists).
 ## 4. Execute
 
 - Follow the target repo's own agent rules (AGENTS.md/CLAUDE.md) and its
-  `PROJECTS.md` entry for everything: worktree/branch policy, TDD, quality gate.
+  `PROJECTS.md` entry for everything: worktree/branch policy, TDD, mechanical quality gate.
 - After resolving or creating the target checkout under those rules, record its
   absolute path as `execution.worktree` and push that state update **before writing
   implementation code**. Update the locator if work moves. It is last-recorded
@@ -191,14 +193,14 @@ board item first if none exists).
   rule does still bar is touching a workspace someone else holds: never switch,
   reset, or clean a checkout or branch another session is using, and never stash
   changes you did not make (loops-board -> Concurrency).
-- Run the project's full quality gate before requesting review.
+- Run the project's mechanical quality gate before requesting review.
 
 ## 5. Deliver and iterate
 
 1. **Prepare the final review candidate.** Refresh the project's integration ref and
    rebase the working branch onto its latest head. For an intentionally stacked item
-   whose parent has not landed, its recorded parent HEAD remains the review base.
-   Resolve conflicts, rerun the project's full quality gate, and record that exact
+   whose parent is not integrated, its recorded parent HEAD remains the review base.
+   Resolve conflicts, rerun the project's mechanical quality gate, and record that exact
    base as `links.base-sha`. Direct owner-instructed work on the integration branch
    itself is outside this working-branch flow.
 2. **Request review** per `HOUSE-RULES.md → Review mechanism` (a PR to a review
@@ -210,8 +212,8 @@ board item first if none exists).
    stacked item. Record the resolved SHA as `links.base-sha`. After the mechanism's
    clean current-HEAD signal, set the item state to `implemented`, add
    the `pr:`/`branch:` link, and log `base-sha`, reviewed `head-sha`, and
-   `stack-parent` when stacked. If landing remains owner-owned, set `next-actor:
-   owner`, `awaiting: review-merge`; if house rules delegate landing, keep
+   `stack-parent` when stacked. If integration remains owner-owned, set `next-actor:
+   owner`, `awaiting: review-merge`; if house rules delegate integration, keep
    `next-actor: agent`, omit `awaiting`, and make the fast-forward the next step.
    Commit and push the board update.
 3. **Evaluate feedback technically:** implement what's right, respond with
@@ -228,12 +230,12 @@ board item first if none exists).
    link it with the loops-review `delegated-follow-up` disposition, and continue shipping
    the current item without waiting for that follow-up. Escalate an urgent pre-existing
    defect through chat and the outbox, but do not turn it into an implicit dependency.
-4. **Land only when house rules explicitly delegate it.** Refresh the integration
-   ref after review. A stacked child never carries landing authority for its parent:
-   while `links.stack-parent` has not landed, leave the child at `implemented` and
-   wait. Once the parent lands, replay only the child's recorded range with
+4. **Integrate only when house rules explicitly delegate it.** Refresh the integration
+   ref after review. A stacked child never carries integration authority for its parent:
+   while `links.stack-parent` is not integrated, leave the child at `implemented` and
+   wait. Once the parent is integrated, replay only the child's recorded range with
    `git rebase --onto <integration-head> <base-sha> <working-branch>`; never use a
-   normal rebase that could replay the parent too. Rerun the full quality gate,
+   normal rebase that could replay the parent too. Rerun the mechanical quality gate,
    obtain a fresh clean review against the integration ref, and update the recorded
    `base-sha` and `head-sha`. Then compare integration with that reviewed base:
    - If unchanged, first prove the reviewed base is an ancestor of the reviewed head
@@ -246,11 +248,11 @@ board item first if none exists).
      `--force`, or a non-fast-forward update. A project may instead require an
      equivalent locked local `git merge --ff-only` followed by push.
    - If it moved, do not land stale evidence. Rebase onto the new integration head,
-     rerun the full quality gate, and obtain a fresh clean review at the new base;
+     rerun the mechanical quality gate, and obtain a fresh clean review at the new base;
      loops-review archives the superseded ledger. Repeat this check afterward.
-   - After a successful fast-forward, run `bun run landed --apply`, sync, commit,
+   - After a successful fast-forward, run `bun run check-integration-status --apply`, sync, commit,
      and push the resulting `implemented → merged` board update, then immediately
-     take the item through "Verify a landed item". Without explicit delegation,
+     take the item through "Verify an integrated item". Without explicit delegation,
      stop with owner-owned `review-merge` as above.
 5. **Babysit the review** (harnesses with self-paced loops): after requesting
    review, watch for automated-review feedback and iterate per step 3, roughly
@@ -258,33 +260,34 @@ board item first if none exists).
    (branch, review link, outstanding-feedback status, quality-gate command) and
    compact your context; each wakeup re-hydrates from the item file. Each check:
    if the integration branch moved and your change conflicts or is meaningfully
-   behind, rebase, re-run the quality gate, push, then address feedback. Stop when:
-   the change lands or is closed; the terminal review-complete signal fired and
+   behind, rebase, re-run the mechanical quality gate, push, then address feedback. Stop when:
+   the change is integrated or closed; the terminal review-complete signal fired and
    nothing is left to address; two consecutive checks find nothing new; the
    reviewer clearly can't continue; or after ~5 hours regardless, with the next
    dispatch resuming via step 0. Log each iteration on the item.
 
-## Verify a landed item (autonomous work-type)
+## Verify an integrated item (autonomous work-type)
 
 `merged` items are agent-owned and pre-approved for unattended verification. On full
 pass the item flips to `tested` and moves out of the owner's working set; this is
-work that clears landed tasks without the owner doing anything.
+work that clears integrated tasks without the owner doing anything.
 
 **Single verifier, batched.** Never run two verifiers in parallel. Claim *all*
 eligible `merged` items at once (one claim), run the integration-branch build once
 for the whole batch, then exercise each item's functional checks sequentially.
-Verification exercises the integrated branch head, not each landing in isolation;
-later landings being present is fine.
+Verification exercises the integrated branch head, not each integration in isolation;
+later integrated changes being present is fine.
 
-**The gate**, decomposed by environment-dependency (concrete commands and checks
+**Integrated verification**, decomposed by environment-dependency (concrete commands and checks
 come from the project's `PROJECTS.md` verify-gate entry):
 
-1. **Immediately on pickup:** the project's hermetic gate (build + unit/integration
+1. **Immediately on pickup:** the project's hermetic verification, beginning with its
+   mechanical quality gate (build + unit/integration
    suites: no credentials, nothing deployed). This is the bulk of the confidence.
    Record the result on the item.
 2. **When an environment-dependent check applies** (a deployed dev/staging
    environment, a live probe): run it only when the environment actually has the
-   change. If it doesn't yet, record "hermetic gate passed: functional check
+   change. If it doesn't yet, record "hermetic verification passed: functional check
    pending next deploy" and **hold the item at `merged`** rather than false-passing;
    the next verification pickup re-checks. Items with no environment-dependent
    checks complete immediately.
