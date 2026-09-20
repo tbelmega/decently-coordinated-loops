@@ -193,6 +193,11 @@ board item first if none exists).
   rule does still bar is touching a workspace someone else holds: never switch,
   reset, or clean a checkout or branch another session is using, and never stash
   changes you did not make (loops-board -> Concurrency).
+- **Name the ticket in every commit** for an item that has tickets, temporary ones on
+  the agent branch included: `bun run tickets <item-slug>` prints the subject suffix and
+  any body line. The subject still has to describe the change on its own terms; the id
+  is what lets the owner read a commit and know which work-stream it belongs to. Never
+  add a word that closes the ticket - the board decides its status.
 - Run the project's mechanical quality gate before requesting review.
 
 ## 5. Deliver and iterate

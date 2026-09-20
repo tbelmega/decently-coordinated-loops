@@ -270,6 +270,7 @@ function packageJsonText(root: string): string {
         "check-integration-status": scriptFor("cli-landed"),
         landed: scriptFor("cli-landed"),
         ready: scriptFor("cli-ready"),
+        tickets: scriptFor("tracker/cli-tickets"),
         restamp: scriptFor("cli-restamp"),
         // Join mode against this repo: refresh this machine's harness config and set
         // the review adapter. `.` is safe - bun and npm both run scripts from the

@@ -365,8 +365,9 @@ describe("seed: bun run setup (reviewer activation after the first seed)", () =>
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
     expect(pkg.scripts.setup).toContain("--join");
     expect(pkg.scripts["check-integration-status"]).toContain("cli-landed.ts");
-    const { "check-integration-status": added, ...preservedScripts } = pkg.scripts;
+    const { "check-integration-status": added, tickets, ...preservedScripts } = pkg.scripts;
     expect(added).toContain("cli-landed.ts");
+    expect(tickets).toContain("cli-tickets.ts");
     expect(preservedScripts).toEqual(legacy.scripts);
     expect(pkg.customField).toBe("kept");
   });

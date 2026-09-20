@@ -356,6 +356,9 @@ Run from the data-repo root:
   vs. blocked by an unsatisfied or missing target. Board-state only; confirm an
   in-flight (`implemented`) target's real integration status with
   `bun run check-integration-status`.
+- `bun run tickets <item-slug>` - the commit reference for that item's tickets: the
+  subject suffix and, where the tracker needs one, the body line that links the commit
+  without moving the ticket. Copy it rather than composing it.
 - `bun run restamp` - advance `.loops-version` to the DCL clone's current HEAD after
   reviewing an upgrade, clearing the version-drift note `check` prints.
 
