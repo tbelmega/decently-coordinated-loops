@@ -8,8 +8,11 @@ import { DEFAULT_PROJECT_LIFECYCLE, projectLifecycle } from "./config.ts";
 import type { LoopsConfig, ProjectLifecycle } from "./config.ts";
 import type { ItemFile } from "./types.ts";
 
-/** The one authoritative list of `state` values (the loops-board skill). */
-export const CANONICAL_STATES = new Set([
+/** The states that are degrees of progress, least to most advanced (the loops-board
+ * skill). Being an order rather than a set is what lets a reader ask whether one state
+ * is further along than another; `blocked` and `dropped` are deliberately absent,
+ * because neither is a point on that line. */
+export const BOARD_STATE_LADDER = [
   "idea",
   "spec-filed",
   "in-progress",
@@ -18,9 +21,10 @@ export const CANONICAL_STATES = new Set([
   "tested",
   "delivered",
   "accepted",
-  "blocked",
-  "dropped",
-]);
+] as const;
+
+/** The one authoritative list of `state` values (the loops-board skill). */
+export const CANONICAL_STATES = new Set<string>([...BOARD_STATE_LADDER, "blocked", "dropped"]);
 
 export const CANONICAL_NEXT_ACTORS = new Set(["owner", "agent"]);
 
