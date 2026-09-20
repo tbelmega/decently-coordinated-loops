@@ -325,6 +325,12 @@ several, and one ticket may serve several items. `bun run check` prints an advis
 an item at `spec-filed` or later that has decided neither way; the advisory never fails
 the run, and `tickets: local` settles it.
 
+`bun run tracker-sync status` pushes the projection. It only ever moves a ticket
+forward, leaves one in a status the map does not name exactly where it is, and records
+what it did not do as a line on the item. A missing credential or an unreachable API
+fails that tracker's run, leaves the board untouched, and files one outbox entry -
+nothing syncs until it is fixed, and later runs would otherwise be silent about it.
+
 Creating, linking or splitting a ticket is always proposed to the owner and never done on
 an agent's own initiative, and a ticket a human moved further than the board is left
 exactly where it is: record a line on the item and stop. An agent reverses a human's
@@ -356,6 +362,10 @@ Run from the data-repo root:
   vs. blocked by an unsatisfied or missing target. Board-state only; confirm an
   in-flight (`implemented`) target's real integration status with
   `bun run check-integration-status`.
+- `bun run tracker-sync status [--apply]` - project board state onto the tickets its
+  items name: forward-only transitions, plus the board slug recorded in each ticket.
+  Prints a plan and writes nothing without `--apply`. Run it after a state change in a
+  tracker project.
 - `bun run tickets <item-slug>` - the commit reference for that item's tickets: the
   subject suffix and, where the tracker needs one, the body line that links the commit
   without moving the ticket. Copy it rather than composing it.

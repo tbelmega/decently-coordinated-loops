@@ -488,25 +488,50 @@ function orphanMarker(orphan: OrphanRow): string {
 }
 
 export function appendOrphanRowEntry(outboxText: string, orphan: OrphanRow): string {
+  return appendOutboxEntry(outboxText, {
+    marker: orphanMarker(orphan),
+    body: (id) => orphanEntryText(id, orphan),
+  });
+}
+
+/** One entry to append, as the caller's own body text. `body` receives the id this entry
+ * gets, because the entry contract puts it in the heading the body opens with. */
+export interface OutboxAppend {
+  /** An HTML-comment marker carried inside the body. Present in `## Open` means the ask
+   * is already live, and appending again would file the same question twice. */
+  marker: string;
+  body: (id: number) => string;
+}
+
+/** Append one entry to OUTBOX.md's `## Open` section, in the shape the loops-queues entry
+ * contract defines. Pure string transform; the caller does the locked read/write.
+ *
+ * Idempotent by marker, scoped to the open section: an entry that has been answered and
+ * routed away is no longer a live ask, so the same condition may be filed again. */
+export function appendOutboxEntry(outboxText: string, entry: OutboxAppend): string {
   const section = openSection(outboxText);
   if (!section) throw new Error("OUTBOX.md has no `## Open` section to append to");
-  // Scoped to the open section: an entry that has been answered and moved on is not a
-  // live ask, and re-filing the row is the right thing once it is out of `## Open`.
-  if (section.open.includes(orphanMarker(orphan))) return outboxText;
+  if (section.open.includes(entry.marker)) return outboxText;
+  return `${section.head}${section.open.replace(/\n+$/, "")}\n${entry.body(nextEntryId(outboxText))}${section.tail}`;
+}
 
-  const entry = orphanEntryText(outboxText, orphan);
-  return `${section.head}${section.open.replace(/\n+$/, "")}\n${entry}${section.tail}`;
+/** The next free entry id. Numbered against the WHOLE file, not just `## Open`: an id
+ * must not collide with an entry that has since moved to a later section, or the two
+ * become indistinguishable in every citation. */
+function nextEntryId(outboxText: string): number {
+  const existingIds = [...outboxText.matchAll(/^### (\d+) —/gm)].map((match) => parseInt(match[1], 10));
+  return (existingIds.length ? Math.max(...existingIds) : 0) + 1;
+}
+
+/** The heading of an entry, with its project label reduced to the one whitespace-free
+ * token the contract's readers split on. */
+export function outboxHeading(id: number, type: string, project: string, title: string): string {
+  return `### ${id} — ${type} · ${headingToken(project)} · ${title}`;
 }
 
 /** One entry, ready to append. Kept to the entry contract's six body lines: the marker,
  * three lines of source and dropped-row data, and the ask. */
-function orphanEntryText(outboxText: string, orphan: OrphanRow): string {
-  // Numbered against the WHOLE file, not just `## Open`: an id must not collide with an
-  // entry that has since moved to a later section, or the two become indistinguishable
-  // in every citation.
-  const existingIds = [...outboxText.matchAll(/^### (\d+) —/gm)].map((match) => parseInt(match[1], 10));
-  const nextId = (existingIds.length ? Math.max(...existingIds) : 0) + 1;
-
+function orphanEntryText(nextId: number, orphan: OrphanRow): string {
   const rowFields = `Its row said: project=${orphan.project}, state=${orphan.state}, next-actor=${orphan.nextActor},
 awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, updated=${orphan.updated}.`;
 
@@ -516,7 +541,7 @@ awaiting=${orphan.awaiting}, auto=${orphan.auto}, assignee=${orphan.assignee}, u
   // same slug, which the duplicate-slug guard then refuses to sync past.
   if (orphan.stranded) {
     return `
-### ${nextId} — question · ${headingToken(orphan.project)} · BOARD.md row whose item is stranded in archive/
+${outboxHeading(nextId, "question", orphan.project, "BOARD.md row whose item is stranded in archive/")}
 ${orphanMarker(orphan)}
 
 Source: [${orphan.title}](${orphan.path}). Its item file exists at \`${orphan.stranded.itemPath}\`, but state
@@ -530,7 +555,7 @@ ${rowFields}
   }
 
   return `
-### ${nextId} — question · ${headingToken(orphan.project)} · orphan BOARD.md row with no item file
+${outboxHeading(nextId, "question", orphan.project, "orphan BOARD.md row with no item file")}
 ${orphanMarker(orphan)}
 
 Source: [${orphan.title}](${orphan.path}), dropped from BOARD.md because no item file matched it.
