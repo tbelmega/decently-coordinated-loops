@@ -18,6 +18,9 @@ Entry template - copy for each new project:
 - mechanical quality gate: `<command(s) agents run before requesting review>`
 - verify gate: `<how a merged item is verified - hermetic commands, then functional checks>`
 - specs / follow-ups: `<where design docs and follow-up trackers live>`
+- external tracker: `<the loops.json trackers entry this project's work is mirrored to,
+  its board URL, and any Git automation configured on that board - omit when the DCL
+  board is the sole authority>`
 - review mechanism: `<per-project override of HOUSE-RULES.md's review mechanism, if any>`
 - worktrees / branches: `<isolated per item, or permanent slot paths and their persistent base branches>`
 - notes: `<credentials and anything else agents must know>`

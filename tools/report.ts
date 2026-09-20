@@ -48,6 +48,20 @@ export function printValidationReport(anomalies: ItemAnomaly[]): void {
   }
 }
 
+/** The ticket-decision nudge: items in a tracker project that have neither named a
+ * ticket nor declared themselves local. Advisory by construction - it is printed, and no
+ * caller lets it change an exit code, because whether a work-stream is worth a
+ * collaborator's attention is the owner's call, not the tool's. */
+export function printMissingTicketDecisions(slugs: string[]): void {
+  if (!slugs.length) return;
+  console.log(
+    `\nItems in a tracker project with no ticket decision (${slugs.length} - advisory; add \`tickets: [id]\` or \`tickets: local\`):`,
+  );
+  for (const slug of slugs) {
+    console.log(`  - ${slug}`);
+  }
+}
+
 /** Human-readable duplicate-slug summary: one slug carried by more than one item
  * file across folders. An integrity error - the sync CLI stops before writing and the
  * check CLI exits non-zero. */

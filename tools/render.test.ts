@@ -12,6 +12,7 @@ const CONFIG: LoopsConfig = {
   integrationBranch: "master",
   landedAdapter: "git",
   githubTokens: {},
+  trackers: {},
   projects: {},
   review: {},
 };

@@ -40,6 +40,7 @@ const CONFIG: LoopsConfig = {
   integrationBranch: "master",
   landedAdapter: "git",
   githubTokens: {},
+  trackers: {},
   projects: {
     atlas: { lifecycle: "deploy" },
     docs: { lifecycle: "no-deploy" },

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { loadArchiveDir, loadForDeliveryDir, loadItemsDir } from "./parse.ts";
 import { runPreflight } from "./preflight.ts";
-import { printDanglingDeps, printDuplicateSlugs, printPreflightReport, printValidationReport } from "./report.ts";
+import { printDanglingDeps, printDuplicateSlugs, printMissingTicketDecisions, printPreflightReport, printValidationReport } from "./report.ts";
+import { missingTicketDecisions } from "./tracker/tracker-items.ts";
 import { findDuplicateSlugs, validateItems } from "./validate.ts";
 import { buildUniverse, computeReadiness, danglingDeps } from "./readiness.ts";
 import { dclHead, stampedVersion } from "./version.ts";
@@ -30,6 +31,11 @@ printPreflightReport(report);
 
 const anomalies = validateItems([...items, ...forDeliveryItems, ...archiveItems], config);
 printValidationReport(anomalies);
+
+// Encouragement, never enforcement: a work-stream a collaborator may care about that
+// has not said which ticket it advances, or that it deliberately stays on the board.
+// Printed after the anomalies and deliberately absent from the exit-code gate below.
+printMissingTicketDecisions(missingTicketDecisions(items, config));
 
 // Duplicate slugs across items/, for-delivery/, and archive/: a slug is a file
 // identity, so a collision lets one item's file overwrite another's on a move and

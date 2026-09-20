@@ -39,6 +39,7 @@ function config(overrides: Partial<LoopsConfig> = {}): LoopsConfig {
     integrationBranch: "master",
     landedAdapter: "git",
     githubTokens: {},
+    trackers: {},
     projects: {},
     review: {},
     ...overrides,

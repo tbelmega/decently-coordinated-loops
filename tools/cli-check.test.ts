@@ -99,3 +99,44 @@ describe("cli-check on a board row whose item is in the wrong folder", () => {
     expect(result.status).toBe(0);
   });
 });
+
+// The "encourage, do not enforce" half of tracker integration: the nudge has to be
+// visible in the report an agent already reads, and it must never be the reason a data
+// repo fails its integrity gate.
+describe("cli-check ticket advisory", () => {
+  function trackedRepo(tickets: string | null): string {
+    const root = dataRepo("items");
+    writeFileSync(
+      join(root, "loops.json"),
+      JSON.stringify({
+        owner: "Casey",
+        trackers: { acme: { kind: "linear", workspace: "acme", team: "ACM", statusMap: { "in-progress": "In Progress" } } },
+        projects: { atlas: { tracker: "acme" } },
+      }),
+    );
+    const item = tickets === null ? ITEM : ITEM.replace("updated:", `tickets: ${tickets}\nupdated:`);
+    writeFileSync(join(root, "items", "reopened.md"), item);
+    return root;
+  }
+
+  test("nudges an item in a tracker project that names no ticket, without failing the run", () => {
+    const result = spawnSync("bun", [CHECK], { cwd: trackedRepo(null), encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("reopened");
+    expect(result.stdout).toContain("tickets: local");
+  });
+
+  test("stays silent once the item names a ticket or declares itself local", () => {
+    for (const tickets of ["[ACM-12]", "local"]) {
+      const result = spawnSync("bun", [CHECK], { cwd: trackedRepo(tickets), encoding: "utf8" });
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("tickets: local");
+    }
+  });
+
+  test("stays silent for a project with no tracker", () => {
+    const result = spawnSync("bun", [CHECK], { cwd: dataRepo("items"), encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("tickets: local");
+  });
+});

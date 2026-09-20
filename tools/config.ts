@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {isReviewerId, type ReviewerId} from "./review/reviewers.ts";
+import { validateTrackers, type TrackerConfig } from "./tracker/tracker-config.ts";
 
 /** Where a project's lifecycle ends. `deploy` keeps the full tail
  * (`tested -> delivered -> accepted`): the owner releases the change and accepts it, and
@@ -22,6 +23,9 @@ export interface ProjectConfig {
   landedAdapter?: "github" | "git";
   /** Omit for the default `deploy` tail. */
   lifecycle?: ProjectLifecycle;
+  /** The name of the `trackers` entry this project's work-streams are tracked in.
+   * Omit for a project the board alone tracks - which is exactly today's behavior. */
+  tracker?: string;
   /** Per-project review policy: the same partial shape as the top-level `review` block,
    * merged over it field by field (see `resolveReviewConfig`). Omit to use the global
    * policy unchanged. */
@@ -227,8 +231,22 @@ export function taxonomyEnabled(review: Pick<ReviewConfig, "severityFloor" | "te
   );
 }
 
-function validateProjects(projects: Record<string, ProjectConfig>): Record<string, ProjectConfig> {
+function validateProjects(
+  projects: Record<string, ProjectConfig>,
+  trackers: Record<string, TrackerConfig>,
+): Record<string, ProjectConfig> {
   for (const [name, project] of Object.entries(projects)) {
+    const tracker = project?.tracker;
+    if (tracker !== undefined) {
+      if (typeof tracker !== "string" || tracker.trim() === "") {
+        throw new Error(`projects.${name}.tracker must be the name of a trackers entry`);
+      }
+      if (!Object.prototype.hasOwnProperty.call(trackers, tracker)) {
+        // A dangling name would leave the project silently untracked, which looks exactly
+        // like a project that declared no tracker at all.
+        throw new Error(`projects.${name}.tracker "${tracker}" is not declared under trackers`);
+      }
+    }
     const lifecycle = project?.lifecycle;
     if (lifecycle !== undefined && !projectLifecycles.includes(lifecycle)) {
       // Named, because an instance carries a dozen projects and a bare "invalid lifecycle"
@@ -294,6 +312,23 @@ export function resolveReviewConfig(
   return merged;
 }
 
+/** The tracker a project's work-streams live in, named so a ticket id can be qualified
+ * by it. An unregistered project, or one that declares no tracker, gets undefined: the
+ * board is its sole authority. Own-property lookup, for the same reason as
+ * `projectLifecycle`. */
+export function resolveProjectTracker(
+  config: LoopsConfig,
+  project: string,
+): { name: string; tracker: TrackerConfig } | undefined {
+  const entry = Object.prototype.hasOwnProperty.call(config.projects, project)
+    ? config.projects[project]
+    : undefined;
+  const name = entry?.tracker;
+  if (name === undefined) return undefined;
+  const tracker = Object.prototype.hasOwnProperty.call(config.trackers, name) ? config.trackers[name] : undefined;
+  return tracker ? { name, tracker } : undefined;
+}
+
 /** The lifecycle tail that governs `project`. An unregistered name, or a registered project
  * that declares none, gets `DEFAULT_PROJECT_LIFECYCLE`. Uses an own-property lookup, so a
  * project named after something on `Object.prototype` ("constructor") reads as undeclared
@@ -314,6 +349,10 @@ export interface LoopsConfig {
   landedAdapter: "github" | "git";
   /** GitHub org -> token file path ("~" expanded by the reader, not here). */
   githubTokens: Record<string, string>;
+  /** External task trackers, declared once each and referenced by name from the
+   * projects that share them - so two projects on one board cannot disagree about its
+   * identity or its lifecycle map. */
+  trackers: Record<string, TrackerConfig>;
   projects: Record<string, ProjectConfig>;
   review: ReviewConfig;
 }
@@ -325,6 +364,7 @@ function defaults(): LoopsConfig {
     integrationBranch: "master",
     landedAdapter: "git",
     githubTokens: {},
+    trackers: {},
     projects: {},
     review: {},
   };
@@ -583,13 +623,15 @@ export function loadConfig(root: string): LoopsConfig {
   if (!existsSync(path)) return base;
 
   const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<LoopsConfig>;
+  const trackers = validateTrackers(raw.trackers);
   return {
     owner: raw.owner ?? base.owner,
     priorityProjects: raw.priorityProjects ?? base.priorityProjects,
     integrationBranch: raw.integrationBranch ?? base.integrationBranch,
     landedAdapter: raw.landedAdapter ?? base.landedAdapter,
     githubTokens: raw.githubTokens ?? base.githubTokens,
-    projects: validateProjects(raw.projects ?? base.projects),
+    trackers,
+    projects: validateProjects(raw.projects ?? base.projects, trackers),
     review: validateReviewConfig(raw.review ?? base.review),
   };
 }

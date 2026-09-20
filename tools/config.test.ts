@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, projectLifecycle, resolveReviewConfig, taxonomyEnabled } from "./config.ts";
+import { loadConfig, projectLifecycle, resolveProjectTracker, resolveReviewConfig, taxonomyEnabled } from "./config.ts";
 import type { LoopsConfig } from "./config.ts";
 import { TEST_IDENTITIES } from "./test-identities.ts";
 
@@ -20,6 +20,7 @@ describe("loadConfig", () => {
         integrationBranch: "master",
         landedAdapter: "git",
         githubTokens: {},
+        trackers: {},
         projects: {},
         review: {},
       });
@@ -58,8 +59,20 @@ describe("loadConfig", () => {
         integrationBranch: "main",
         landedAdapter: "github" as const,
         githubTokens: { "acme-org": "~/.secrets/gh-acme" },
+        trackers: {
+          acme: {
+            kind: "linear" as const,
+            workspace: "acme",
+            team: "ACM",
+            url: "https://linear.app/acme/team/ACM/active",
+            owner: { account: "viewer" },
+            statusMap: { "in-progress": "In Progress", delivered: "Done" },
+            pull: { unstartedStatuses: ["Triage", "Todo"] },
+            tokenFile: "~/.secrets/linear-acme",
+          },
+        },
         projects: {
-          atlas: { repo: "acme-org/atlas", landedAdapter: "git" as const },
+          atlas: { repo: "acme-org/atlas", landedAdapter: "git" as const, tracker: "acme" },
           docs: { repo: "acme-org/docs", lifecycle: "no-deploy" as const },
         },
         review: {
@@ -173,6 +186,7 @@ describe("projectLifecycle", () => {
       integrationBranch: "master",
       landedAdapter: "git",
       githubTokens: {},
+      trackers: {},
       projects,
       review: {},
     };
@@ -210,6 +224,7 @@ describe("resolveReviewConfig", () => {
       integrationBranch: "master",
       landedAdapter: "git",
       githubTokens: {},
+      trackers: {},
       projects,
       review: { reviewer: "codex", model: "frontier-1", effort: "high", maxRounds: 5 },
     };
@@ -483,6 +498,7 @@ describe("severityFloor (C1)", () => {
       integrationBranch: "master",
       landedAdapter: "git",
       githubTokens: {},
+      trackers: {},
       projects,
       review,
     };
@@ -513,6 +529,7 @@ describe("terminalRejection (C4)", () => {
       integrationBranch: "master",
       landedAdapter: "git",
       githubTokens: {},
+      trackers: {},
       projects: { atlas: { repo: "~/atlas", review: { terminalRejection: true } } },
       review: { reviewer: "codex" },
     };
@@ -544,6 +561,7 @@ describe("resolved engine selection (C3)", () => {
       integrationBranch: "master",
       landedAdapter: "git",
       githubTokens: {},
+      trackers: {},
       projects,
       review,
     };
@@ -644,6 +662,7 @@ describe("personas validation (C3)", () => {
       integrationBranch: "master",
       landedAdapter: "git",
       githubTokens: {},
+      trackers: {},
       projects: { atlas: { repo: "~/atlas", review: { personas: [
         { name: "adversarial", fromRound: 1 },
         { name: "confirmation", fromRound: 2 },
@@ -668,6 +687,7 @@ describe("review profiles (C8)", () => {
       integrationBranch: "master",
       landedAdapter: "git",
       githubTokens: {},
+      trackers: {},
       projects: projects as LoopsConfig["projects"],
       review: review as LoopsConfig["review"],
     };
@@ -811,5 +831,46 @@ describe("testBackedCapExit", () => {
       { reviewer: "codex" },
       { [project]: { repo: `~/${project}`, review: { testBackedCapExit: null } } },
     )).toThrow(`projects.${project}.review.testBackedCapExit must be a boolean`);
+  });
+});
+
+describe("trackers", () => {
+  test("a project may reference a declared tracker, and one that declares none is untracked", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(
+        join(root, "loops.json"),
+        JSON.stringify({
+          trackers: { acme: { kind: "linear", workspace: "acme", team: "ACM", statusMap: { merged: "In Review" } } },
+          projects: { workboard: { tracker: "acme" }, daybook: {} },
+        }),
+      );
+      const config = loadConfig(root);
+      expect(resolveProjectTracker(config, "workboard")).toEqual({ name: "acme", tracker: config.trackers.acme! });
+      expect(resolveProjectTracker(config, "daybook")).toBeUndefined();
+      expect(resolveProjectTracker(config, "never-registered")).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a project pointing at an undeclared tracker fails the load rather than reading as untracked", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, "loops.json"), JSON.stringify({ projects: { workboard: { tracker: "acme" } } }));
+      expect(() => loadConfig(root)).toThrow(/projects\.workboard\.tracker "acme" is not declared under trackers/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed tracker block fails the load", () => {
+    const root = tempRoot();
+    try {
+      writeFileSync(join(root, "loops.json"), JSON.stringify({ trackers: { acme: { kind: "trello" } } }));
+      expect(() => loadConfig(root)).toThrow(/trackers\.acme\.kind/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

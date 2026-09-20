@@ -16,7 +16,7 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 | `OUTBOX.md` | The mirror: everything agents need from {{OWNER}}, answerable in one line each. |
 | `PROJECTS.md` | Per-project registry: repo paths (which drive the participation gate), gates, tracker locations. |
 | `HOUSE-RULES.md` | Cross-project local policy the DCL skills defer to. |
-| `loops.json` | Machine-read config: priorities, integration branch, per-project lifecycle tail, landed and review adapters, tokens. |
+| `loops.json` | Machine-read config: priorities, integration branch, per-project lifecycle tail, landed and review adapters, tokens, external trackers. |
 
 ## Commands (run from this directory)
 

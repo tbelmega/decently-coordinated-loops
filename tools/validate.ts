@@ -4,27 +4,15 @@
 // otherwise be bucketed silently. This turns any out-of-set value into a visible
 // anomaly - surfaced by the CLI and failing the check command. Pure: no IO.
 import { currentFolder, targetFolder } from "./archive.ts";
-import { DEFAULT_PROJECT_LIFECYCLE, projectLifecycle } from "./config.ts";
+import { DEFAULT_PROJECT_LIFECYCLE, projectLifecycle, resolveProjectTracker } from "./config.ts";
 import type { LoopsConfig, ProjectLifecycle } from "./config.ts";
+import { isTicketId, TICKET_ID_FORMS, type TrackerConfig } from "./tracker/tracker-config.ts";
+import { BOARD_STATE_LADDER, CANONICAL_STATES } from "./types.ts";
 import type { ItemFile } from "./types.ts";
 
-/** The states that are degrees of progress, least to most advanced (the loops-board
- * skill). Being an order rather than a set is what lets a reader ask whether one state
- * is further along than another; `blocked` and `dropped` are deliberately absent,
- * because neither is a point on that line. */
-export const BOARD_STATE_LADDER = [
-  "idea",
-  "spec-filed",
-  "in-progress",
-  "implemented",
-  "merged",
-  "tested",
-  "delivered",
-  "accepted",
-] as const;
-
-/** The one authoritative list of `state` values (the loops-board skill). */
-export const CANONICAL_STATES = new Set<string>([...BOARD_STATE_LADDER, "blocked", "dropped"]);
+// The state constants live in the contract root so the tracker config can read them
+// without importing this module, which already depends on config.ts.
+export { BOARD_STATE_LADDER, CANONICAL_STATES };
 
 export const CANONICAL_NEXT_ACTORS = new Set(["owner", "agent"]);
 
@@ -77,7 +65,11 @@ function isCrossPlatformAbsolutePath(path: string): boolean {
  * check below reads it; every other check is lifecycle-independent. It defaults to the
  * deploy tail so a caller holding no instance config still gets today's behavior; pass it
  * from `projectLifecycle(config, item.project)`, which `validateItems` does. */
-export function validateItem(item: ItemFile, lifecycle: ProjectLifecycle = DEFAULT_PROJECT_LIFECYCLE): string[] {
+export function validateItem(
+  item: ItemFile,
+  lifecycle: ProjectLifecycle = DEFAULT_PROJECT_LIFECYCLE,
+  tracker?: TrackerConfig,
+): string[] {
   const messages: string[] = [];
 
   if (item.legacyOwner !== undefined) {
@@ -197,6 +189,24 @@ export function validateItem(item: ItemFile, lifecycle: ProjectLifecycle = DEFAU
     );
   }
 
+  // Ticket ids are checked against the kind of the tracker the item's project names, so
+  // a key issued by one product cannot sit on an item whose board is another's - and an
+  // id on a project with no tracker, which nothing would ever sync, is reported rather
+  // than silently ignored.
+  if (Array.isArray(item.tickets)) {
+    if (item.tickets.length === 0) {
+      messages.push('tickets must list at least one id, or say `local` (the decision not to track this work-stream)');
+    } else if (!tracker) {
+      messages.push(`tickets are recorded, but project ${item.project} declares no tracker`);
+    } else {
+      for (const id of item.tickets) {
+        if (!isTicketId(tracker.kind, id)) {
+          messages.push(`ticket "${id}" is not a ${tracker.kind} id (expected ${TICKET_ID_FORMS[tracker.kind]})`);
+        }
+      }
+    }
+  }
+
   // A promoted-but-unlanded spec is only reachable through the pair; one without the
   // other leaves the pickup gate unable to pin the spec commit (loops-board →
   // Specs vs. items).
@@ -218,7 +228,10 @@ export interface ItemAnomaly {
  * judged against its own project's lifecycle tail. */
 export function validateItems(items: ItemFile[], config: LoopsConfig): ItemAnomaly[] {
   return items
-    .map((item) => ({ slug: item.slug, messages: validateItem(item, projectLifecycle(config, item.project)) }))
+    .map((item) => ({
+      slug: item.slug,
+      messages: validateItem(item, projectLifecycle(config, item.project), resolveProjectTracker(config, item.project)?.tracker),
+    }))
     .filter((entry) => entry.messages.length > 0);
 }
 

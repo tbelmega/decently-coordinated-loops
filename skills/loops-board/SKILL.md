@@ -162,6 +162,10 @@ spec: waived   # optional; the owner's explicit call that this item needs no
   (loops-pickup → Spec gate)
 depends-on: [item-slug, ...]   # items whose LANDED output this one needs; omit if
   none. Mandatory for descriptive items (below)
+tickets: [ABC-123, ABC-130]   # external tickets this work-stream advances; only for a
+  project with a tracker. GitHub ids need quotes ("#123"), or YAML reads the hash as a
+  comment. `tickets: local` is the decision that this work-stream stays on the board;
+  omitting the field means undecided, which `check` nudges about
 next-step: The single concrete next action. Mandatory; never leave stale.
 updated: YYYY-MM-DD
 execution:                    # last-recorded location; not liveness or a lock. Required
@@ -306,6 +310,25 @@ putting the host in the assignee string: that field is a durable lane, and a lan
 moves machines would carry a lie. Where you cannot state the host truthfully, leave it
 out; its readers fail closed on absence and act on a recorded value, so a guess is worse
 than nothing.
+
+## External trackers
+
+A project may declare an external task tracker in `loops.json` (`trackers.<name>`,
+referenced by `projects.<project>.tracker`); one tracker definition is shared by every
+project on that board, so two of them cannot disagree about its lifecycle map. A project
+without the key is tracked on this board alone - the ordinary case, and unchanged.
+
+The board owns ticket status: the tracker is a projection of it, never the other way
+round. Mapping an item to tickets is encouraged, not enforced - a small work-stream is
+often not worth a collaborator's attention, a medium one maps to a ticket, a large one to
+several, and one ticket may serve several items. `bun run check` prints an advisory for
+an item at `spec-filed` or later that has decided neither way; the advisory never fails
+the run, and `tickets: local` settles it.
+
+Creating, linking or splitting a ticket is always proposed to the owner and never done on
+an agent's own initiative, and a ticket a human moved further than the board is left
+exactly where it is: record a line on the item and stop. An agent reverses a human's
+change in someone else's tracker only on a direct prompt.
 
 ## Project registry
 

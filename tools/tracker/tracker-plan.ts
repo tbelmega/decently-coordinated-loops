@@ -1,7 +1,7 @@
 // The status-push planner: board items plus a snapshot of their tickets in, transitions
 // and item notes out. Pure - every rule that can move a collaborator's ticket lives here,
 // where it is testable without a network.
-import { BOARD_STATE_LADDER } from "../validate.ts";
+import { BOARD_STATE_LADDER } from "../types.ts";
 import type { TrackerConfig } from "./tracker-config.ts";
 
 /** A ticket is identified by its tracker plus the tracker's own id, never by the id

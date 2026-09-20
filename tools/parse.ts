@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { ItemFile, Links } from "./types.ts";
+import type { ItemFile, ItemTickets, Links } from "./types.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -53,6 +53,18 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     frontmatterErrors.push("legacy owner must be a string");
   }
 
+  const rawTickets = fm.tickets;
+  let tickets: ItemTickets | undefined;
+  if (rawTickets !== undefined) {
+    if (rawTickets === "local") {
+      tickets = "local";
+    } else if (Array.isArray(rawTickets) && rawTickets.every((id) => typeof id === "string" && id.trim() !== "")) {
+      tickets = rawTickets as string[];
+    } else {
+      frontmatterErrors.push('tickets must be a list of ticket ids or the string "local"');
+    }
+  }
+
   const rawExecution = fm.execution;
   let execution: ItemFile["execution"];
   if (rawExecution !== undefined) {
@@ -97,6 +109,7 @@ export function parseItemFileText(path: string, text: string): ItemFile {
     fit: fm.fit != null ? String(fm.fit) : undefined,
     spec: fm.spec != null ? String(fm.spec) : undefined,
     dependsOn,
+    tickets,
     nextStep: String(fm["next-step"] ?? ""),
     updated: String(fm.updated ?? ""),
     links,

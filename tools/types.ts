@@ -1,12 +1,29 @@
 // Shared types for the board core (parse / validate / render / preflight).
 // Pure domain logic only - no file IO here (see parse.ts for the IO boundary).
 
+/** The states that are degrees of progress, least to most advanced (the loops-board
+ * skill). An order rather than a set, so a reader can ask whether one state is further
+ * along than another; `blocked` and `dropped` are deliberately absent, because neither
+ * is a point on that line. */
+export const BOARD_STATE_LADDER = [
+  "idea",
+  "spec-filed",
+  "in-progress",
+  "implemented",
+  "merged",
+  "tested",
+  "delivered",
+  "accepted",
+] as const;
+
+/** The one authoritative list of `state` values (the loops-board skill). */
+export const CANONICAL_STATES = new Set<string>([...BOARD_STATE_LADDER, "blocked", "dropped"]);
+
 export interface Links {
   [key: string]: string | undefined;
   spec?: string;
   branch?: string;
   pr?: string;
-  ticket?: string;
   repo?: string;
   stackParent?: string;
   baseSha?: string;
@@ -17,6 +34,9 @@ export interface ExecutionLocation {
   host?: string;
   worktree?: string;
 }
+
+/** What an item says about external tickets. */
+export type ItemTickets = string[] | "local";
 
 /** One item file under items/*.md, parsed. */
 export interface ItemFile {
@@ -50,6 +70,10 @@ export interface ItemFile {
    *  size (loops-pickup → Spec gate). Absent for every other item. */
   spec?: string;
   dependsOn: string[];
+  /** The external tickets this work-stream advances, unqualified because the item's
+   *  project names the tracker - or `"local"`, the owner's decision that it stays on the
+   *  board. Absent means undecided, which is what the check advisory nudges. */
+  tickets?: ItemTickets;
   nextStep: string;
   /** YYYY-MM-DD */
   updated: string;

@@ -29,6 +29,7 @@ const CONFIG: LoopsConfig = {
   integrationBranch: "master",
   landedAdapter: "git",
   githubTokens: {},
+  trackers: {},
   projects: { atlas: { lifecycle: "deploy" }, docs: { lifecycle: "no-deploy" } },
   review: {},
 };
@@ -426,5 +427,40 @@ describe("findDuplicateSlugs", () => {
       item({ slug: "abe", path: "archive/abe.md" }),
     ]);
     expect(dupes.map((d) => d.slug)).toEqual(["abe", "zed"]);
+  });
+});
+
+describe("validateItem tickets", () => {
+  const TRACKED: LoopsConfig = {
+    ...CONFIG,
+    trackers: { acme: { kind: "linear", workspace: "acme", team: "ACM", statusMap: {} } },
+    projects: { ...CONFIG.projects, atlas: { lifecycle: "deploy", tracker: "acme" } },
+  };
+
+  test("accepts ids of the tracker's own form, and the local marker", () => {
+    expect(validateItems([item({ tickets: ["ACM-1", "ACM-23"] }), item({ slug: "y", tickets: "local" })], TRACKED)).toEqual([]);
+  });
+
+  test("rejects an id belonging to a different tracker product", () => {
+    const anomalies = validateItems([item({ tickets: ["#12"] })], TRACKED);
+    expect(anomalies[0]!.messages[0]).toContain('ticket "#12" is not a linear id');
+  });
+
+  test("rejects ticket ids on a project that declares no tracker", () => {
+    const anomalies = validateItems([item({ project: "docs", tickets: ["ACM-1"] })], TRACKED);
+    expect(anomalies[0]!.messages[0]).toContain("project docs declares no tracker");
+  });
+
+  test("rejects an empty ticket list, which decides nothing", () => {
+    const anomalies = validateItems([item({ tickets: [] })], TRACKED);
+    expect(anomalies[0]!.messages[0]).toContain("tickets must list at least one id");
+  });
+
+  test("a malformed tickets value is reported by the parser", () => {
+    const parsed = parseItemFileText(
+      "items/x.md",
+      ["---", "title: X", "project: atlas", "state: idea", "tickets: none", "next-actor: agent", "next-step: x", "updated: 2026-09-20", "---", ""].join("\n"),
+    );
+    expect(validateItem(parsed).join(" ")).toContain('tickets must be a list of ticket ids or the string "local"');
   });
 });
