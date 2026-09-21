@@ -118,13 +118,14 @@ export const harnesses: Harness[] = [
     configTargets: (home) => [{ path: join(home, ".codex", "AGENTS.md"), kind: "block" }],
   },
   {
-    // The nested `.cursor/.cursor` is not a typo: Cursor's rules live under a `.cursor`
-    // directory inside its config home.
     id: "cursor",
     skillsDirs: [],
     detect: (home) => existsSync(join(home, ".cursor")),
     configTargets: (home) => [
-      { path: join(home, ".cursor", ".cursor", "rules", "loops.mdc"), kind: "cursor" },
+      {
+        path: join(home, ".cursor", "rules", "decently-coordinated-loops.mdc"),
+        kind: "cursor",
+      },
     ],
   },
 ];

@@ -587,8 +587,10 @@ describe("config block", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
 
     const dir = seedNewRepo([], home);
-    const rulePath = join(home, ".cursor", ".cursor", "rules", "loops.mdc");
+    const rulePath = join(home, ".cursor", "rules", "decently-coordinated-loops.mdc");
     expect(existsSync(rulePath)).toBe(true);
+    expect(existsSync(join(home, ".cursor", "rules", "loops.mdc"))).toBe(false);
+    expect(existsSync(join(home, ".cursor", ".cursor", "rules", "loops.mdc"))).toBe(false);
     const rule = readFileSync(rulePath, "utf8");
     expect(rule).toContain("alwaysApply: true");
     expect(rule).toContain("## Work-stream board (decently-coordinated-loops)");

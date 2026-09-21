@@ -131,7 +131,7 @@ export function renderConfigBlock(params: BlockParams): string {
 }
 
 /** Cursor reads global rules as standalone `.mdc` files (YAML frontmatter + body) under
- * `~/.cursor/.cursor/rules/`, not as a markered block inside one shared file - so the
+ * `~/.cursor/rules/`, not as a markered block inside one shared file - so the
  * whole file is the managed unit. Same body, different wrapper. */
 export function renderCursorRule(params: BlockParams): string {
   return `---

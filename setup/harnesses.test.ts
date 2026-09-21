@@ -110,7 +110,10 @@ describe("detectConfigTargets", () => {
       expect(detectConfigTargets(home)).toEqual([
         { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
         { path: join(home, ".codex", "AGENTS.md"), kind: "block" },
-        { path: join(home, ".cursor", ".cursor", "rules", "loops.mdc"), kind: "cursor" },
+        {
+          path: join(home, ".cursor", "rules", "decently-coordinated-loops.mdc"),
+          kind: "cursor",
+        },
       ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
