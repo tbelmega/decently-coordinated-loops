@@ -185,11 +185,18 @@ function isFindingOrigin(input: unknown): input is FindingOrigin {
 export type ReviewCoverageManifest = Pick<ReviewManifest,
   "files" | "instructionFiles" | "metadataPaths" | "remediationFiles" | "baseDeltaFiles">;
 
+/** How a pass's `coverage.instructionFiles` is checked against the manifest.
+ * `exact`: the reviewer must report exactly the discovered instruction files.
+ * `reviewer-reported`: every manifest instruction file is still required, and further files
+ * the reviewer loaded on its own (harness skills, project rule files) are kept as evidence. */
+export type InstructionFileCoverage = "exact" | "reviewer-reported";
+
 export function parseReviewPass(
   input: unknown,
   expectedPass: ReviewPersonaName,
   manifest: ReviewCoverageManifest,
   requiredObligations: RequiredReviewObligation[],
+  options: {instructionFileCoverage?: InstructionFileCoverage} = {},
 ): ReviewPassResult {
   if (!isRecord(input)) throw new Error("review pass result must be an object");
   if (input.pass !== expectedPass) throw new Error(`review pass must be ${expectedPass}`);
@@ -334,7 +341,10 @@ export function parseReviewPass(
     };
   });
   const coveredInstructionFiles = parseStringArray(input.coverage.instructionFiles, "coverage.instructionFiles");
-  if (JSON.stringify([...coveredInstructionFiles].sort()) !== JSON.stringify([...manifest.instructionFiles].sort())) {
+  const instructionFilesComplete = options.instructionFileCoverage === "reviewer-reported"
+    ? manifest.instructionFiles.every((file) => coveredInstructionFiles.includes(file))
+    : JSON.stringify([...coveredInstructionFiles].sort()) === JSON.stringify([...manifest.instructionFiles].sort());
+  if (!instructionFilesComplete) {
     throw new Error("coverage is incomplete for repository instruction files");
   }
   // Notes (C1): tolerated absent - reviewers without native schema enforcement and

@@ -63,6 +63,20 @@ describe("parseReviewPass", () => {
     expect(() => parseReviewPass(missingInstructions, "diff", manifest, [])).toThrow(/instruction files/);
   });
 
+  test("records instruction files the reviewer read on its own when reviewer-reported coverage is selected", () => {
+    const withExtra = passResult("diff") as Record<string, unknown>;
+    withExtra.coverage = {files: manifest.files, instructionFiles: ["AGENTS.md", "skills/coding-standards/SKILL.md"], callsites: []};
+    expect(() => parseReviewPass(withExtra, "diff", manifest, [])).toThrow(/instruction files/);
+
+    const parsed = parseReviewPass(withExtra, "diff", manifest, [], {instructionFileCoverage: "reviewer-reported"});
+    expect(parsed.coverage.instructionFiles).toEqual(["AGENTS.md", "skills/coding-standards/SKILL.md"]);
+
+    const missingRequired = passResult("diff") as Record<string, unknown>;
+    missingRequired.coverage = {files: manifest.files, instructionFiles: ["skills/coding-standards/SKILL.md"], callsites: []};
+    expect(() => parseReviewPass(missingRequired, "diff", manifest, [], {instructionFileCoverage: "reviewer-reported"}))
+      .toThrow(/instruction files/);
+  });
+
   test("permits coverage of a configured metadata path but names any other stray file", () => {
     // reviewPrompt lists every metadata file and instructs the reviewer to inspect it, so a
     // compliant reviewer reports coverage for it. Rejecting that discarded whole rounds,

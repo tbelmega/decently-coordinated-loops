@@ -50,7 +50,8 @@ function createFakeCodex(): string {
       'if (process.env.FAKE_DRAFT_INVALID) { await Bun.write(args[outputIndex + 1], JSON.stringify({pass: input.pass})); process.exit(0); }',
       'const file = input.coverage.files[0] ?? {path: input.draft.path, hunks: []};',
       'const findings = process.env.FAKE_DRAFT_FINDINGS ? JSON.parse(process.env.FAKE_DRAFT_FINDINGS) : [];',
-      'await Bun.write(args[outputIndex + 1], JSON.stringify({pass: input.pass, summary: process.env.FAKE_DRAFT_SUMMARY ?? "draft reviewed", coverage: input.coverage, obligations: [], findings, notes: JSON.parse(process.env.FAKE_DRAFT_NOTES ?? "[]")}));',
+      'const coverage = process.env.FAKE_DRAFT_INSTRUCTION_FILES ? {...input.coverage, instructionFiles: JSON.parse(process.env.FAKE_DRAFT_INSTRUCTION_FILES)} : input.coverage;',
+      'await Bun.write(args[outputIndex + 1], JSON.stringify({pass: input.pass, summary: process.env.FAKE_DRAFT_SUMMARY ?? "draft reviewed", coverage, obligations: [], findings, notes: JSON.parse(process.env.FAKE_DRAFT_NOTES ?? "[]")}));',
       "",
     ].join("\n"),
   );
@@ -248,6 +249,24 @@ describe("draft review CLI", () => {
       {path: f.draft, hunks: []},
       {path: f.intent, hunks: []},
     ]);
+  });
+
+  test("records instruction files the reviewer loaded on its own instead of failing the attempt", () => {
+    const f = fixture();
+    const loaded = [join(f.repository, "AGENTS.md"), "skills/coding-standards/SKILL.md"];
+
+    const result = start(f, [], {FAKE_DRAFT_INSTRUCTION_FILES: JSON.stringify(loaded)});
+    expect(result.stderr).not.toContain("instruction files");
+    expect(result.status).toBe(0);
+
+    const attempt = completedAttempts(f)[0];
+    expect(attempt).toMatchObject({state: "completed", round: 1});
+    for (const pass of array(attempt.passes, "passes").map((entry) => object(entry, "pass"))) {
+      expect(object(object(pass.result, "pass result").coverage, "coverage").instructionFiles).toEqual(loaded);
+    }
+    const report = readFileSync(f.markdownPath, "utf8");
+    expect(report).toContain("Instruction files read: ");
+    expect(report).toContain("skills/coding\\-standards/SKILL\\.md");
   });
 
   test("requires a configured reviewer and records failed adapter output before a successful retry", () => {
