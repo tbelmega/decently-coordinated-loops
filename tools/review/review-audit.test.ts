@@ -180,6 +180,59 @@ describe("parseReviewPass", () => {
     );
   });
 
+  test("merges separate coverage entries for one path before checking them", () => {
+    // AUDIT_INPUT hands the reviewer files, remediationFiles and baseDeltaFiles as separate
+    // lists, so a reviewer may report one coverage entry per list. Rejecting a repeated path
+    // discarded three logical rounds in a row whose passes classified every obligation fixed.
+    const rebasedRound: ReviewManifest = {
+      ...manifest,
+      baseDeltaFiles: [{path: "src/a.ts", hunks: ["-5,1 +5,2"]}],
+    };
+    const perList = passResult("diff") as Record<string, unknown>;
+    perList.coverage = {
+      files: [...manifest.files, {path: "src/a.ts", hunks: ["-5,1 +5,2"]}, {path: "src/b.ts", hunks: []}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(parseReviewPass(perList, "diff", rebasedRound, []).coverage.files).toEqual([
+      {path: "src/a.ts", hunks: ["-1,1 +1,2", "-5,1 +5,2"]},
+      {path: "src/b.ts", hunks: []},
+    ]);
+
+    // A hunk that sits in two lists may be reported under both entries.
+    const overlapping = passResult("diff") as Record<string, unknown>;
+    overlapping.coverage = {
+      files: [...manifest.files, {path: "src/a.ts", hunks: ["-1,1 +1,2", "-5,1 +5,2"]}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(parseReviewPass(overlapping, "diff", rebasedRound, []).coverage.files[0]).toEqual(
+      {path: "src/a.ts", hunks: ["-1,1 +1,2", "-5,1 +5,2"]},
+    );
+
+    // The merged entry gets the same checks as a single one: an invented hunk still fails
+    // closed, and so does a repeat inside one entry.
+    const invented = passResult("diff") as Record<string, unknown>;
+    invented.coverage = {
+      files: [...manifest.files, {path: "src/a.ts", hunks: ["-99,1 +99,1"]}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(invented, "diff", rebasedRound, [])).toThrow(
+      /src\/a\.ts.*outside the review manifest.*-99,1 \+99,1/,
+    );
+
+    const repeatedWithinEntry = passResult("diff") as Record<string, unknown>;
+    repeatedWithinEntry.coverage = {
+      files: [...manifest.files, {path: "src/a.ts", hunks: ["-5,1 +5,2", "-5,1 +5,2"]}],
+      instructionFiles: ["AGENTS.md"],
+      callsites: [],
+    };
+    expect(() => parseReviewPass(repeatedWithinEntry, "diff", rebasedRound, [])).toThrow(
+      /src\/a\.ts.*repeat/,
+    );
+  });
+
   test("permits coverage of a remediation-only path but keeps unknown paths stray", () => {
     // A fix that exactly reverts a file leaves it in the remediation delta but not in
     // base..head, so a reviewer auditing the remediation range legitimately covers it.

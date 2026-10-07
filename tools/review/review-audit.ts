@@ -137,6 +137,21 @@ function parseCoverageFile(input: unknown, index: number): ReviewFileCoverage {
   return {path: requiredString(input, "path", path), hunks: input.hunks};
 }
 
+// AUDIT_INPUT hands the reviewer files, remediationFiles and baseDeltaFiles as separate
+// lists, and a reviewer that reports one coverage entry per list names a path once per
+// list it appears in. Rejecting the repeat discarded three logical rounds in a row on
+// 2026-10-07 while their passes classified every obligation fixed. The entries are one
+// audit of one file, so they merge into the union of their hunks and are checked as one.
+function mergeCoverageByPath(files: ReviewFileCoverage[]): ReviewFileCoverage[] {
+  const hunksByPath = new Map<string, Set<string>>();
+  for (const file of files) {
+    const hunks = hunksByPath.get(file.path) ?? new Set<string>();
+    for (const hunk of file.hunks) hunks.add(hunk);
+    hunksByPath.set(file.path, hunks);
+  }
+  return [...hunksByPath].map(([path, hunks]) => ({path, hunks: [...hunks]}));
+}
+
 function parseStringArray(input: unknown, path: string): string[] {
   if (!Array.isArray(input) || input.some((value) => typeof value !== "string")) {
     throw new Error(`${path} must be an array of strings`);
@@ -202,10 +217,13 @@ export function parseReviewPass(
   if (input.pass !== expectedPass) throw new Error(`review pass must be ${expectedPass}`);
   if (!isRecord(input.coverage)) throw new Error("coverage must be an object");
   if (!Array.isArray(input.coverage.files)) throw new Error("coverage.files must be an array");
-  const coverageFiles = input.coverage.files.map(parseCoverageFile);
-  if (new Set(coverageFiles.map((file) => file.path)).size !== coverageFiles.length) {
-    throw new Error("coverage.files must not contain duplicate paths");
+  const reportedFiles = input.coverage.files.map(parseCoverageFile);
+  for (const file of reportedFiles) {
+    if (new Set(file.hunks).size !== file.hunks.length) {
+      throw new Error(`coverage for ${file.path} must not repeat hunks`);
+    }
   }
+  const coverageFiles = mergeCoverageByPath(reportedFiles);
   const byPath = new Map(coverageFiles.map((file) => [file.path, file]));
   // Fix-delta hunks are PERMITTED in coverage, manifest.files hunks stay REQUIRED. On a
   // remediation or rebased round the prompt embeds remediationFiles/baseDeltaFiles in
@@ -219,11 +237,6 @@ export function parseReviewPass(
     const hunks = fixDeltaHunks.get(file.path) ?? new Set<string>();
     for (const hunk of file.hunks) hunks.add(hunk);
     fixDeltaHunks.set(file.path, hunks);
-  }
-  for (const file of coverageFiles) {
-    if (new Set(file.hunks).size !== file.hunks.length) {
-      throw new Error(`coverage for ${file.path} must not repeat hunks`);
-    }
   }
   // Only two covered sets are compliant behavior per file: exactly the manifest hunks
   // (reviewer left the fix delta out of its coverage list) or their complete union with
