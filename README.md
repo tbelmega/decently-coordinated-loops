@@ -77,8 +77,8 @@ have, and the workflow never requires it.
 ## Quickstart
 
 Requirements: git, [bun](https://bun.sh) (tools also run under recent node, see
-below), and at least one skills-aware agent harness. DCL wires Claude Code, Codex and
-Cursor by name, plus the vendor-neutral `~/.agents/skills` tree that other skill-aware
+below), and at least one skills-aware agent harness. DCL wires Claude Code, Codex,
+Cursor and Kiro CLI by name, plus the vendor-neutral `~/.agents/skills` tree that other skill-aware
 harnesses read; adding another is one entry in `setup/harnesses.ts`.
 
 Linux and macOS are the supported platforms: `install.sh` is bash and resolves paths with
@@ -92,7 +92,7 @@ Clone this repository, then from its root:
 ```
 
 This links the skills into every destination in `setup/skill-dirs.txt` (today
-`~/.claude/skills/` and `~/.agents/skills/`), seeds the
+`~/.claude/skills/`, `~/.agents/skills/` and `~/.kiro/skills/`), seeds the
 data repo (board, inbox, outbox, registries, house rules), and installs a small
 awareness block into your harness's global config so every session knows where the
 board lives. Then:

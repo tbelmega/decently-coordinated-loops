@@ -16,9 +16,9 @@
 import { existsSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
-/** `block` = a markered region inside an existing config file; `cursor` = a standalone
- * rule file DCL owns outright. */
-export type ConfigTargetKind = "block" | "cursor";
+/** `block` = a markered region inside an existing config file; `cursor` and `kiro` =
+ * a standalone rule (Cursor) or steering (Kiro) file DCL owns outright. */
+export type ConfigTargetKind = "block" | "cursor" | "kiro";
 
 export interface ConfigTarget {
   path: string;
@@ -79,6 +79,14 @@ function justCreated(relative: string): boolean {
     .includes(relative);
 }
 
+/** Is the harness config home `dir` present, not counting a skills tree this run created
+ * inside it? For harnesses whose skills destination lives under their own config home. */
+function presentBesidesOwnSkills(home: string, dir: string): boolean {
+  const entries = readHomeEntries(join(home, dir));
+  if (!entries.length) return false;
+  return justCreated(`${dir}/skills`) ? entries.some((entry) => entry.name !== "skills") : true;
+}
+
 /** Every harness DCL wires into. Order fixes the order of both the skill destinations
  * and the detected config targets, which the tests assert exactly. */
 export const harnesses: Harness[] = [
@@ -95,11 +103,7 @@ export const harnesses: Harness[] = [
     // it may be the user's own, and refusing to wire a real Claude installation is the
     // worse error of the two - a block written into a directory DCL itself made earlier
     // is inert, while a missing one leaves every later session unaware of the board.
-    detect: (home) => {
-      const entries = readHomeEntries(join(home, ".claude"));
-      if (!entries.length) return false;
-      return justCreated(".claude/skills") ? entries.some((entry) => entry.name !== "skills") : true;
-    },
+    detect: (home) => presentBesidesOwnSkills(home, ".claude"),
     configTargets: (home) => [{ path: join(home, ".claude", "CLAUDE.md"), kind: "block" }],
   },
   {
@@ -125,6 +129,20 @@ export const harnesses: Harness[] = [
       {
         path: join(home, ".cursor", "rules", "decently-coordinated-loops.mdc"),
         kind: "cursor",
+      },
+    ],
+  },
+  {
+    // Kiro reads global skills from `~/.kiro/skills` and loads every `~/.kiro/steering/*.md`
+    // file into each session, so the managed unit is a steering file DCL owns outright.
+    // Detection discounts a skills tree this run created, for the same reason as Claude's.
+    id: "kiro",
+    skillsDirs: [".kiro/skills"],
+    detect: (home) => presentBesidesOwnSkills(home, ".kiro"),
+    configTargets: (home) => [
+      {
+        path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"),
+        kind: "kiro",
       },
     ],
   },

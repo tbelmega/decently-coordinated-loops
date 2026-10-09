@@ -14,7 +14,7 @@
 #   Use it for each extra Claude profile / CLAUDE_CONFIG_DIR you run - e.g. a
 #   machine with several profiles wires them all in one invocation:
 #     ./install.sh --config-dir ~/.claude-work --config-dir ~/.claude-personal
-#   The default ~/.claude and ~/.agents targets are always linked as well.
+#   The default skill-dirs.txt targets are always linked as well.
 #   (Config-block seeding via --seed already reaches every ~/.claude-* profile on
 #   its own - --config-dir adds skill links only, not config-block targets.)
 #

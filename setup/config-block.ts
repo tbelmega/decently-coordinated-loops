@@ -143,6 +143,18 @@ ${renderBody(params)}
 `;
 }
 
+/** Kiro loads every markdown file under `~/.kiro/steering/` as global steering; the
+ * `inclusion: always` frontmatter (also Kiro's default) puts it in every session. Like
+ * the Cursor rule, the whole file is the managed unit. */
+export function renderKiroSteering(params: BlockParams): string {
+  return `---
+inclusion: always
+---
+
+${renderBody(params)}
+`;
+}
+
 export type UpsertOutcome =
   | { action: "created" | "replaced" | "appended" | "migrated" }
   | { action: "skipped"; reason: string };
@@ -286,9 +298,9 @@ export function upsertConfigBlock(target: string, section: string): UpsertOutcom
   return { action: "appended" };
 }
 
-/** Writes the Cursor rule file (whole-file managed unit), creating the rules dir if
- * needed. Returns what happened, for logging. */
-export function writeCursorRule(target: string, content: string): "created" | "replaced" {
+/** Writes a whole-file managed unit (the Cursor rule, the Kiro steering file), creating
+ * its directory if needed. Returns what happened, for logging. */
+export function writeOwnedFile(target: string, content: string): "created" | "replaced" {
   const existed = existsSync(target);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, content);

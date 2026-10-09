@@ -24,6 +24,7 @@ import {
   detectConfigTargets,
   renderConfigBlock,
   renderCursorRule,
+  renderKiroSteering,
   upsertConfigBlock,
 } from "./config-block.ts";
 
@@ -446,6 +447,7 @@ describe("generated receipt contract", () => {
   const wrappers: ReadonlyArray<readonly [string, string]> = [
     ["markered block", renderConfigBlock(params)],
     ["cursor rule", renderCursorRule(params)],
+    ["kiro steering", renderKiroSteering(params)],
   ];
 
   test.each(wrappers)("%s states the four receipt lines in order", (_name, rendered) => {
@@ -611,6 +613,31 @@ describe("config block", () => {
     mkdirSync(join(home, ".claude"), { recursive: true });
     seedNewRepo([], home);
     expect(existsSync(join(home, ".cursor"))).toBe(false);
+  });
+
+  test("writes a Kiro steering file when ~/.kiro exists, and refreshes idempotently", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".kiro", "settings"), { recursive: true });
+
+    const dir = seedNewRepo([], home);
+    const steeringPath = join(home, ".kiro", "steering", "decently-coordinated-loops.md");
+    const steering = readFileSync(steeringPath, "utf8");
+    expect(steering.startsWith("---\ninclusion: always\n---\n")).toBe(true);
+    expect(steering).toContain("## Work-stream board (decently-coordinated-loops)");
+    expect(steering).toContain(dir);
+    expect(steering).toContain("casey");
+    expect(steering).not.toContain(GENERATED_OPEN);
+
+    const rerun = run(["run", SEED, dir, "--join", "--owner", "casey"], { home });
+    expect(rerun.status).toBe(0);
+    expect(readFileSync(steeringPath, "utf8")).toBe(steering);
+  });
+
+  test("no Kiro steering file when ~/.kiro is absent", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    seedNewRepo([], home);
+    expect(existsSync(join(home, ".kiro"))).toBe(false);
   });
 
   // A home that cannot be listed is not an error: every other probe in

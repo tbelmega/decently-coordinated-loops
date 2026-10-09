@@ -3,3 +3,4 @@
 # setup/harnesses.test.ts fails if this drifts from the registry.
 .claude/skills
 .agents/skills
+.kiro/skills

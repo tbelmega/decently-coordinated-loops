@@ -28,8 +28,9 @@ import {
   detectConfigTargets,
   renderConfigBlock,
   renderCursorRule,
+  renderKiroSteering,
   upsertConfigBlock,
-  writeCursorRule,
+  writeOwnedFile,
 } from "./config-block.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
@@ -323,6 +324,7 @@ function installConfigBlock(opts: Options, root: string): void {
   const params = { owner, dataRepo: root, dclHome: DCL_HOME };
   const block = renderConfigBlock(params);
   const cursorRule = renderCursorRule(params);
+  const kiroSteering = renderKiroSteering(params);
   const targets = detectConfigTargets(opts.home);
   if (!targets.length) {
     console.log("no harness config directories detected - config block not installed");
@@ -330,8 +332,11 @@ function installConfigBlock(opts: Options, root: string): void {
   }
   for (const target of targets) {
     if (target.kind === "cursor") {
-      const action = writeCursorRule(target.path, cursorRule);
+      const action = writeOwnedFile(target.path, cursorRule);
       console.log(`  cursor rule ${action}: ${target.path}`);
+    } else if (target.kind === "kiro") {
+      const action = writeOwnedFile(target.path, kiroSteering);
+      console.log(`  kiro steering ${action}: ${target.path}`);
     } else {
       const outcome = upsertConfigBlock(target.path, block);
       if (outcome.action === "skipped") {

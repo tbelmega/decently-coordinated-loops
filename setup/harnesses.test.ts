@@ -41,11 +41,11 @@ describe("harness registry", () => {
   });
 
   test("every entry has a usable id", () => {
-    expect(harnesses.map((harness) => harness.id)).toEqual(["claude", "agents", "codex", "cursor"]);
+    expect(harnesses.map((harness) => harness.id)).toEqual(["claude", "agents", "codex", "cursor", "kiro"]);
   });
 
   test("skillsDirs is the deduplicated union, in registry order", () => {
-    expect(skillsDirs()).toEqual([".claude/skills", ".agents/skills"]);
+    expect(skillsDirs()).toEqual([".claude/skills", ".agents/skills", ".kiro/skills"]);
   });
 
   test("setup/skill-dirs.txt matches the registry", () => {
@@ -85,6 +85,22 @@ describe("detectConfigTargets", () => {
     }
   });
 
+  test("a Kiro skills tree this run created is not evidence that Kiro is installed", () => {
+    const home = tempHome();
+    try {
+      makeDir(home, ".kiro/skills");
+      process.env.DCL_CREATED_SKILL_DIRS = ".claude/skills\n.kiro/skills\n";
+      expect(detectConfigTargets(home)).toEqual([]);
+      makeDir(home, ".kiro/settings");
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"), kind: "kiro" },
+      ]);
+    } finally {
+      delete process.env.DCL_CREATED_SKILL_DIRS;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a skills tree that was already there still counts as a Claude installation", () => {
     // The opposite error, and the worse one: refusing to wire a real installation leaves
     // every later session unaware of the board, while a block in a directory DCL made
@@ -107,6 +123,7 @@ describe("detectConfigTargets", () => {
       writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
       makeDir(home, ".codex");
       makeDir(home, ".cursor");
+      makeDir(home, ".kiro/steering");
       expect(detectConfigTargets(home)).toEqual([
         { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
         { path: join(home, ".codex", "AGENTS.md"), kind: "block" },
@@ -114,6 +131,7 @@ describe("detectConfigTargets", () => {
           path: join(home, ".cursor", "rules", "decently-coordinated-loops.mdc"),
           kind: "cursor",
         },
+        { path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"), kind: "kiro" },
       ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
