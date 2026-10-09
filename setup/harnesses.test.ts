@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -13,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { detectConfigTargets, harnesses, skillsDirs } from "./harnesses.ts";
+import { detectConfigTargets, harnesses, skillsDirs, type ConfigTarget } from "./harnesses.ts";
 import { allReviewers, reviewerBin } from "../tools/review/reviewers.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
@@ -85,16 +86,29 @@ describe("detectConfigTargets", () => {
     }
   });
 
-  test("a Kiro skills tree this run created is not evidence that Kiro is installed", () => {
+  test("a Kiro home this run created is not evidence that Kiro is installed", () => {
     const home = tempHome();
     try {
       makeDir(home, ".kiro/skills");
-      process.env.DCL_CREATED_SKILL_DIRS = ".claude/skills\n.kiro/skills\n";
+      process.env.DCL_CREATED_SKILL_DIRS = ".kiro\n.kiro/skills\n";
       expect(detectConfigTargets(home)).toEqual([]);
-      makeDir(home, ".kiro/settings");
-      expect(detectConfigTargets(home)).toEqual([
-        { path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"), kind: "kiro" },
-      ]);
+    } finally {
+      delete process.env.DCL_CREATED_SKILL_DIRS;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a pre-existing Kiro home counts even when empty or holding only a new skills tree", () => {
+    const kiroTarget = (home: string): ConfigTarget[] => [
+      { path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"), kind: "kiro" },
+    ];
+    const home = tempHome();
+    try {
+      makeDir(home, ".kiro");
+      expect(detectConfigTargets(home)).toEqual(kiroTarget(home));
+      makeDir(home, ".kiro/skills");
+      process.env.DCL_CREATED_SKILL_DIRS = ".kiro/skills\n";
+      expect(detectConfigTargets(home)).toEqual(kiroTarget(home));
     } finally {
       delete process.env.DCL_CREATED_SKILL_DIRS;
       rmSync(home, { recursive: true, force: true });
@@ -262,6 +276,30 @@ describe("install.sh", () => {
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("--seed writes Kiro steering for a pre-existing empty ~/.kiro, never for one it created", () => {
+    const steering = (home: string) => join(home, ".kiro", "steering", "decently-coordinated-loops.md");
+    const seed = (home: string) =>
+      spawnSync(
+        "bash",
+        [join(DCL_HOME, "install.sh"), "--seed", join(home, "data"), "--owner", "casey", "--branch", "main"],
+        { env: { ...process.env, HOME: home }, encoding: "utf8" },
+      );
+    const withKiro = tempHome();
+    const withoutKiro = tempHome();
+    try {
+      makeDir(withKiro, ".kiro");
+      expect(seed(withKiro).status).toBe(0);
+      expect(existsSync(steering(withKiro))).toBe(true);
+
+      expect(seed(withoutKiro).status).toBe(0);
+      expect(existsSync(join(withoutKiro, ".kiro", "skills"))).toBe(true);
+      expect(existsSync(steering(withoutKiro))).toBe(false);
+    } finally {
+      rmSync(withKiro, { recursive: true, force: true });
+      rmSync(withoutKiro, { recursive: true, force: true });
     }
   });
 

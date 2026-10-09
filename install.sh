@@ -94,9 +94,16 @@ fi
 # config home contains nothing but a skills tree we just made is not evidence that the
 # harness is installed, and without this the two halves of `./install.sh --seed` would
 # conspire: link first, then read our own directory back as detection.
+#
+# The top-level home directory (`.kiro` for `.kiro/skills`) is recorded the same way when
+# this run creates it: a harness detected by that directory's mere existence must not
+# read a home the installer just made as proof the harness is installed.
 created_skill_dirs=""
 while IFS= read -r skill_dir || [ -n "$skill_dir" ]; do
   case "$skill_dir" in ""|\#*) continue ;; esac
+  top_dir="${skill_dir%%/*}"
+  [ -d "$HOME/$top_dir" ] || created_skill_dirs="$created_skill_dirs$top_dir
+"
   [ -d "$HOME/$skill_dir" ] || created_skill_dirs="$created_skill_dirs$skill_dir
 "
   link_skills "$HOME/$skill_dir"
