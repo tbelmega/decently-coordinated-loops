@@ -77,19 +77,38 @@ is set, load loops-review and drive the bundled reviewer; a clean review of the 
 HEAD is its passing terminal signal.
 
 **End** that final item handoff with this receipt - the last lines you print, below the
-prose summary, so the status is visible without scrolling. Use only these states, and
-include concise command, HEAD, URL, or ledger evidence after the dash:
+prose summary, so the status is visible without scrolling. Use only these states;
+after the dash, give the sentence described below, then concise command, HEAD, URL,
+or ledger evidence:
 
-    IMPLEMENTATION: COMPLETE|INCOMPLETE
-    VERIFICATION: PASSED|FAILED|NOT RUN
-    REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN
+    <WORK TYPE>: COMPLETE|INCOMPLETE - <one sentence: what this work was and what for>
+
+    VERIFICATION: PASSED|FAILED|NOT RUN - <one sentence: what was checked>
+
+    REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN - <reviewer, rounds>
+
     NEXT STEP/OPTIONS: <the next action, or the alternatives when it is the owner's call>
+
+Print the four lines as plain paragraphs separated by blank lines, never inside a
+code block: a Markdown renderer joins adjacent lines into one paragraph, and a code
+block does not wrap the sentences.
+
+\`<WORK TYPE>\` names the kind of work actually done, as specifically as fits:
+IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS; TASK only when nothing narrower fits.
+The sentence after its status is for an owner who has just switched in from another
+thread and remembers nothing of this one: say in plain words what the work was and
+what it was for, without item slugs, finding IDs, or other references they would
+have to look up. The \`VERIFICATION\` sentence says what the check was (e.g. "typecheck
+and unit tests").
 
 \`REQUESTED\` means an asynchronous tool or human has the review but has not completed
 it; \`WAIVED\` requires the owner's explicit opt-out. Do not claim the overall item
 complete when its required review has not passed. If the bundled reviewer is active,
 run its \`status\` command immediately before the receipt; only its
-\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`.
+\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`. When \`REVIEW\` is
+\`BLOCKED\`, its line also states the risk of landing now: what is unreviewed, what
+covers it anyway (e.g. green tests), how confident you are in it and why, and the
+impact if it is wrong.
 
 \`NEXT STEP/OPTIONS\` is mandatory and names who acts next. When the item is cleanly
 handed over, one line is enough (e.g. the owner lands the recorded range).

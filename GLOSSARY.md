@@ -17,7 +17,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Claim**: An assignment or state change that becomes authoritative across machines only after its data-repo commit is pushed successfully.
 - **Clean review**: A current-HEAD review result with no blocking findings or unresolved obligations under the configured policy.
 - **Cleanup work**: Trust-maintenance work that checks stale specifications, follow-ups, research, or board records against current evidence.
-- **Completion receipt**: The required four-line handoff summary reporting implementation, verification, review, and the next step or options.
+- **Completion receipt**: The required four-line handoff summary reporting the work done, its verification, its review, and the next step or options.
 - **Confirmation round**: A later review round that checks required remediation or documentation, confirms qualifying rejected decisions, scans for regression, and looks for new defects.
 - **Current-HEAD status**: A review verdict evaluated against the repository's exact current `HEAD`, not merely the last commit a reviewer examined.
 - **Current-workstream causality**: A finding classification that attributes the problem to the current change and can therefore create a remediation obligation.

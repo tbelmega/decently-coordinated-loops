@@ -452,7 +452,7 @@ describe("generated receipt contract", () => {
 
   test.each(wrappers)("%s states the four receipt lines in order", (_name, rendered) => {
     const positions = [
-      rendered.indexOf("IMPLEMENTATION: COMPLETE|INCOMPLETE"),
+      rendered.indexOf("<WORK TYPE>: COMPLETE|INCOMPLETE"),
       rendered.indexOf("VERIFICATION: PASSED|FAILED|NOT RUN"),
       rendered.indexOf("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN"),
       rendered.indexOf("NEXT STEP/OPTIONS:"),
@@ -461,6 +461,42 @@ describe("generated receipt contract", () => {
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
+
+  // Several UIs render the handoff as Markdown, which joins adjacent lines into one
+  // paragraph; the template itself must model the blank-line separation it requires.
+  test.each(wrappers)("%s separates the receipt lines with blank lines", (_name, rendered) => {
+    expect(rendered).toMatch(
+      /<WORK TYPE>: COMPLETE\|INCOMPLETE[^\n]*\n\n {4}VERIFICATION: [^\n]*\n\n {4}REVIEW: [^\n]*\n\n {4}NEXT STEP\/OPTIONS:/,
+    );
+    expect(flatten(rendered)).toContain(
+      "Print the four lines as plain paragraphs separated by blank lines, never inside a " +
+        "code block:",
+    );
+  });
+
+  test.each(wrappers)(
+    "%s makes each receipt line readable without the thread's context",
+    (_name, rendered) => {
+      const flat = flatten(rendered);
+
+      expect(flat).toContain(
+        "`<WORK TYPE>` names the kind of work actually done, as specifically as fits: " +
+          "IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS; TASK only when nothing narrower fits.",
+      );
+      expect(flat).toContain(
+        "The sentence after its status is for an owner who has just switched in from another " +
+          "thread and remembers nothing of this one:",
+      );
+      expect(flat).toContain(
+        "The `VERIFICATION` sentence says what the check was (e.g. \"typecheck and unit tests\").",
+      );
+      expect(flat).toContain(
+        "When `REVIEW` is `BLOCKED`, its line also states the risk of landing now: what is " +
+          "unreviewed, what covers it anyway (e.g. green tests), how confident you are in it " +
+          "and why, and the impact if it is wrong.",
+      );
+    },
+  );
 
   test.each(wrappers)("%s puts the receipt at the end of the handoff", (_name, rendered) => {
     expect(flatten(rendered)).toContain(
@@ -541,7 +577,7 @@ describe("config block", () => {
     expect(claudeMd).toContain(`${SECTION_CLOSE}\n${GENERATED_CLOSE}\n`);
     expect(claudeMd).toContain(dir);
     expect(claudeMd).toContain("casey");
-    expect(claudeMd).toContain("IMPLEMENTATION: COMPLETE|INCOMPLETE");
+    expect(claudeMd).toContain("<WORK TYPE>: COMPLETE|INCOMPLETE");
     expect(claudeMd).toContain("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN");
     expect(claudeMd).toContain(
       "after all of its internal tasks and commits are complete and final\nverification passes",
