@@ -5,6 +5,7 @@
 // produces a Review; everything here is pure.
 
 import {parseTestCapExits, renderTestCapExits, type TestCapExitEvidence} from "./review-test-evidence.ts";
+import {parseCarryOvers, renderCarryOvers, type ReviewCarryOver} from "./review-carry-over.ts";
 import {DEFAULT_REVIEW_MAX_ROUNDS, type ReviewClassConfig, type ReviewPersonaName} from "../config.ts";
 import type {
   CombinedAuditNote,
@@ -257,6 +258,8 @@ export interface ReviewLedger {
   failures?: ReviewFailure[];
   /** Test-backed completion attempts; independent review history is unchanged. */
   testCapExits?: TestCapExitEvidence[];
+  /** Implementer-attested moves of HEAD past a passed review; never independently reviewed. */
+  carryOvers?: ReviewCarryOver[];
   supersessions?: ReviewSupersession[];
 }
 
@@ -1062,6 +1065,7 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
     version: 1,
     ...(routingVersion === 1 ? {routingVersion} : {}),
     ...(input.testCapExits !== undefined ? {testCapExits: parseTestCapExits(input.testCapExits)} : {}),
+    ...(input.carryOvers !== undefined ? {carryOvers: parseCarryOvers(input.carryOvers)} : {}),
     ...(causalScopeVersion === 1 ? {causalScopeVersion} : {}),
     ...(optionalString(input, "item", "review ledger") ? { item: String(input.item) } : {}),
     ...(authority ? { authority } : {}),
@@ -1812,6 +1816,7 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     }
   }
   lines.push(...renderTestCapExits(ledger.testCapExits ?? []));
+  lines.push(...renderCarryOvers(ledger.carryOvers ?? []));
   return `${lines.join("\n")}\n`;
 }
 

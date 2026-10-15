@@ -105,10 +105,13 @@ and unit tests").
 it; \`WAIVED\` requires the owner's explicit opt-out. Do not claim the overall item
 complete when its required review has not passed. If the bundled reviewer is active,
 run its \`status\` command immediately before the receipt; only its
-\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`. When \`REVIEW\` is
-\`BLOCKED\`, its line also states the risk of landing now: what is unreviewed, what
-covers it anyway (e.g. green tests), how confident you are in it and why, and the
-impact if it is wrong.
+\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`. A HEAD that moved past a
+passed review only by a rebase or a non-behavioral commit is carried over per
+loops-review, not reported as \`BLOCKED\`; when \`status\` reports \`carried_from\`, write
+\`REVIEW: PASSED (carried over from <sha>; <the delta in plain words>; not re-reviewed)\`.
+When \`REVIEW\` is \`BLOCKED\`, its line also states the risk of landing now: what is
+unreviewed, what covers it anyway (e.g. green tests), how confident you are in it and
+why, and the impact if it is wrong.
 
 \`NEXT STEP/OPTIONS\` is mandatory and names who acts next. When the item is cleanly
 handed over, one line is enough (e.g. the owner lands the recorded range).

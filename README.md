@@ -122,6 +122,9 @@ intervening commits touch only configured landing-metadata paths, and prints the
 evidence agents place in their completion receipt. With opt-in `review.testBackedCapExit`,
 `test-cap-exit` can instead verify committed P1-P3 fixes at the cap using regression checks
 and the mechanical quality gate, reporting explicitly that the fixes lack independent re-review.
+When HEAD moved past a passed review by a rebase or a non-behavioral commit, `carry-over`
+records the implementer's reason and the computed delta files, and `status` passes while
+reporting that the delta was not independently reviewed.
 The [loops-review skill](skills/loops-review/SKILL.md) defines evidence and risk requirements.
 Pass the same data repo you passed to
 `start`: the gate re-resolves the review policy from it to authorize any class waiver, and

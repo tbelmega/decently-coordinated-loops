@@ -12,6 +12,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Cap exit**: A configured terminal review outcome that permits specifically allowed residual obligations at the review-round cap.
 - **Capability gate**: The eligibility check that determines whether the available agent or worker tier fits an item's recorded requirements.
 - **Carried decision**: An eligible finding disposition inherited automatically when the same finding recurs in a later review round.
+- **Carry-over**: An implementer-attested record that `HEAD` moved past a passed review without changing reviewed behavior, letting `status` pass while reporting that the delta was not independently reviewed.
 - **Causal scope**: The ledger rules that identify what caused a finding and whether it belongs to the current work-stream.
 - **Change class**: An owner-configured functional category that can authorize defined review handling, including limited waivers, for matching changes.
 - **Claim**: An assignment or state change that becomes authoritative across machines only after its data-repo commit is pushed successfully.
@@ -85,7 +86,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Spec-sized**: Too broad or decision-heavy to implement from the item alone, requiring an approved spec or an explicit owner waiver.
 - **Stack parent**: The preceding item whose exact unlanded reviewed head is the deliberate base of a child item in the same slot.
 - **Stagger offset**: A deliberate schedule shift that prevents several dispatchers from firing simultaneously.
-- **Stale review**: Review evidence that no longer applies because its branch, base, `HEAD`, or non-metadata content changed.
+- **Stale review**: Review evidence that no longer applies because its branch, base, `HEAD`, or non-metadata content changed and no carry-over covers the move.
 - **Stopped ask**: An outbox question or approval request that blocks progress and must be surfaced directly to the owner at attended handoff.
 - **Substantive eligible work**: Work that materially advances a ready item, excluding preflight, routing, bookkeeping, or parking by themselves.
 - **Terminal state**: A lifecycle state that finishes or abandons a work-stream and routes it out of the active board.

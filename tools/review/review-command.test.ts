@@ -3454,3 +3454,255 @@ describe("cli-review profiles (C8)", () => {
     expect(result.stderr).toContain("mid-review profile change is refused");
   });
 });
+
+function runCarryOver(repository: string, dataRepo: string, item: string, reason?: string) {
+  return spawnSync("bun", [
+    "run",
+    CLI,
+    "carry-over",
+    "--item",
+    item,
+    "--data-repo",
+    dataRepo,
+    ...(reason === undefined ? [] : ["--reason", reason]),
+  ], {
+    cwd: repository,
+    encoding: "utf8",
+  });
+}
+
+function commitFile(repository: string, path: string, content: string, message: string): string {
+  writeFileSync(`${repository}/${path}`, content);
+  git(repository, ["add", path]);
+  git(repository, ["commit", "-q", "-m", message]);
+  return git(repository, ["rev-parse", "HEAD"]);
+}
+
+describe("cli-review carry-over", () => {
+  test("carries a passed review to a HEAD that moved by a trivial commit", () => {
+    const {repository, headSha: reviewedHead} = createReviewRepository();
+    const item = "carry-trivial";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const currentHead = commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+    expect(runStatus(repository, item, repository, dataRepo).status).toBe(1);
+
+    const result = runCarryOver(repository, dataRepo, item, "Only adds an ignore file; no reviewed behavior changes");
+
+    expect(result.status).toBe(0);
+    const status = runStatus(repository, item, repository, dataRepo);
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain("REVIEW_STATUS=passed");
+    expect(status.stdout).toContain(`carried_from=${reviewedHead} carried_files=1 independently_reviewed=false`);
+    expect(status.stdout).toContain(`head=${currentHead}`);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const markdown = readFileSync(paths.markdownPath, "utf8");
+    expect(markdown).toContain("Only adds an ignore file; no reviewed behavior changes");
+    expect(markdown).toContain(".gitignore");
+  });
+
+  test("records no delta files for a pure rebase onto a moved base", () => {
+    const {repository, headSha: reviewedHead} = createReviewRepository();
+    const item = "carry-rebase";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    git(repository, ["switch", "-q", "master"]);
+    commitFile(repository, "unrelated.txt", "landed elsewhere\n", "Land unrelated work");
+    git(repository, ["switch", "-q", "feature/review-receipt"]);
+    git(repository, ["rebase", "-q", "master"]);
+
+    const result = runCarryOver(repository, dataRepo, item, "Rebased onto master; the branch's own patch is unchanged");
+
+    expect(result.status).toBe(0);
+    const status = runStatus(repository, item, repository, dataRepo);
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain(`carried_from=${reviewedHead} carried_files=0`);
+  });
+
+  test("a later commit invalidates the carry-over", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-invalidated";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+    expect(runCarryOver(repository, dataRepo, item, "Only adds an ignore file").status).toBe(0);
+
+    commitFile(repository, "change.txt", "changed behavior\n", "Change behavior");
+
+    const status = runStatus(repository, item, repository, dataRepo);
+    expect(status.status).toBe(1);
+    expect(status.stdout).toContain("REVIEW_STATUS=blocked");
+    expect(status.stdout).toContain("latest review covers");
+  });
+
+  test("refuses when the reviewed HEAD did not pass", () => {
+    const {repository, headSha: reviewedHead} = createReviewRepository();
+    const item = "carry-unpassed";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item, "master", {
+      FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+    }).status).toBe(0);
+    commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+
+    const result = runCarryOver(repository, dataRepo, item, "Only adds an ignore file");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`the review covering ${reviewedHead} has not passed`);
+    expect(runStatus(repository, item, repository, dataRepo).status).toBe(1);
+  });
+
+  test("refuses without a reason", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-no-reason";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+
+    for (const reason of [undefined, "   "]) {
+      const result = runCarryOver(repository, dataRepo, item, reason);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("carry-over requires --reason");
+    }
+  });
+
+  test("refuses with uncommitted changes", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-dirty";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+    writeFileSync(`${repository}/change.txt`, "uncommitted\n");
+
+    const result = runCarryOver(repository, dataRepo, item, "Only adds an ignore file");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("carry-over requires a clean committed working tree");
+  });
+
+  test("counts a whitespace change inside a reviewed line as a delta file", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-whitespace";
+    const dataRepo = createReviewDataRepo(5);
+    commitFile(repository, "greeting.ts", 'export const greeting = "hello world";\n', "Add greeting");
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    commitFile(repository, "greeting.ts", 'export const greeting = "helloworld";\n', "Drop the space");
+
+    expect(runCarryOver(repository, dataRepo, item, "claimed trivial").status).toBe(0);
+
+    const status = runStatus(repository, item, repository, dataRepo);
+    expect(status.stdout).toContain("carried_files=1");
+  });
+
+  test("measures a second carry-over against the reviewed HEAD", () => {
+    const {repository, headSha: reviewedHead} = createReviewRepository();
+    const item = "carry-chain";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+    expect(runCarryOver(repository, dataRepo, item, "Only adds an ignore file").status).toBe(0);
+    const currentHead = commitFile(repository, ".editorconfig", "root = true\n", "Add editor config");
+
+    expect(runCarryOver(repository, dataRepo, item, "Only adds an editor config").status).toBe(0);
+
+    const status = runStatus(repository, item, repository, dataRepo);
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain(`carried_from=${reviewedHead} carried_files=2`);
+    expect(status.stdout).toContain(`head=${currentHead}`);
+    const ledger = readItemLedger(repository, item);
+    expect(ledger.carryOvers.map((entry: {reviewedHeadSha: string}) => entry.reviewedHeadSha))
+      .toEqual([reviewedHead, reviewedHead]);
+  });
+
+  test("refuses after a failed review attempt at a carried HEAD", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-chain-failed";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const carriedHead = commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+    expect(runCarryOver(repository, dataRepo, item, "Only adds an ignore file").status).toBe(0);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    ledger.failures = [{headSha: carriedHead, model: "codex (default)", attemptedAt: "2099-01-01T00:00:00Z",
+      reason: "review failed"}];
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    commitFile(repository, ".editorconfig", "root = true\n", "Add editor config");
+
+    const result = runCarryOver(repository, dataRepo, item, "Only adds an editor config");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("a review attempt failed since the latest round; run a review round");
+    expect(runStatus(repository, item, repository, dataRepo).status).toBe(1);
+  });
+
+  test("refuses after a failed review attempt at an earlier carried HEAD", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-chain-restart";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const firstCarried = commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+    expect(runCarryOver(repository, dataRepo, item, "Only adds an ignore file").status).toBe(0);
+    commitFile(repository, ".editorconfig", "root = true\n", "Add editor config");
+    expect(runCarryOver(repository, dataRepo, item, "Only adds an editor config").status).toBe(0);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    ledger.failures = [{headSha: firstCarried, model: "codex (default)", attemptedAt: "2099-01-01T00:00:00Z",
+      reason: "review failed"}];
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    commitFile(repository, ".prettierrc", "{}\n", "Add formatter config");
+
+    const result = runCarryOver(repository, dataRepo, item, "Only adds a formatter config");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("a review attempt failed since the latest round; run a review round");
+    expect(runStatus(repository, item, repository, dataRepo).status).toBe(1);
+  });
+
+  test("refuses to extend a carried HEAD whose review attempt failed before a later failure", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-failed-then-elsewhere";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    const carriedHead = commitFile(repository, ".gitignore", "node_modules/\n", "Ignore dependencies");
+    expect(runCarryOver(repository, dataRepo, item, "Only adds an ignore file").status).toBe(0);
+    const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
+    const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+    ledger.failures = [
+      {headSha: carriedHead, model: "codex (default)", attemptedAt: "2099-01-01T00:00:00Z", reason: "review failed"},
+      {headSha: "f".repeat(40), model: "codex (default)", attemptedAt: "2099-01-02T00:00:00Z", reason: "review failed"},
+    ];
+    writeFileSync(paths.jsonPath, `${JSON.stringify(ledger)}\n`);
+    expect(runStatus(repository, item, repository, dataRepo).status).toBe(1);
+    commitFile(repository, ".editorconfig", "root = true\n", "Add editor config");
+
+    const result = runCarryOver(repository, dataRepo, item, "Only adds an editor config");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("a review attempt failed since the latest round; run a review round");
+    expect(readItemLedger(repository, item).carryOvers).toHaveLength(1);
+  });
+
+  test("counts an indentation change as a delta file", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-indentation";
+    const dataRepo = createReviewDataRepo(5);
+    commitFile(repository, "task.py", "if ready:\n    run()\ncleanup()\n", "Add task");
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+    commitFile(repository, "task.py", "if ready:\n    run()\n    cleanup()\n", "Indent cleanup");
+
+    expect(runCarryOver(repository, dataRepo, item, "claimed trivial").status).toBe(0);
+
+    expect(runStatus(repository, item, repository, dataRepo).stdout).toContain("carried_files=1");
+  });
+
+  test("refuses when HEAD is still the reviewed HEAD", () => {
+    const {repository} = createReviewRepository();
+    const item = "carry-same-head";
+    const dataRepo = createReviewDataRepo(5);
+    expect(runStart(repository, dataRepo, item).status).toBe(0);
+
+    const result = runCarryOver(repository, dataRepo, item, "Nothing changed");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("HEAD is the reviewed HEAD; there is nothing to carry over");
+  });
+});

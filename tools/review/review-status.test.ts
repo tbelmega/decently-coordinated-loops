@@ -649,3 +649,118 @@ describe("cap exits (C7)", () => {
     expect(status.kind).toBe("blocked");
   });
 });
+
+describe("carry-over", () => {
+  const carryOver = {reviewedHeadSha: "reviewed", headSha: "moved", deltaFiles: [".gitignore"],
+    reason: "ignore file only", recordedAt: "2026-07-19T13:00:00Z"};
+
+  test("covers the attested HEAD while the reviewed round is the latest", () => {
+    const ledger = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [carryOver],
+    };
+
+    const status = evaluateReviewStatus(ledger, "moved", ".reviews/feature.md");
+
+    expect(status).toMatchObject({kind: "passed", headSha: "moved", carriedFrom: "reviewed", carriedFiles: 1});
+    expect(renderReviewStatus(status)).toContain("carried_from=reviewed carried_files=1 independently_reviewed=false");
+  });
+
+  test("a failed attempt at an earlier carried HEAD voids the newer carry-over", () => {
+    const later = {reviewedHeadSha: "reviewed", headSha: "moved-again", deltaFiles: [".gitignore"],
+      reason: "editor config only", recordedAt: "2026-07-19T13:30:00Z"};
+    const ledger = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [carryOver, later],
+    };
+    expect(evaluateReviewStatus(ledger, "moved-again", ".reviews/feature.md")).toMatchObject({kind: "passed"});
+
+    const failed = {...ledger, failures: [{headSha: "moved", model: "codex-default",
+      attemptedAt: "2026-07-19T14:00:00Z", reason: "review failed"}]};
+
+    expect(evaluateReviewStatus(failed, "moved-again", ".reviews/feature.md")).toMatchObject({kind: "blocked"});
+  });
+
+  test("a carry-over recorded after a failed attempt does not pass", () => {
+    const later = {reviewedHeadSha: "reviewed", headSha: "moved-again", deltaFiles: [".gitignore"],
+      reason: "editor config only", recordedAt: "2026-07-19T13:30:00Z"};
+    const restarted = {reviewedHeadSha: "reviewed", headSha: "restarted", deltaFiles: [".gitignore"],
+      reason: "formatter config only", recordedAt: "2026-07-19T14:30:00Z"};
+    const ledger = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [carryOver, later, restarted],
+      failures: [{headSha: "moved", model: "codex-default", attemptedAt: "2026-07-19T14:00:00Z", reason: "review failed"}],
+    };
+
+    expect(evaluateReviewStatus(ledger, "restarted", ".reviews/feature.md")).toMatchObject({kind: "blocked"});
+  });
+
+  test("an earlier failed attempt at the last carried HEAD keeps it blocked after a later failure elsewhere", () => {
+    const ledger = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [carryOver],
+      failures: [
+        {headSha: "moved", model: "codex-default", attemptedAt: "2026-07-19T14:00:00Z", reason: "review failed"},
+        {headSha: "elsewhere", model: "codex-default", attemptedAt: "2026-07-19T15:00:00Z", reason: "review failed"},
+      ],
+    };
+
+    expect(evaluateReviewStatus(ledger, "moved", ".reviews/feature.md")).toMatchObject({kind: "blocked"});
+  });
+
+  test("a failed attempt at an unrelated HEAD since the round voids the carry-over", () => {
+    const ledger = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [carryOver],
+      failures: [{headSha: "elsewhere", model: "codex-default", attemptedAt: "2026-07-19T14:00:00Z", reason: "review failed"}],
+    };
+
+    expect(evaluateReviewStatus(ledger, "moved", ".reviews/feature.md")).toMatchObject({kind: "blocked"});
+  });
+
+  test("only the newest carry-over covers a HEAD", () => {
+    const newer = {...carryOver, headSha: "moved-again", recordedAt: "2026-07-19T13:30:00Z"};
+    const ledger = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [carryOver, newer],
+    };
+
+    expect(evaluateReviewStatus(ledger, "moved", ".reviews/feature.md")).toMatchObject({kind: "blocked"});
+    expect(evaluateReviewStatus(ledger, "moved-again", ".reviews/feature.md")).toMatchObject({kind: "passed"});
+  });
+
+  test("is superseded by a newer round", () => {
+    const reviewed = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [carryOver],
+    };
+    const ledger = addReviewRound(reviewed,
+      {headSha: "later", model: "codex-default", reviewedAt: "2026-07-19T14:00:00Z", review: cleanReview});
+
+    expect(evaluateReviewStatus(ledger, "moved", ".reviews/feature.md")).toMatchObject({
+      kind: "blocked",
+      reason: "latest review covers later, not current HEAD moved",
+    });
+  });
+});

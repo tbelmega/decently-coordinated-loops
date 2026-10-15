@@ -1,4 +1,5 @@
 import {testCapExitRefusal} from "./review-test-evidence.ts";
+import {activeCarryOver} from "./review-carry-over.ts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ReviewClassConfig } from "../config.ts";
@@ -50,6 +51,10 @@ export interface PassedReviewStatus extends ReviewStatusBase {
   residualObligations?: number;
   testCapExit?: boolean;
   testVerifiedFixes?: number;
+  /** The passed review covers an earlier HEAD, carried to this one by an implementer
+   * attestation; the delta was not independently reviewed. */
+  carriedFrom?: string;
+  carriedFiles?: number;
   /** C8: the review profile this ledger is bound to. */
   profile?: string;
 }
@@ -94,6 +99,14 @@ export function evaluateReviewStatus(
   const testExit = testBackedCapExit !== undefined && testCapExitRefusal(ledger, currentHeadSha,
     testBackedCapExit.maxRounds, liveRounds(ledger).length, openObligations(ledger)) === undefined;
   if (latestRound.headSha !== currentHeadSha && !testExit) {
+    const carryOver = activeCarryOver(ledger, currentHeadSha);
+    if (carryOver) {
+      const reviewed = evaluateReviewStatus(ledger, latestRound.headSha, ledgerPath, classes, terminalRejection, capExit);
+      if (reviewed.kind === "passed") {
+        return {...reviewed, headSha: currentHeadSha, carriedFrom: carryOver.reviewedHeadSha,
+          carriedFiles: carryOver.deltaFiles.length};
+      }
+    }
     return {
       kind: "blocked",
       headSha: currentHeadSha,
@@ -242,6 +255,7 @@ export function renderReviewStatus(status: ReviewStatus): string {
       `residual_notes=${status.residualNotes ?? 0}`,
       ...(status.capExit ? [`cap_exit=true`, `residual_obligations=${status.residualObligations ?? 0}`] : []),
       ...(status.testCapExit ? [`test_cap_exit=true`, `test_verified_fixes=${status.testVerifiedFixes ?? 0}`, `independently_reviewed=false`] : []),
+      ...(status.carriedFrom ? [`carried_from=${status.carriedFrom}`, `carried_files=${status.carriedFiles ?? 0}`, `independently_reviewed=false`] : []),
       `head=${status.headSha}`,
       `ledger=${status.ledgerPath}`,
     ].join(" ");

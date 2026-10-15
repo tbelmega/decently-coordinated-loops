@@ -553,6 +553,15 @@ describe("generated receipt contract", () => {
     },
   );
 
+  test.each(wrappers)("%s reports a carried-over review as passed", (_name, rendered) => {
+    expect(flatten(rendered)).toContain(
+      "A HEAD that moved past a passed review only by a rebase or a non-behavioral commit is " +
+        "carried over per loops-review, not reported as `BLOCKED`; when `status` reports " +
+        "`carried_from`, write `REVIEW: PASSED (carried over from <sha>; <the delta in plain " +
+        "words>; not re-reviewed)`.",
+    );
+  });
+
   test.each(wrappers)("%s keeps the owner-no-reply rule intact", (_name, rendered) => {
     expect(flatten(rendered)).toContain(
       "**Before printing the receipt, leave the item in a state that is still accurate if " +

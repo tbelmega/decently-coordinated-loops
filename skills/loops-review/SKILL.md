@@ -389,7 +389,8 @@ explicit reviewer, model, or effort flags still override their corresponding sav
 are recorded as intentional changes. A new logical round resolves current alternatives again.
 Legacy failed attempts without routing evidence initialize routing once from current config and
 record that fact without consuming another round. A stale review requires a fresh round and
-consumes one; `start` refuses a same-base rerun after a clean round. If recovery needs a
+consumes one, unless the move qualifies for a carry-over (below); `start` refuses a same-base
+rerun after a clean round. If recovery needs a
 round beyond the cap, escalate rather than extending it yourself.
 
 **Escalate an exhausted cap or outstanding deferred finding**, or use the documented
@@ -406,6 +407,27 @@ never make more rounds the only option:
 | Waive review and land as-is | Requires explicit owner opt-out. Once given: `implemented` / `owner` / `awaiting: review-merge`, `REVIEW: WAIVED`. |
 | Drop the change | `dropped`. |
 | Take no action | Keep the accurate blocked state; nothing lands. |
+
+### Carry-over
+
+When HEAD moved past a passed review without changing reviewed behavior, record that
+judgment instead of reporting a green review as blocked:
+
+```bash
+bun "$DCL_HOME/tools/review/cli-review.ts" carry-over --item <item-slug> \
+  --data-repo <data-repo> --reason "<why the move changes no reviewed behavior>"
+```
+
+It qualifies for a rebase onto a moved integration branch, an ignore file, metadata,
+comments, and formatting. A behavior change, a test change, or a fix for a finding needs a
+real round. The CLI refuses unless the tree is clean, the latest round's HEAD still passes,
+and no review attempt has failed since that round. It computes the delta files itself (files whose net patch differs from the reviewed
+one, so a pure rebase records none) and stores your reason in the ledger. `status` then
+passes with `carried_from=<reviewed-sha> carried_files=<n> independently_reviewed=false`.
+Every carry-over is measured against the reviewed HEAD, so a later commit needs a new
+carry-over that replaces the previous one; a newer round supersedes them, and a failed review
+attempt since the round voids them until the next round. Report
+`REVIEW: PASSED (carried over from <sha>; <the delta in plain words>; not re-reviewed)`.
 
 ### Test-backed cap exit
 
@@ -531,6 +553,8 @@ with the same symbolic `--base`. The new base must be an ancestor of HEAD.
 
 - **Patch-equivalent rebase:** retain the ledger and run integration/adversarial passes
   against the explicit new-base delta and its intersections with reviewed files.
+  When the review had already passed and the new-base delta does not touch reviewed
+  behavior, a carry-over records the rebase instead.
 - **Changed patch series:** snapshot prior evidence and supersede the base in the same
   ledger. Reset coverage, manifests, and findings for rediscovery, but retain every
   decision, typed obligation, and tripwire state. All earlier findings must already
@@ -608,7 +632,7 @@ missing finding decisions, and the cap. Incomplete attempts never mean "no findi
 **Landing metadata.** Finish code review before committing `review.metadataPaths` files.
 Later commits changing only those paths preserve a clean review if `status` confirms the
 reviewed HEAD is an ancestor and every intervening path matches the persisted patterns.
-Any other change stales review. These paths are for bookkeeping, such as landing pointers,
+Any other change stales review unless carried over. These paths are for bookkeeping, such as landing pointers,
 never implementation.
 
 Immediately before final handoff, run from the target repo with the original data repo:

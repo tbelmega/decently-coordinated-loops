@@ -11,6 +11,7 @@
 // JSON evidence and explicit approval kept outside the review result.
 import {runDraftCommand} from "./review-draft.ts";
 import { spawnSync } from "node:child_process";
+import {activeCarryOver, failedSinceLatestRound, type ReviewCarryOver} from "./review-carry-over.ts";
 import {parseTestCapExitRequest, testCapExitRefusal, testExitReviewStateHash, type TestCapExitEvidence, type TestExitCheck} from "./review-test-evidence.ts";
 import { createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
@@ -1861,6 +1862,23 @@ function isMissingFileError(error: unknown): boolean {
  *    left every waiver recorded through the documented flow unauthorized here.
  * 2. Authorization binds against the RESOLVED classes, never the recorded waiver. No
  *    resolvable data repo means no classes, and no classes means waivers block. */
+/** The policy arguments evaluateReviewStatus takes, resolved the same way for every gate. */
+function statusPolicy(ledger: ReviewLedger, governing: ReturnType<typeof governingPolicy>): {
+  classes: ReviewClassConfig[] | undefined;
+  terminalRejection: boolean;
+  capExit: {maxRounds: number} | undefined;
+  testExit: {maxRounds: number} | undefined;
+} {
+  const policy = governing.review;
+  const maxRounds = (): number => effectiveMaxRounds(ledger, policy?.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS);
+  return {
+    classes: policy?.classes,
+    terminalRejection: policy?.terminalRejection ?? false,
+    capExit: policy?.capExit ? {maxRounds: maxRounds()} : undefined,
+    testExit: policy?.testBackedCapExit && !governing.refusal ? {maxRounds: maxRounds()} : undefined,
+  };
+}
+
 function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
   const branch = git(["branch", "--show-current"]);
   if (!branch) throw new Error("review status requires a named branch");
@@ -1915,14 +1933,7 @@ function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
         reason: governing.refusal,
       };
     }
-    const policy = governing.review;
-    const classes = policy?.classes;
-    const terminalRejection = policy?.terminalRejection ?? false;
-    const capExit = policy?.capExit
-      ? {maxRounds: effectiveMaxRounds(ledger, policy.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS)}
-      : undefined;
-    const testExit = policy?.testBackedCapExit && !governing.refusal
-      ? {maxRounds: effectiveMaxRounds(ledger, policy.maxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS)} : undefined;
+    const {classes, terminalRejection, capExit, testExit} = statusPolicy(ledger, governing);
     const status = evaluateReviewStatus(ledger, headSha, ledgerPath, classes, terminalRejection, capExit, testExit);
     const latestRound = ledger.rounds.at(-1);
     if (
@@ -2081,6 +2092,88 @@ async function recordTestCapExit(args: string[]): Promise<void> {
   }
 }
 
+/** Patch identity of one file's change between two commits; equal for an unchanged patch
+ * replayed onto a different base. Empty when the file did not change in that range. */
+function filePatchId(repository: string, fromSha: string, toSha: string, path: string): string {
+  const patch = git(["-C", repository, "diff", "--no-renames", fromSha, toSha, "--", path]);
+  if (!patch) return "";
+  // --verbatim keeps whitespace: inside a string literal or indentation-sensitive code it
+  // is behavior. Line positions are still ignored, so a rebased patch keeps its identity.
+  const identity = spawnSync("git", ["patch-id", "--verbatim"], {encoding: "utf8", input: `${patch}\n`, maxBuffer: MAX_GIT_OUTPUT_BYTES});
+  if (identity.error) throw new Error(`git patch-id failed: ${identity.error.message}`);
+  if (identity.status !== 0) throw new Error(identity.stderr?.toString().trim() || "git patch-id failed");
+  return identity.stdout.trim().split(/\s+/)[0] ?? "";
+}
+
+/** Files whose net patch on the current base differs from the reviewed net patch. The
+ * current base is the merge-base with the recorded base ref, so a rebase onto a moved
+ * integration branch compares the branch's own change and records nothing. */
+function carryOverDeltaFiles(repository: string, ledger: ReviewLedger, reviewedHeadSha: string, headSha: string): string[] {
+  const baseRef = spawnSync("git", ["-C", repository, "rev-parse", "--verify", "--quiet", `${ledger.baseRef}^{commit}`], {encoding: "utf8"});
+  const currentBase = baseRef.status === 0
+    ? git(["-C", repository, "merge-base", baseRef.stdout.trim(), headSha])
+    : ledger.baseSha;
+  const names = (from: string, to: string): string[] =>
+    git(["-C", repository, "diff", "--no-renames", "--name-only", "-z", from, to, "--"]).split("\0").filter(Boolean);
+  const paths = [...new Set([...names(ledger.baseSha, reviewedHeadSha), ...names(currentBase, headSha)])].sort();
+  return paths.filter((path) =>
+    filePatchId(repository, ledger.baseSha, reviewedHeadSha, path) !== filePatchId(repository, currentBase, headSha, path));
+}
+
+/** `carry-over --item <slug> --data-repo <path> --reason <text>`: record the
+ * implementer's attestation that HEAD moved past a passed review without changing
+ * reviewed behavior. The judgment is the implementer's; the CLI checks only that the
+ * reviewed HEAD passed and computes which files the move touched. */
+async function recordCarryOver(args: string[]): Promise<void> {
+  const flags = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (!flag || value === undefined || !["--item", "--data-repo", "--reason"].includes(flag) || flags.has(flag)) {
+      throw new Error("carry-over accepts --item, --data-repo, and --reason exactly once");
+    }
+    flags.set(flag, value);
+  }
+  const item = flags.get("--item");
+  const reason = flags.get("--reason")?.trim();
+  if (!reason) throw new Error("carry-over requires --reason explaining why the move changes no reviewed behavior");
+  const dataRepo = resolveDataRepo(flags.get("--data-repo"), process.env, homedir());
+  if (!dataRepo) throw new Error("carry-over requires the original --data-repo");
+  const repository = git(["rev-parse", "--show-toplevel"]);
+  const branch = git(["branch", "--show-current"]);
+  if (!branch) throw new Error("carry-over requires a named branch");
+  const paths = reviewEvidencePaths(repository, branch, item);
+  const releaseLock = await acquireReviewLock(repository, branch);
+  try {
+    if (dirtyOutsideReviewEvidence(repository)) throw new Error("carry-over requires a clean committed working tree");
+    const headSha = git(["rev-parse", "HEAD"]);
+    const ledger = readLedger(paths.jsonPath);
+    if (ledger.item !== item || ledger.branch !== branch) throw new Error("carry-over does not match ledger item/branch");
+    const latest = ledger.rounds.at(-1);
+    if (!latest) throw new Error("carry-over requires a completed review round");
+    if (latest.headSha === headSha) throw new Error("HEAD is the reviewed HEAD; there is nothing to carry over");
+    if (failedSinceLatestRound(ledger)) {
+      throw new Error("a review attempt failed since the latest round; run a review round");
+    }
+    if (activeCarryOver(ledger, headSha)) throw new Error("HEAD is already carried over");
+    const governing = governingPolicy(ledger, dataRepo);
+    if (governing.refusal) throw new Error(governing.refusal);
+    const {classes, terminalRejection, capExit} = statusPolicy(ledger, governing);
+    const covered = evaluateReviewStatus(ledger, latest.headSha, relative(repository, paths.markdownPath),
+      classes, terminalRejection, capExit);
+    if (covered.kind !== "passed") {
+      throw new Error(`the review covering ${latest.headSha} has not passed: ${covered.reason}`);
+    }
+    const entry: ReviewCarryOver = {reviewedHeadSha: latest.headSha, headSha,
+      deltaFiles: carryOverDeltaFiles(repository, ledger, latest.headSha, headSha), reason,
+      recordedAt: new Date().toISOString()};
+    await writeLedger({...ledger, carryOvers: [...(ledger.carryOvers ?? []), entry]}, paths);
+    printReviewStatus(item, dataRepo);
+  } finally {
+    await releaseLock();
+  }
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "draft-start" || command === "draft-status" || command === "draft-disposition") {
@@ -2091,12 +2184,14 @@ async function main(): Promise<void> {
     await addDisposition(parseDispositionOptions(args));
   } else if (command === "test-cap-exit") {
     await recordTestCapExit(args);
+  } else if (command === "carry-over") {
+    await recordCarryOver(args);
   } else if (command === "status") {
     printReviewStatus(...parseStatusOptions(args));
   } else if (command === "stats") {
     process.stdout.write(runStats(parseStatsOptions(args)));
   } else {
-    throw new Error("usage: cli-review <start|disposition|test-cap-exit|status|stats|draft-start|draft-status|draft-disposition> [options]");
+    throw new Error("usage: cli-review <start|disposition|test-cap-exit|carry-over|status|stats|draft-start|draft-status|draft-disposition> [options]");
   }
 }
 
