@@ -28,6 +28,7 @@ import {
   detectConfigTargets,
   renderConfigBlock,
   renderCursorRule,
+  renderKiroReviewerAgent,
   renderKiroSteering,
   upsertConfigBlock,
   writeOwnedFile,
@@ -43,7 +44,7 @@ interface Options {
   branch?: string;
   /** "name=~/path,name2=~/path2" */
   projects?: string;
-  /** Bundled review adapter to activate: "codex" | "claude" | "cursor" | "" (none). */
+  /** Bundled review adapter to activate: one of `reviewerIds`, or "" (none). */
   reviewer?: string;
   /** Skip harness config-block installation (used by tests / unusual setups). */
   skipHarness: boolean;
@@ -63,7 +64,7 @@ function detectReviewers(): string[] {
 function usage(): never {
   console.error(
     "usage: bun setup/seed.ts <target-dir> [--join] [--owner NAME] [--branch BRANCH] " +
-      "[--projects name=path[,name=path...]] [--reviewer codex|claude|cursor] [--skip-harness]",
+      `[--projects name=path[,name=path...]] [--reviewer ${reviewerIds.join("|")}] [--skip-harness]`,
   );
   process.exit(2);
 }
@@ -143,7 +144,7 @@ async function promptReviewer(opts: Options, current?: string): Promise<string |
 
   const detected = detectReviewers();
   if (!detected.length) {
-    console.log("no supported review CLI (codex/claude/cursor-agent) detected - skipping review activation");
+    console.log(`no supported review CLI (${allReviewers().map(reviewerBin).join("/")}) detected - skipping review activation`);
     return current ? undefined : "";
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -337,6 +338,9 @@ function installConfigBlock(opts: Options, root: string): void {
     } else if (target.kind === "kiro") {
       const action = writeOwnedFile(target.path, kiroSteering);
       console.log(`  kiro steering ${action}: ${target.path}`);
+    } else if (target.kind === "kiro-agent") {
+      const action = writeOwnedFile(target.path, renderKiroReviewerAgent());
+      console.log(`  kiro reviewer agent ${action}: ${target.path}`);
     } else {
       const outcome = upsertConfigBlock(target.path, block);
       if (outcome.action === "skipped") {

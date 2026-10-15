@@ -42,7 +42,7 @@ describe("harness registry", () => {
   });
 
   test("every entry has a usable id", () => {
-    expect(harnesses.map((harness) => harness.id)).toEqual(["claude", "agents", "codex", "cursor", "kiro"]);
+    expect(harnesses.map((harness) => harness.id)).toEqual(["claude", "agents", "codex", "cursor", "kiro", "grok", "opencode"]);
   });
 
   test("skillsDirs is the deduplicated union, in registry order", () => {
@@ -101,6 +101,7 @@ describe("detectConfigTargets", () => {
   test("a pre-existing Kiro home counts even when empty or holding only a new skills tree", () => {
     const kiroTarget = (home: string): ConfigTarget[] => [
       { path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"), kind: "kiro" },
+      { path: join(home, ".kiro", "agents", "dcl-reviewer.json"), kind: "kiro-agent" },
     ];
     const home = tempHome();
     try {
@@ -146,6 +147,7 @@ describe("detectConfigTargets", () => {
           kind: "cursor",
         },
         { path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"), kind: "kiro" },
+        { path: join(home, ".kiro", "agents", "dcl-reviewer.json"), kind: "kiro-agent" },
       ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -172,6 +174,86 @@ describe("detectConfigTargets", () => {
       expect(paths).toContain(join(home, ".claude-fresh", "CLAUDE.md"));
       expect(paths).toContain(join(home, ".claude-linked", "CLAUDE.md"));
       expect(paths).not.toContain(join(home, ".claude-notes", "CLAUDE.md"));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a bare Grok or OpenCode state directory is not evidence of use", () => {
+    // Both CLIs create these directories on a mere `--version`, so only a file a real
+    // session leaves behind counts.
+    const home = tempHome();
+    try {
+      makeDir(home, ".grok");
+      makeDir(home, ".config/opencode");
+      makeDir(home, ".local/share/opencode/log");
+      expect(detectConfigTargets(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /** A home where Grok and OpenCode have both really been used. */
+  function grokAndOpenCodeHome(): string {
+    const home = tempHome();
+    makeDir(home, ".grok");
+    writeFileSync(join(home, ".grok", "config.toml"), "");
+    makeDir(home, ".local/share/opencode");
+    writeFileSync(join(home, ".local", "share", "opencode", "opencode.db"), "");
+    return home;
+  }
+
+  test("without Claude Code, Grok and OpenCode carry the block in their own AGENTS.md", () => {
+    const home = grokAndOpenCodeHome();
+    try {
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".grok", "AGENTS.md"), kind: "block" },
+        { path: join(home, ".config", "opencode", "AGENTS.md"), kind: "block" },
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("with Claude Code, Grok and OpenCode read CLAUDE.md and get no file of their own", () => {
+    // Grok would load the block twice; OpenCode loads only the first of its AGENTS.md and
+    // CLAUDE.md, so creating its AGENTS.md would hide everything in CLAUDE.md from it.
+    const home = grokAndOpenCodeHome();
+    try {
+      makeDir(home, ".claude");
+      writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing OpenCode AGENTS.md already shadows CLAUDE.md, so it carries the block", () => {
+    const home = grokAndOpenCodeHome();
+    try {
+      makeDir(home, ".claude");
+      writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+      makeDir(home, ".config/opencode");
+      writeFileSync(join(home, ".config", "opencode", "AGENTS.md"), "# mine\n");
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
+        { path: join(home, ".config", "opencode", "AGENTS.md"), kind: "block" },
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("OpenCode's auth file alone is evidence of use", () => {
+    const home = tempHome();
+    try {
+      makeDir(home, ".local/share/opencode");
+      writeFileSync(join(home, ".local", "share", "opencode", "auth.json"), "{}\n");
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".config", "opencode", "AGENTS.md"), kind: "block" },
+      ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

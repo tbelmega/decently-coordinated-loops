@@ -3,7 +3,7 @@ import type {
   ReviewImplementerIdentity,
   ReviewPersonaName,
 } from "../config.ts";
-import {isReviewerId, type ReviewerId} from "./reviewers.ts";
+import {isReviewerId, reviewerIds, type ReviewerId} from "./reviewers.ts";
 
 export interface ReviewPassTemplate {
   pass: ReviewPersonaName;
@@ -108,7 +108,7 @@ export function planReviewerPasses(input: {
   return baseline.map((pass): ReviewPassSelection => {
     const reviewer = input.explicit.reviewer ?? pass.reviewer;
     if (!reviewer || !isReviewerId(reviewer)) {
-      throw new Error("no reviewer configured - set review.reviewer in loops.json (run setup) or pass --reviewer <codex|claude|cursor>");
+      throw new Error(`no reviewer configured - set review.reviewer in loops.json (run setup) or pass --reviewer <${reviewerIds.join("|")}>`);
     }
     const model = input.explicit.model ?? pass.model;
     const effort = input.explicit.effort ?? pass.effort;

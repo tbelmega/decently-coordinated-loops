@@ -588,7 +588,9 @@ function discoverInstructionFiles(repository: string): string[] {
       path === "CLAUDE.md" ||
       path.endsWith("/CLAUDE.md") ||
       /(?:^|\/)skills\/[^/]+\/SKILL\.md$/.test(path) ||
-      path.startsWith(".cursor/rules/") && path.endsWith(".mdc"),
+      path.startsWith(".cursor/rules/") && path.endsWith(".mdc") ||
+      path.startsWith(".kiro/steering/") && path.endsWith(".md") ||
+      path.startsWith(".grok/rules/") && path.endsWith(".md"),
     )
     .sort();
 }
@@ -1452,6 +1454,11 @@ async function startReview(options: StartOptions): Promise<void> {
           model: planned.model,
           effort: planned.effort,
           cwd: repository,
+          ranges: [
+            `${passManifest.baseSha}..${passManifest.headSha}`,
+            ...(remediationRange ? [`${remediationRange.baseSha}..${remediationRange.headSha}`] : []),
+            ...(baseDeltaRange ? [`${baseDeltaRange.baseSha}..${baseDeltaRange.headSha}`] : []),
+          ],
         });
         const stats: ReviewPassStats = {
           elapsedMs: Date.now() - passStarted,

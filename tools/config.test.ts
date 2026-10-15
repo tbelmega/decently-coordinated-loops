@@ -641,11 +641,18 @@ describe("personas validation (C3)", () => {
     ]});
   });
 
+  test("a persona may name any bundled reviewer adapter", () => {
+    for (const reviewer of ["grok", "opencode", "kiro"]) {
+      load({ personas: [{ name: "diff", fromRound: 1, toRound: 1, reviewer }, base()[1]] });
+    }
+  });
+
   test("every malformed persona shape fails closed", () => {
     expect(() => load({ personas: base(), auditPasses: ["diff"] })).toThrow(/mutually exclusive/);
     expect(() => load({ personas: [] })).toThrow(/non-empty/);
     expect(() => load({ personas: [{ name: "sniper", fromRound: 1 }, base()[1]] })).toThrow(/name must be one of/);
-    expect(() => load({ personas: [{ name: "diff", fromRound: 1, reviewer: "gpt" }, base()[1]] })).toThrow(/reviewer must be one of/);
+    expect(() => load({ personas: [{ name: "diff", fromRound: 1, reviewer: "gpt" }, base()[1]] }))
+      .toThrow("reviewer must be one of codex, claude, cursor, grok, opencode, kiro");
     expect(() => load({ personas: [{ name: "diff", fromRound: 0 }, base()[1]] })).toThrow(/fromRound/);
     expect(() => load({ personas: [{ name: "diff", fromRound: 2, toRound: 1 }, base()[1]] })).toThrow(/toRound/);
     expect(() => load({ personas: [{ name: "diff", fromRound: 1 }] })).toThrow(/exactly one confirmation/);

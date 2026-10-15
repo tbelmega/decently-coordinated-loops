@@ -28,7 +28,7 @@ From the DCL clone root (`bun` required; install from bun.sh if missing):
 ```bash
 # harness wiring (skill symlinks) + seed in one go:
 ./install.sh --seed <data-repo-dir> --owner <NAME> --branch <integration-branch> \
-  [--projects name=path,name=path] [--reviewer codex|claude|cursor] [--join]
+  [--projects name=path,name=path] [--reviewer codex|claude|cursor|grok|opencode|kiro] [--join]
 ```
 
 Gather `--owner` (how agents should address the user), `--branch` (default
@@ -46,6 +46,15 @@ if absent), carrying the data-repo path and owner name; a legacy `LOOPS:START/EN
 block is migrated into that grammar on refresh. Content outside the tags is never
 touched; re-running is safe. Warn the user that all alternate Claude profiles are
 written, so they can rename any `.claude-*` directory that is not really a profile.
+
+Other harnesses get the same body in their own form: a DCL-owned rule file
+`~/.cursor/rules/decently-coordinated-loops.mdc`, a DCL-owned steering file
+`~/.kiro/steering/decently-coordinated-loops.md` plus the read-only Kiro reviewer agent
+`~/.kiro/agents/dcl-reviewer.json`, and the section in `~/.grok/AGENTS.md` and
+`~/.config/opencode/AGENTS.md`. Grok and OpenCode also read `~/.claude/CLAUDE.md`, so
+when Claude Code is detected they get no file of their own: Grok would load the
+section twice, and creating OpenCode's `AGENTS.md` would hide `CLAUDE.md` from it. An
+OpenCode `AGENTS.md` that already exists does get the section.
 
 ## 3. After seeding
 

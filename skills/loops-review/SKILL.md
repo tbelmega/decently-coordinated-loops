@@ -113,9 +113,9 @@ Set `loops.json → review` in the data repo:
 
 | Key | Meaning and default |
 | --- | --- |
-| `reviewer` | Installed `codex`, `claude`, or `cursor` CLI. `bun run setup` detects installed CLIs and offers configuration. |
+| `reviewer` | Installed `codex`, `claude`, `cursor`, `grok`, `opencode`, or `kiro` CLI. `bun run setup` detects installed CLIs and offers configuration. |
 | `model` | Optional; defaults to the reviewer CLI's model. |
-| `effort` | Optional; forwarded by Codex and Claude. Cursor does not support effort in alternative-selected tuples. |
+| `effort` | Optional; forwarded by every reviewer but Cursor (OpenCode receives it as `--variant`). Cursor does not support effort in alternative-selected tuples. |
 | `alternatives` | Ordered reviewer replacements selected by literal, case-sensitive implementer identity prefixes; no match keeps the default tuple. |
 | `maxRounds` | Positive integer; defaults to 3. |
 | `auditPasses` | Non-empty subset of the three example passes; defaults to all three. |
@@ -155,7 +155,9 @@ Supply every known identity field for the model responsible for producing the re
 the first implementation-review start. Here, implementer identity includes research,
 brainstorming, specification, documentation, and code work; it is not limited to code
 implementation. Omit genuinely unknown fields; the CLI warns when configured conditions need
-them and falls back to the default. Identity is explicit self-report, not authenticated
+them and falls back to the default. Name the harness with its canonical id - `claude`,
+`codex`, `cursor`, `kiro`, `grok`, or `opencode` - so `when.harness` conditions match.
+Identity is explicit self-report, not authenticated
 provenance, and is never inferred from Git, assignee, launcher, or reviewer. It is fixed for the review epoch:
 continuations may repeat identical values or omit them, while changing or adding a value requires
 a changed-base epoch.
@@ -539,7 +541,8 @@ with the same symbolic `--base`. The new base must be an ancestor of HEAD.
 ## Governance mode: changing the rules the reviewer enforces
 
 Discovered instruction files are a mandatory compliance checklist: `AGENTS.md` and
-`CLAUDE.md` at any depth, `skills/<name>/SKILL.md`, and `.cursor/rules/*.mdc`.
+`CLAUDE.md` at any depth, `skills/<name>/SKILL.md`, `.cursor/rules/*.mdc`,
+`.kiro/steering/*.md`, and `.grok/rules/*.md`.
 Skills are executed prose, so they can be both authority and the subject of a rewrite.
 Ordinarily, a rewrite is judged against its prior text and intentional rule changes read
 as deviations. **Governance mode is the opt-in exception.** Use it for deliberate rule
@@ -577,7 +580,8 @@ review ledgers record dated decisions, not permanent rules; a later intentional 
 contradicting one is not defective for that reason alone.
 
 **Rule files never reference specs**, as authority or background. AGENTS.md, CLAUDE.md,
-skills, and `.cursor/rules/*` state current rules or delegate to other rule files. Specs
+skills, `.cursor/rules/*`, `.kiro/steering/*`, and `.grok/rules/*` state current rules
+or delegate to other rule files. Specs
 may be archived, deleted, or superseded, leaving dangling authority. "Where this section
 and the spec disagree, the spec wins" is the worst example, but any spec reference in a
 rule file violates the rule. When a spec lands, incorporate its rules into living text.

@@ -27,10 +27,11 @@ this file before any unattended work.
      deliver/iterate steps are written against this section. -->
 
 - Bundled option: DCL ships a local, forge-independent reviewer (an independent
-  model, Codex/Claude/Cursor, reviews the branch read-only). Activate it by setting
-  `review.reviewer` in `loops.json` (`bun run setup` offers this); agents then drive
-  it automatically for the final handoff of attended and unattended tracked items per
-  the loops-review skill after all internal tasks and final verification are complete.
+  model, Codex/Claude/Cursor/Grok/OpenCode/Kiro, reviews the branch read-only).
+  Activate it by setting `review.reviewer` in `loops.json` (`bun run setup` offers
+  this); agents then drive it automatically for the final handoff of attended and
+  unattended tracked items per the loops-review skill after all internal tasks and
+  final verification are complete.
   A logical round defaults to validated diff, integration, and adversarial passes.
   The terminal signal is a review round covering the current HEAD that owes nothing
   (clean, or every finding carrying a non-blocking disposition), or a descendant whose
@@ -45,7 +46,7 @@ this file before any unattended work.
   judged against the rule it replaces declares exactly those paths in its front-matter
   `review.rewrites` and carries `links.spec` for them. The declaration is opt-in: an
   undeclared edit to a rule file (AGENTS.md, CLAUDE.md, `skills/*/SKILL.md`,
-  `.cursor/rules/*`) is simply reviewed with that file still standing as authority,
+  `.cursor/rules/*`, `.kiro/steering/*`, `.grok/rules/*`) is simply reviewed with that file still standing as authority,
   which is the stricter path and needs no spec. The procedure is in the loops-review
   skill.
 - An agent that concludes the review *mechanism* rather than its own change is what

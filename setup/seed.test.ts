@@ -633,6 +633,46 @@ describe("config block", () => {
     expect(readFileSync(steeringPath, "utf8")).toBe(steering);
   });
 
+  test("writes the read-only Kiro reviewer agent next to the steering file", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".kiro"), { recursive: true });
+
+    seedNewRepo([], home);
+    const agent = JSON.parse(readFileSync(join(home, ".kiro", "agents", "dcl-reviewer.json"), "utf8"));
+    expect(agent.name).toBe("dcl-reviewer");
+    // Read tools only: no write tool and no shell, since a command allowlist is not a
+    // sandbox (`git diff --output=<file>` writes). The adapter inlines the diff instead.
+    expect(agent.tools).toEqual(["fs_read", "grep", "glob"]);
+    expect(agent.allowedTools).toEqual(["fs_read", "grep", "glob"]);
+    expect(agent.toolsSettings).toBeUndefined();
+  });
+
+  test("Grok and OpenCode get their own block only where Claude does not carry it", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".grok"), { recursive: true });
+    writeFileSync(join(home, ".grok", "config.toml"), "");
+    mkdirSync(join(home, ".local", "share", "opencode"), { recursive: true });
+    writeFileSync(join(home, ".local", "share", "opencode", "opencode.db"), "");
+
+    const dir = seedNewRepo([], home);
+    for (const path of [join(home, ".grok", "AGENTS.md"), join(home, ".config", "opencode", "AGENTS.md")]) {
+      const text = readFileSync(path, "utf8");
+      expect(text).toContain(GENERATED_OPEN);
+      expect(text).toContain(dir);
+    }
+
+    const withClaude = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(withClaude, ".claude"), { recursive: true });
+    writeFileSync(join(withClaude, ".claude", "settings.json"), "{}\n");
+    mkdirSync(join(withClaude, ".grok"), { recursive: true });
+    writeFileSync(join(withClaude, ".grok", "config.toml"), "");
+    mkdirSync(join(withClaude, ".local", "share", "opencode"), { recursive: true });
+    writeFileSync(join(withClaude, ".local", "share", "opencode", "opencode.db"), "");
+    seedNewRepo([], withClaude);
+    expect(existsSync(join(withClaude, ".grok", "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(withClaude, ".config", "opencode", "AGENTS.md"))).toBe(false);
+  });
+
   test("no Kiro steering file when ~/.kiro is absent", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-home-"));
     mkdirSync(join(home, ".claude"), { recursive: true });

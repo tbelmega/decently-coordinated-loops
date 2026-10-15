@@ -18,13 +18,19 @@ roles across a roster of harnesses or coordinate other machines.
 
 ## 1. Check the harness can do this at all
 
-Dispatch needs a recurring scheduler that re-enters *this* conversation. Use only
-what your harness genuinely provides; never simulate a scheduler by sleeping,
+Dispatch needs a recurring scheduler that fires the pickup prompt for this session.
+Use only what your harness genuinely provides; never simulate a scheduler by sleeping,
 polling in a loop, or promising to "remember" to wake up. A harness without one
 cannot hold dispatch duty: say so plainly and stop, so the owner can put the duty on
 a harness that can.
 
-Claude Code provides session-bound cron (`CronCreate`/`CronList`/`CronDelete`).
+Claude Code provides session-bound cron (`CronCreate`/`CronList`/`CronDelete`) that
+re-enters this conversation. Grok Build provides an interval scheduler
+(`scheduler_create`/`scheduler_list`/`scheduler_delete`, wrapped by `/loop`); each
+firing runs as a detached background subagent that cannot see this conversation, so
+the prompt from section 4 must stand entirely on its own, and it has no interval
+under 60 seconds. OpenCode and Kiro CLI provide no scheduler, so they cannot hold
+dispatch duty.
 
 ## 2. Resolve the tuning before registering
 
@@ -134,7 +140,9 @@ Never schedule compaction before updating, committing, and pushing the item/boar
 state needed to re-hydrate the next firing. Do not create a second recurring job for
 compaction; one one-shot per completed firing preserves the required ordering. If
 the harness cannot schedule or invoke compaction, say so during setup and omit the
-claim that each firing compacts; never simulate support it does not have.
+claim that each firing compacts; never simulate support it does not have. Grok's
+firings run in detached subagents with their own context, so a Grok dispatcher
+omits the compaction step: the dispatcher conversation does not grow per firing.
 
 ## 5. Register, then confirm concretely
 
@@ -145,7 +153,7 @@ Register the job, then tell the owner in plain terms:
 - **that the schedule dies with this session:** closing the window silently kills
   dispatch; nothing is written to disk and nothing inherits it
 - **the expiry date**, when the harness expires recurring jobs (Claude Code: 7 days,
-  after which the job fires one final time and is deleted)
+  after which the job fires one final time and is deleted; Grok Build: 7 days)
 
 The last two are the failure modes that actually bite, and they are invisible unless
 you say them out loud. Re-run this skill in a fresh session to renew.

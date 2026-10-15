@@ -1071,6 +1071,33 @@ describe("cli-review start", () => {
     );
   });
 
+  test("discovers every harness's project rule files as instruction files", () => {
+    const repository = mkdtempSync(`${tmpdir()}/loops-review-instruction-files-`);
+    git(repository, ["init", "-q", "-b", "master"]);
+    git(repository, ["config", "user.email", "test@example.com"]);
+    git(repository, ["config", "user.name", "Test"]);
+    for (const path of [".cursor/rules/style.mdc", ".kiro/steering/product.md", ".grok/rules/style.md", "docs/notes.md"]) {
+      mkdirSync(`${repository}/${path.slice(0, path.lastIndexOf("/"))}`, {recursive: true});
+      writeFileSync(`${repository}/${path}`, "# Rules\n");
+    }
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Add rules"]);
+    git(repository, ["switch", "-q", "-c", "feature/review-receipt"]);
+    writeFileSync(`${repository}/change.txt`, "review me\n");
+    git(repository, ["add", "."]);
+    git(repository, ["commit", "-q", "-m", "Add change"]);
+    const item = "harness-rule-files";
+
+    const result = runStart(repository, createReviewDataRepo(5), item, "master");
+
+    expect(result.status).toBe(0);
+    expect(readLedgerJson(repository, item).rounds[0].audit.manifest.instructionFiles).toEqual([
+      ".cursor/rules/style.mdc",
+      ".grok/rules/style.md",
+      ".kiro/steering/product.md",
+    ]);
+  });
+
   test("refuses a rewrite declaration a rebased base, not the item's patch, satisfies", () => {
     const repository = mkdtempSync(`${tmpdir()}/loops-review-rewrites-basedelta-`);
     git(repository, ["init", "-q", "-b", "master"]);

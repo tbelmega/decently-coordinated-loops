@@ -155,6 +155,23 @@ ${renderBody(params)}
 `;
 }
 
+/** The Kiro agent a DCL review runs as (`kiro-cli chat --agent dcl-reviewer`). Kiro has
+ * no sandbox flag in headless mode, so read-only is the tool list: file reads only, no
+ * write tool and no shell - a command allowlist is not a sandbox (`git diff
+ * --output=<file>` writes), so the adapter inlines the diffs instead. Custom agents load
+ * no steering on their own, so the repo's rule files are named as resources. Carries no
+ * owner data, so every machine's copy is identical. */
+export function renderKiroReviewerAgent(): string {
+  const agent = {
+    name: "dcl-reviewer",
+    description: "Read-only code reviewer driven by decently-coordinated-loops. Managed file; re-running setup overwrites it.",
+    tools: ["fs_read", "grep", "glob"],
+    allowedTools: ["fs_read", "grep", "glob"],
+    resources: ["file://AGENTS.md", "file://.kiro/steering/**/*.md"],
+  };
+  return `${JSON.stringify(agent, null, 2)}\n`;
+}
+
 export type UpsertOutcome =
   | { action: "created" | "replaced" | "appended" | "migrated" }
   | { action: "skipped"; reason: string };
@@ -298,7 +315,7 @@ export function upsertConfigBlock(target: string, section: string): UpsertOutcom
   return { action: "appended" };
 }
 
-/** Writes a whole-file managed unit (the Cursor rule, the Kiro steering file), creating
+/** Writes a whole-file managed unit (the Cursor rule, the Kiro steering and agent files), creating
  * its directory if needed. Returns what happened, for logging. */
 export function writeOwnedFile(target: string, content: string): "created" | "replaced" {
   const existed = existsSync(target);

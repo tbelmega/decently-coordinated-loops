@@ -16,13 +16,20 @@
 import { existsSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
-/** `block` = a markered region inside an existing config file; `cursor` and `kiro` =
- * a standalone rule (Cursor) or steering (Kiro) file DCL owns outright. */
-export type ConfigTargetKind = "block" | "cursor" | "kiro";
+/** `block` = a markered region inside an existing config file; `cursor`, `kiro` and
+ * `kiro-agent` = a standalone rule (Cursor), steering file (Kiro) or the Kiro reviewer
+ * agent definition, each a file DCL owns outright. */
+export type ConfigTargetKind = "block" | "cursor" | "kiro" | "kiro-agent";
 
 export interface ConfigTarget {
   path: string;
   kind: ConfigTargetKind;
+}
+
+/** What one harness's targets may depend on beyond its own directory. */
+export interface DetectionContext {
+  /** Claude Code is detected, so `~/.claude/CLAUDE.md` carries the managed block. */
+  claudeConfigured: boolean;
 }
 
 export interface Harness {
@@ -33,7 +40,7 @@ export interface Harness {
   /** Is this harness present on the machine? Never creates anything. */
   detect(home: string): boolean;
   /** Config files to carry the managed block. Empty for skills-only entries. */
-  configTargets(home: string): ConfigTarget[];
+  configTargets(home: string, context: DetectionContext): ConfigTarget[];
 }
 
 /** Alternate-profile scan input. A home that cannot be listed - absent, or a directory
@@ -141,7 +148,39 @@ export const harnesses: Harness[] = [
         path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"),
         kind: "kiro",
       },
+      // A Kiro review runs as this agent: its tool list is what keeps the review
+      // read-only (tools/review/reviewers.ts → KIRO_REVIEWER_AGENT).
+      { path: join(home, ".kiro", "agents", "dcl-reviewer.json"), kind: "kiro-agent" },
     ],
+  },
+  {
+    // Grok Build reads skills from `~/.claude/skills` and `~/.agents/skills`, so it needs
+    // no tree of its own. It also loads `~/.claude/CLAUDE.md` alongside its own
+    // `~/.grok/AGENTS.md`, so the block goes there only when Claude does not carry it;
+    // writing both would load it twice. `grok --version` creates a bare `~/.grok`, so
+    // only its config file is evidence of use.
+    id: "grok",
+    skillsDirs: [],
+    detect: (home) => existsSync(join(home, ".grok", "config.toml")),
+    configTargets: (home, context) =>
+      context.claudeConfigured ? [] : [{ path: join(home, ".grok", "AGENTS.md"), kind: "block" }],
+  },
+  {
+    // OpenCode reads skills from `~/.claude/skills` and `~/.agents/skills` too. For global
+    // instructions it loads only the FIRST of `~/.config/opencode/AGENTS.md` and
+    // `~/.claude/CLAUDE.md`: creating its AGENTS.md would hide everything in CLAUDE.md.
+    // So the block goes into AGENTS.md only when that file already exists (it then shadows
+    // CLAUDE.md) or Claude does not carry it. `opencode --version` creates its XDG
+    // directories, so only the session store or credentials count as evidence of use.
+    id: "opencode",
+    skillsDirs: [],
+    detect: (home) =>
+      existsSync(join(home, ".local", "share", "opencode", "opencode.db")) ||
+      existsSync(join(home, ".local", "share", "opencode", "auth.json")),
+    configTargets: (home, context) => {
+      const path = join(home, ".config", "opencode", "AGENTS.md");
+      return !context.claudeConfigured || existsSync(path) ? [{ path, kind: "block" }] : [];
+    },
   },
 ];
 
@@ -154,8 +193,11 @@ export function skillsDirs(): string[] {
 /** The config targets this machine actually has: every detected harness's targets, plus
  * every alternate Claude profile directory. `home` is injectable for tests. */
 export function detectConfigTargets(home: string): ConfigTarget[] {
+  const context: DetectionContext = {
+    claudeConfigured: harnesses.some((harness) => harness.id === "claude" && harness.detect(home)),
+  };
   return harnesses.flatMap((harness) => {
-    const own = harness.detect(home) ? harness.configTargets(home) : [];
+    const own = harness.detect(home) ? harness.configTargets(home, context) : [];
     return harness.id === "claude" ? [...own, ...claudeProfileTargets(home)] : own;
   });
 }

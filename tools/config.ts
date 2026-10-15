@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {isReviewerId, type ReviewerId} from "./review/reviewers.ts";
+import {isReviewerId, reviewerIds, type ReviewerId} from "./review/reviewers.ts";
 import { validateTrackers, type TrackerConfig } from "./tracker/tracker-config.ts";
 
 /** Where a project's lifecycle ends. `deploy` keeps the full tail
@@ -116,7 +116,7 @@ export interface ReviewAlternativeConfig {
 /** Local code-review adapter selection. Empty (no `reviewer`) means review is not
  * activated for this instance; `bun run setup` offers to fill it in. */
 export interface ReviewConfig {
-  /** Which bundled reviewer adapter to drive: "codex" | "claude" | "cursor". */
+  /** Which bundled reviewer adapter to drive: one of `reviewerIds`. */
   reviewer?: string;
   /** Optional model id override; omit to use the reviewer CLI's own default. */
   model?: string;
@@ -451,7 +451,7 @@ function validateReviewAlternatives(alternatives: unknown, label: string): void 
       }
     }
     if (!isReviewerId(candidate.reviewer)) {
-      throw new Error(`${path}.reviewer must be one of codex, claude, cursor`);
+      throw new Error(`${path}.reviewer must be one of ${reviewerIds.join(", ")}`);
     }
     for (const key of ["model", "effort"] as const) {
       const value = candidate[key];
@@ -586,8 +586,8 @@ function validateReviewPersonas(review: ReviewConfig, label: string): void {
     ) {
       throw new Error(`${path}.toRound must be an integer >= fromRound when present`);
     }
-    if (persona.reviewer !== undefined && !["codex", "claude", "cursor"].includes(persona.reviewer)) {
-      throw new Error(`${path}.reviewer must be one of codex, claude, cursor`);
+    if (persona.reviewer !== undefined && !isReviewerId(persona.reviewer)) {
+      throw new Error(`${path}.reviewer must be one of ${reviewerIds.join(", ")}`);
     }
     for (const key of ["model", "effort"] as const) {
       const value = persona[key];
