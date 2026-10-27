@@ -98,11 +98,14 @@ export function planReviewerPasses(input: {
 }): ReviewPassSelection[] {
   const baseline: ReviewPassTemplate[] = input.saved ?? input.templates.map((template) => {
     if (!input.alternative) return template;
+    const override = input.alternative.personas?.[template.pass];
+    const model = override?.model ?? input.alternative.model;
+    const effort = override?.effort ?? input.alternative.effort;
     return {
       pass: template.pass,
-      reviewer: input.alternative.reviewer,
-      ...(input.alternative.model ? {model: input.alternative.model} : {}),
-      ...(input.alternative.effort ? {effort: input.alternative.effort} : {}),
+      reviewer: override?.reviewer ?? input.alternative.reviewer,
+      ...(model ? {model} : {}),
+      ...(effort ? {effort} : {}),
     };
   });
   return baseline.map((pass): ReviewPassSelection => {

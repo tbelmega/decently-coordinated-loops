@@ -95,6 +95,53 @@ describe("planReviewerPasses", () => {
     })).toEqual([{pass: "diff", reviewer: "claude", model: "new-model", effort: "high"}]);
   });
 
+  test("an alternative's persona override overlays its tuple for that pass only, field by field", () => {
+    const alternative = {
+      when: {model: "gpt-"},
+      reviewer: "claude",
+      model: "opus",
+      effort: "medium",
+      personas: {confirmation: {model: "sonnet"}, adversarial: {reviewer: "codex", effort: "high"}},
+    } as const;
+    expect(planReviewerPasses({
+      templates: [
+        {pass: "diff", reviewer: "codex", model: "sol"},
+        {pass: "adversarial", reviewer: "codex", model: "sol"},
+        {pass: "confirmation", reviewer: "codex", model: "terra"},
+      ],
+      alternative,
+      explicit: {},
+      alternativesEnabled: true,
+    })).toEqual([
+      {pass: "diff", reviewer: "claude", model: "opus", effort: "medium"},
+      {pass: "adversarial", reviewer: "codex", model: "opus", effort: "high"},
+      {pass: "confirmation", reviewer: "claude", model: "sonnet", effort: "medium"},
+    ]);
+  });
+
+  test("explicit fields overlay a persona override, and a retry ignores it for saved tuples", () => {
+    const alternative = {
+      when: {model: "gpt-"},
+      reviewer: "claude",
+      model: "opus",
+      effort: "medium",
+      personas: {confirmation: {model: "sonnet"}},
+    } as const;
+    expect(planReviewerPasses({
+      templates: [{pass: "confirmation", reviewer: "codex"}],
+      alternative,
+      explicit: {effort: "low"},
+      alternativesEnabled: true,
+    })).toEqual([{pass: "confirmation", reviewer: "claude", model: "sonnet", effort: "low"}]);
+    expect(planReviewerPasses({
+      templates: [{pass: "confirmation", reviewer: "codex"}],
+      alternative,
+      saved: [{pass: "confirmation", reviewer: "claude", model: "saved", effort: "medium"}],
+      explicit: {},
+      alternativesEnabled: true,
+    })).toEqual([{pass: "confirmation", reviewer: "claude", model: "saved", effort: "medium"}]);
+  });
+
   test("rejects Cursor effort only when alternative routing participates", () => {
     expect(() => planReviewerPasses({
       templates: [{pass: "diff", reviewer: "codex"}],

@@ -97,7 +97,8 @@ Set `loops.json → review` in the data repo:
   "model": "<optional model id>",
   "effort": "<optional effort>",
   "alternatives": [
-    {"when": {"harness": "codex", "model": "gpt"}, "reviewer": "claude", "model": "opus", "effort": "high"}
+    {"when": {"harness": "codex", "model": "gpt"}, "reviewer": "claude", "model": "opus", "effort": "high",
+     "personas": {"confirmation": {"model": "sonnet"}}}
   ],
   "maxRounds": 5,
   "auditPasses": ["diff", "integration", "adversarial"],
@@ -131,7 +132,10 @@ matching the reviewed checkout to `projects.*.repo`, never by item slug. Alterna
 fields inside one `when` with AND, use separate entries for OR, and stop at the first match.
 `when` accepts non-empty `harness`, `model`, and `effort` prefixes. A selected alternative
 replaces reviewer, model, and effort across every active persona; omitted model or effort uses
-the selected adapter's default. `--reviewer`, `--model`, and `--effort` override the final
+the selected adapter's default. Its optional `personas` map, keyed by pass name (`diff`,
+`integration`, `adversarial`, `confirmation`), overrides that tuple for the named pass only:
+each `reviewer`, `model`, or `effort` it sets replaces the alternative's field, and the others
+are inherited from the alternative. `--reviewer`, `--model`, and `--effort` override the final
 selection field by field for one run. Profile definitions (`review.profiles`)
 are global-only; projects may select a named profile with `review.profile`.
 

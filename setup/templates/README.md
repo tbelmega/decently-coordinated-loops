@@ -47,7 +47,8 @@ cap of 3. Each logical round defaults to validated `diff`, `integration`, and
 `adversarial` passes; `review.auditPasses` may select a non-empty subset. Ordered
 `review.alternatives` may replace the reviewer tuple from explicit implementer identity
 prefixes supplied to `cli-review start`; the first match wins and the configured reviewer
-remains the fallback. Optional
+remains the fallback. An alternative's optional `personas` map overrides its tuple for named
+passes, such as a cheaper model for `confirmation`. Optional
 `review.metadataPaths` exact paths or `directory/**` patterns identify landing-only
 bookkeeping that may be committed after a clean review. Optional `review.classes` waive
 findings on record-keeping surfaces, and `review.confirmation: "scoped"` narrows a

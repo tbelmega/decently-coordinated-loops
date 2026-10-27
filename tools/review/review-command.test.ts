@@ -184,7 +184,7 @@ function createFakeClaude(): string {
       'const audit = JSON.parse(inputLine.slice("AUDIT_INPUT=".length));',
       'if (process.env.FAKE_CLAUDE_ARGS) appendFileSync(process.env.FAKE_CLAUDE_ARGS, `${JSON.stringify({pass: audit.pass, model: args[args.indexOf("--model") + 1], effort: args[args.indexOf("--effort") + 1]})}\\n`);',
       'if (process.env.FAKE_CLAUDE_FAIL) process.exit(1);',
-      'const review = {pass: audit.pass, summary: "clean", coverage: {files: [...audit.manifest.files, ...(audit.manifest.metadataFiles ?? [])], instructionFiles: audit.manifest.instructionFiles, callsites: []}, obligations: [], findings: [], notes: []};',
+      'const review = {pass: audit.pass, summary: "clean", coverage: {files: [...audit.manifest.files, ...(audit.manifest.metadataFiles ?? [])], instructionFiles: audit.manifest.instructionFiles, callsites: []}, obligations: [], findings: process.env.FAKE_FINDINGS_JSON ? JSON.parse(process.env.FAKE_FINDINGS_JSON) : [], notes: []};',
       'process.stdout.write(JSON.stringify({is_error: false, structured_output: review}));',
       "",
     ].join("\n"),
@@ -2736,6 +2736,103 @@ describe("cli-review conditional reviewer routing", () => {
     expect(routing.finalPasses.every((pass: any) =>
       pass.reviewer === "codex" && pass.model === "routed-persona" && pass.effort === "low"
     )).toBe(true);
+  });
+
+  test("an alternative's persona override routes confirmation separately from the initial passes", () => {
+    const routed = {
+      when: {model: "gpt-"},
+      reviewer: "claude",
+      model: "opus-model",
+      effort: "medium",
+      personas: {confirmation: {model: "sonnet-model"}},
+    };
+    const runTwoRounds = (item: string, identity: string[], extra: string[] = []) => {
+      const {repository} = createReviewRepository();
+      const dataRepo = createPersonaDataRepo({alternatives: [routed]});
+      const argsLog = `${mkdtempSync(`${tmpdir()}/loops-claude-persona-`)}/args.log`;
+      const env = {CLAUDE_BIN: createFakeClaude(), FAKE_CLAUDE_ARGS: argsLog};
+      expect(runStart(repository, dataRepo, item, "master", {
+        ...env,
+        FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+      }, identity).status).toBe(0);
+      for (const finding of readItemLedger(repository, item).rounds[0].findings) {
+        expect(runDisposition(repository, item, finding.id, "rejected", "not a defect").status).toBe(0);
+      }
+      expect(runStart(repository, dataRepo, item, "master", env, [...identity, ...extra]).status).toBe(0);
+      return {repository, argsLog};
+    };
+
+    const matching = runTwoRounds("persona-alternative", ["--implementer-model", "gpt-6.1-sol"]);
+    expect(readFileSync(matching.argsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      {pass: "diff", model: "opus-model", effort: "medium"},
+      {pass: "adversarial", model: "opus-model", effort: "medium"},
+      {pass: "confirmation", model: "sonnet-model", effort: "medium"},
+    ]);
+    const rounds = readItemLedger(matching.repository, "persona-alternative").rounds;
+    expect(rounds[1].routing.selection).toEqual({kind: "alternative", index: 0, when: {model: "gpt-"}});
+    expect(rounds[1].routing.finalPasses).toEqual([
+      {pass: "confirmation", reviewer: "claude", model: "sonnet-model", effort: "medium"},
+    ]);
+
+    const nonMatching = createReviewRepository();
+    const defaultData = createPersonaDataRepo({alternatives: [routed]});
+    expect(runStart(nonMatching.repository, defaultData, "persona-default", "master", {
+      FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+    }, ["--implementer-model", "claude-opus-5-5"]).status).toBe(0);
+    for (const finding of readItemLedger(nonMatching.repository, "persona-default").rounds[0].findings) {
+      expect(runDisposition(nonMatching.repository, "persona-default", finding.id, "rejected", "not a defect").status).toBe(0);
+    }
+    expect(runStart(nonMatching.repository, defaultData, "persona-default", "master", {}, [
+      "--implementer-model", "claude-opus-5-5",
+    ]).status).toBe(0);
+    const defaultRounds = readItemLedger(nonMatching.repository, "persona-default").rounds;
+    expect(defaultRounds[0].routing.selection).toEqual({kind: "default"});
+    expect(defaultRounds[0].routing.finalPasses).toEqual([
+      {pass: "diff", reviewer: "codex", model: "sol-model", effort: "high"},
+      {pass: "adversarial", reviewer: "codex", model: "sol-model", effort: "high"},
+    ]);
+    expect(defaultRounds[1].routing.finalPasses).toEqual([
+      {pass: "confirmation", reviewer: "codex", model: "terra-model", effort: "medium"},
+    ]);
+
+    const explicit = runTwoRounds("persona-explicit", ["--implementer-model", "gpt-6.1-sol"], ["--model", "flag-model"]);
+    expect(readItemLedger(explicit.repository, "persona-explicit").rounds[1].routing.finalPasses).toEqual([
+      {pass: "confirmation", reviewer: "claude", model: "flag-model", effort: "medium"},
+    ]);
+  });
+
+  test("a confirmation retry keeps its saved persona-override tuple across config edits", () => {
+    const {repository} = createReviewRepository();
+    const routed = (confirmationModel: string) => ({
+      when: {model: "gpt-"},
+      reviewer: "codex",
+      model: "opus-model",
+      effort: "medium",
+      personas: {confirmation: {model: confirmationModel}},
+    });
+    const dataRepo = createPersonaDataRepo({alternatives: [routed("sonnet-model")]});
+    const identity = ["--implementer-model", "gpt-6.1-sol"];
+    expect(runStart(repository, dataRepo, "persona-retry", "master", {
+      FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding()]),
+    }, identity).status).toBe(0);
+    for (const finding of readItemLedger(repository, "persona-retry").rounds[0].findings) {
+      expect(runDisposition(repository, "persona-retry", finding.id, "rejected", "not a defect").status).toBe(0);
+    }
+    expect(runStart(repository, dataRepo, "persona-retry", "master", {FAKE_SKIP_FILE: "1"}, identity).status).toBe(1);
+    const config = JSON.parse(readFileSync(`${dataRepo}/loops.json`, "utf8"));
+    config.review.alternatives = [routed("changed-model")];
+    writeFileSync(`${dataRepo}/loops.json`, `${JSON.stringify(config)}\n`);
+    const retry = runStart(repository, dataRepo, "persona-retry", "master", {}, identity);
+    expect(retry.stderr).toBe("");
+    expect(retry.status).toBe(0);
+    const ledger = readItemLedger(repository, "persona-retry");
+    expect(ledger.failures.at(-1).routing.finalPasses).toEqual([
+      {pass: "confirmation", reviewer: "codex", model: "sonnet-model", effort: "medium"},
+    ]);
+    expect(ledger.rounds[1].routing.finalPasses).toEqual([
+      {pass: "confirmation", reviewer: "codex", model: "sonnet-model", effort: "medium"},
+    ]);
+    expect(ledger.rounds[1].routing.retryOf).toBe("E1-R2-a");
   });
 
   test("rejects Cursor effort and never falls through a failed selected adapter", () => {

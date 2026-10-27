@@ -300,6 +300,33 @@ describe("review alternatives validation", () => {
     expect(load([]).review.alternatives).toEqual([]);
   });
 
+  test("accepts per-persona overrides of an alternative's tuple", () => {
+    const alternatives = [{
+      when: {model: "gpt-"},
+      reviewer: "claude",
+      model: "opus",
+      effort: "medium",
+      personas: {confirmation: {model: "sonnet", effort: "medium"}, diff: {reviewer: "codex"}},
+    }];
+    expect(load(alternatives).review.alternatives).toEqual(alternatives as never);
+  });
+
+  test("rejects malformed per-persona alternative overrides", () => {
+    const base = {when: {model: "gpt-"}, reviewer: "claude"};
+    const invalid = [
+      [{...base, personas: []}],
+      [{...base, personas: "confirmation"}],
+      [{...base, personas: {}}],
+      [{...base, personas: {reviewer: {model: "sonnet"}}}],
+      [{...base, personas: {confirmation: {}}}],
+      [{...base, personas: {confirmation: []}}],
+      [{...base, personas: {confirmation: {model: ""}}}],
+      [{...base, personas: {confirmation: {reviewer: "unknown"}}}],
+      [{...base, personas: {confirmation: {model: "sonnet", fromRound: 2}}}],
+    ];
+    for (const alternatives of invalid) expect(() => load(alternatives)).toThrow(/alternatives\[0\]\.personas/);
+  });
+
   test("rejects malformed alternatives and unknown keys", () => {
     const invalid = [
       "claude",

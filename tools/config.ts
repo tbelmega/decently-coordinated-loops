@@ -106,11 +106,20 @@ export interface ReviewImplementerIdentity {
   effort?: string;
 }
 
+export interface ReviewAlternativePersonaOverride {
+  reviewer?: ReviewerId;
+  model?: string;
+  effort?: string;
+}
+
 export interface ReviewAlternativeConfig {
   when: ReviewImplementerIdentity;
   reviewer: ReviewerId;
   model?: string;
   effort?: string;
+  /** Per-pass overlays of this alternative's tuple, keyed by pass name; each field
+   * present replaces the alternative's field for that pass only. */
+  personas?: Partial<Record<ReviewPersonaName, ReviewAlternativePersonaOverride>>;
 }
 
 /** Local code-review adapter selection. Empty (no `reviewer`) means review is not
@@ -427,7 +436,7 @@ function validateReviewClasses(classes: unknown, label: string): void {
 
 function validateReviewAlternatives(alternatives: unknown, label: string): void {
   if (!Array.isArray(alternatives)) throw new Error(`${label} must be an array`);
-  const allowedEntryKeys = new Set(["when", "reviewer", "model", "effort"]);
+  const allowedEntryKeys = new Set(["when", "reviewer", "model", "effort", "personas"]);
   const allowedConditionKeys = new Set(["harness", "model", "effort"]);
   for (const [index, entry] of alternatives.entries()) {
     const path = `${label}[${index}]`;
@@ -457,6 +466,36 @@ function validateReviewAlternatives(alternatives: unknown, label: string): void 
       const value = candidate[key];
       if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
         throw new Error(`${path}.${key} must be a non-empty string when present`);
+      }
+    }
+    if (candidate.personas !== undefined) validateReviewAlternativePersonas(candidate.personas, `${path}.personas`);
+  }
+}
+
+function validateReviewAlternativePersonas(personas: unknown, path: string): void {
+  if (typeof personas !== "object" || personas === null || Array.isArray(personas)) {
+    throw new Error(`${path} must be an object keyed by ${reviewPersonaNames.join(", ")}`);
+  }
+  const entries = Object.entries(personas);
+  if (entries.length === 0) throw new Error(`${path} must contain at least one persona`);
+  for (const [name, override] of entries) {
+    if (!(reviewPersonaNames as readonly string[]).includes(name)) {
+      throw new Error(`${path}.${name} is not a persona; use one of ${reviewPersonaNames.join(", ")}`);
+    }
+    if (typeof override !== "object" || override === null || Array.isArray(override)) {
+      throw new Error(`${path}.${name} must be an object`);
+    }
+    const fields = override as Record<string, unknown>;
+    const unknownKey = Object.keys(fields).find((key) => !["reviewer", "model", "effort"].includes(key));
+    if (unknownKey) throw new Error(`${path}.${name}.${unknownKey} is not allowed`);
+    if (Object.keys(fields).length === 0) throw new Error(`${path}.${name} must set reviewer, model, or effort`);
+    if (fields.reviewer !== undefined && !isReviewerId(fields.reviewer)) {
+      throw new Error(`${path}.${name}.reviewer must be one of ${reviewerIds.join(", ")}`);
+    }
+    for (const key of ["model", "effort"] as const) {
+      const value = fields[key];
+      if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+        throw new Error(`${path}.${name}.${key} must be a non-empty string when present`);
       }
     }
   }
