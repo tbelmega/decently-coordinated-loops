@@ -189,14 +189,26 @@ ${renderBody(params)}
  * write tool and no shell - a command allowlist is not a sandbox (`git diff
  * --output=<file>` writes), so the adapter inlines the diffs instead. Custom agents load
  * no steering on their own, so the repo's rule files are named as resources. Carries no
- * owner data, so every machine's copy is identical. */
+ * owner data, so every machine's copy is identical.
+ *
+ * The shape is Kiro's universal format, exactly what `kiro-cli agent upgrade` emits, so the
+ * V2 and V3 engines both load it: V2 reads `allowedTools`, V3 reads the `read` tag and the
+ * `permissions` block, and V3 skips a profile carrying `allowedTools` without
+ * `permissions`. The `skill` rule is part of that format; dropping it makes the upgrader
+ * treat the file as not yet universal. */
 export function renderKiroReviewerAgent(): string {
   const agent = {
     name: "dcl-reviewer",
     description: "Read-only code reviewer driven by decently-coordinated-loops. Managed file; re-running setup overwrites it.",
-    tools: ["fs_read", "grep", "glob"],
+    tools: ["glob", "grep", "read"],
     allowedTools: ["fs_read", "grep", "glob"],
     resources: ["file://AGENTS.md", "file://.kiro/steering/**/*.md"],
+    permissions: {
+      rules: [
+        { capability: "fs_read", effect: "allow" },
+        { capability: "skill", effect: "allow" },
+      ],
+    },
   };
   return `${JSON.stringify(agent, null, 2)}\n`;
 }

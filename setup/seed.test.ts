@@ -687,8 +687,17 @@ describe("config block", () => {
     expect(agent.name).toBe("dcl-reviewer");
     // Read tools only: no write tool and no shell, since a command allowlist is not a
     // sandbox (`git diff --output=<file>` writes). The adapter inlines the diff instead.
-    expect(agent.tools).toEqual(["fs_read", "grep", "glob"]);
+    // Kiro's universal format, loadable by both engines: V2 reads allowedTools, V3 reads
+    // the `read` tag and the permissions block, and skips a profile that has allowedTools
+    // without permissions.
+    expect(agent.tools).toEqual(["glob", "grep", "read"]);
     expect(agent.allowedTools).toEqual(["fs_read", "grep", "glob"]);
+    expect(agent.permissions).toEqual({
+      rules: [
+        { capability: "fs_read", effect: "allow" },
+        { capability: "skill", effect: "allow" },
+      ],
+    });
     expect(agent.toolsSettings).toBeUndefined();
   });
 
