@@ -251,8 +251,9 @@ and survives the item's archival.
 
 ## Update rules
 
-1. **Read `BOARD.md` before starting substantive work** in any registered project
-   (see Project participation; the board is silent in unregistered checkouts).
+1. **Read `BOARD.md` before starting a work-stream** in any registered project (see
+   Project participation; the board is silent in unregistered checkouts). Errands, work
+   that changes no behavior and leaves nothing to track, skip the board.
 2. When an item's state or next step changes: update its item file (state,
    next-step, next-actor, awaiting, updated, append a log line), then run
    `bun run sync` (or hand-edit the board row when a sync isn't warranted).

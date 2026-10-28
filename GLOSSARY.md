@@ -97,6 +97,6 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Verification pickup**: Pickup of a `merged` item to test its integrated branch state rather than continue implementation.
 - **Verify gate**: The project-specific end-to-end, functional, or consumer checks run against integrated work before moving an item to `tested`.
 - **Waived by policy**: A finding disposition permitted by an owner-configured change class for the finding's priority and scope.
-- **Work-stream**: A coherent tracked body of work represented by one board item.
+- **Work-stream**: Work that changes a project's behavior (for users, calling code, tests and CI, or agents reading its instructions) or whose state must outlive the conversation; it is represented by one board item. Everything else is an **errand**, which skips the board, the review, and the completion receipt.
 - **Wrap gap**: The shortened interval between the last firing of one day and the first firing of the next after an interval is converted to clock times.
 - **Zero-context hunk**: A diff hunk recorded without surrounding unchanged lines so the manifest captures only changed content.

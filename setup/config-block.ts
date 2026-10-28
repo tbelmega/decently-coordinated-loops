@@ -44,13 +44,20 @@ export interface BlockParams {
  * Cursor (renderCursorRule). */
 function renderBody({ owner, dataRepo, dclHome }: BlockParams): string {
   return `## Work-stream board (decently-coordinated-loops)
-Board participation is scoped to registered projects. Before engaging the board in any
-repository, run:
+The board tracks work-streams in registered projects: work that changes a project's
+behavior (for users, calling code, tests and CI, or agents reading its instructions) or
+whose state must outlive the conversation (a spec, a decision from ${owner}, a delivery,
+a later session); when unsure, it is one. Everything else is an errand (answering,
+locating code, saving a memory, a throwaway script, or a change that alters no behavior:
+comments, formatting, ignore files, metadata). Errands skip the board, the review and the
+receipt; one that changed files ends with the line \`Errand: <what changed>; no behavior
+change.\` A commit takes the class of what it commits; an errand found to change behavior
+becomes a work-stream. Before engaging the board in any repository, run:
 
     bun "${dclHome}/tools/cli-registered.ts" --data-repo "${dataRepo}"
 
 If it prints a name (exit 0), this checkout is registered: follow the loops-board
-skill, read \`${dataRepo}/BOARD.md\` before substantive work, and when a work-stream's state
+skill, read \`${dataRepo}/BOARD.md\` before starting a work-stream, and when its state
 or next step changes, update its item file and index row and commit there. If it exits
 non-zero, this repo is unregistered - do not read or update the board here, unless an
 obligation in \`${dataRepo}/HOUSE-RULES.md\` applies regardless of the current directory
