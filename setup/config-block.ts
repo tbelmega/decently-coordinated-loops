@@ -131,7 +131,8 @@ recorded separately as the pending logical round with an alphabetic suffix, such
 the active review epoch starts again at round 1; prior epochs remain append-only audit
 history and do not consume the new epoch's configured round cap. A stale review is not
 free: a fresh round consumes one, and \`start\` refuses a same-base rerun when the last round was clean.
-Escalate only a round cap or an outstanding \`deferred-to-human\` finding, and then
+Escalate only a round cap, an outstanding \`deferred-to-human\` finding, or a
+suspected review-mechanism defect (loops-review), and for a cap or a deferred finding
 enumerate every real exit with the board transition it requires:
 
 - authorize rounds past the cap (\`--max-rounds\`, logged on the item) - until the

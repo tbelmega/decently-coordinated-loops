@@ -127,11 +127,12 @@ over starting new implementation.
 assignments). Two modes:
 
 - **Orchestrator mode** (your harness can spawn subagents with a model override):
-  claim on behalf of the roster: an item is in reach if any worker tier fits it.
+  claim on behalf of the roster: an item is in reach if any roster seat fits it.
   Keep choose/claim/board work in your own session; dispatch the implementation leg
   to a worker routed per the roster. Unattended implementation legs have zero
   checkpoint density (nothing reviews them between dispatch and review request), so
-  route them a tier more capable than attended work would need. The dispatch
+  route them one step more capable (a stronger seat or a higher effort) than attended
+  work would need. The dispatch
   prompt must carry the guardrails (never merge/deploy, outbox contract,
   blocked-means-stop, the target project's branch rules); workers start cold. Log
   every dispatch on the item: worker model + effort + outcome.
@@ -143,10 +144,11 @@ assignments). Two modes:
 Either mode: `fit:` labels on the item beat roster defaults; respect existing ones
 instead of re-deriving them, and when you pass on an item for capability reasons,
 set a one-line `fit:` so it self-labels for the next agent. **One-strike
-escalation:** an item that failed a previous unattended attempt on a tier for
-capability reasons gets its `fit:` bumped one tier and a redo, never a second
-attempt on the same tier. **Budget backpressure:** when a usage budget is pinched,
-degrade to a cheaper tier with a tightened spec (or defer), never skip silently;
+escalation:** an item that failed a previous unattended attempt for capability
+reasons gets its `fit:` bumped one step (a stronger seat or a higher effort) and a
+redo, never a second attempt with the same seat and effort. **Budget backpressure:**
+when a usage budget is pinched, degrade to a cheaper seat or a lower effort with a
+tightened spec (or defer), never skip silently;
 log the substitution on the item.
 
 ## 3. Claim it - before writing any code
@@ -173,8 +175,9 @@ board item first if none exists).
   implementation code**. Update the locator if work moves. It is last-recorded
   location, not liveness; preserve it until the checkout can safely be reaped or the
   item is deliberately abandoned.
-- **Documented permanent slots.** Resolve the worktree's persistent base branch and
-  its active board items. With no unlanded item, work on the persistent branch and
+- **Documented permanent slots.** Where house rules forbid stacking items in a slot,
+  they win: follow them instead of the stacking below. Otherwise, resolve the
+  worktree's persistent base branch and its active board items. With no unlanded item, work on the persistent branch and
   save its starting commit as `base-sha`. With one or two unlanded items, create
   `<base-branch>--<item-slug>` from the current stack tip, record the tip item as
   `stack-parent`, and save that parent's `head-sha` as the new `base-sha`. Three
@@ -192,7 +195,7 @@ board item first if none exists).
   against creating branches or worktrees unasked does not bar them here. What that
   rule does still bar is touching a workspace someone else holds: never switch,
   reset, or clean a checkout or branch another session is using, and never stash
-  changes you did not make (loops-board -> Concurrency).
+  changes you did not make.
 - **Push the projection after a state change** in a tracker project:
   `bun run tracker-sync status --apply`. A status transition is a mechanical projection
   of a board state the owner already ruled on, so an unattended run may apply it. It may
@@ -246,8 +249,9 @@ board item first if none exists).
    wait. Once the parent is integrated, replay only the child's recorded range with
    `git rebase --onto <integration-head> <base-sha> <working-branch>`; never use a
    normal rebase that could replay the parent too. Rerun the mechanical quality gate,
-   obtain a fresh clean review against the integration ref, and update the recorded
-   `base-sha` and `head-sha`. Then compare integration with that reviewed base:
+   carry the passed review over per loops-review -> Carry-over (a fresh round only when
+   resolving a conflict changed reviewed code), and update the recorded `base-sha` and
+   `head-sha`. Then compare integration with that reviewed base:
    - If unchanged, first prove the reviewed base is an ancestor of the reviewed head
      with `git merge-base --is-ancestor <base-sha> <head-sha>`, then compare-and-swap
      the remote ref with
@@ -257,9 +261,10 @@ board item first if none exists).
      check ensures the update itself is fast-forward-only. Never use a broad lease,
      `--force`, or a non-fast-forward update. A project may instead require an
      equivalent locked local `git merge --ff-only` followed by push.
-   - If it moved, do not land stale evidence. Rebase onto the new integration head,
-     rerun the mechanical quality gate, and obtain a fresh clean review at the new base;
-     loops-review archives the superseded ledger. Repeat this check afterward.
+   - If it moved, rebase onto the new integration head and rerun the mechanical quality
+     gate. A rebase does not reopen review: record a carry-over per loops-review ->
+     Carry-over. Only a conflict resolution that changed reviewed code needs a fresh
+     round. Repeat this check afterward.
    - After a successful fast-forward, run `bun run check-integration-status --apply`, sync, commit,
      and push the resulting `implemented → merged` board update, then immediately
      take the item through "Verify an integrated item". Without explicit delegation,
@@ -320,7 +325,7 @@ failure captured. Never weaken a check to get to green.
   development deployment inseparable from such an explicitly delegated integration
   push; no production data changes or destructive migrations.
 - No publishing to external services beyond pushing branches/review requests to the
-  project's existing remotes.
+  project's existing remotes and the tracker status projection described above.
 - No new external services, paid resources, or secrets/credential changes.
 - No force-pushes to shared branches except the delegated landing operation's exact
   expected-old-SHA lease after its ancestry check; never use a broad lease or `--force`.

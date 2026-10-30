@@ -557,8 +557,8 @@ with the same symbolic `--base`. The new base must be an ancestor of HEAD.
 
 - **Patch-equivalent rebase:** retain the ledger and run integration/adversarial passes
   against the explicit new-base delta and its intersections with reviewed files.
-  When the review had already passed and the new-base delta does not touch reviewed
-  behavior, a carry-over records the rebase instead.
+  When the review had already passed, a rebase does not reopen it: a carry-over records
+  the rebase instead, unless resolving a conflict changed reviewed code.
 - **Changed patch series:** snapshot prior evidence and supersede the base in the same
   ledger. Reset coverage, manifests, and findings for rediscovery, but retain every
   decision, typed obligation, and tripwire state. All earlier findings must already
