@@ -46,6 +46,17 @@ describe("finding the entries", () => {
     expect(payload.entries[0].id).toBe(41);
   });
 
+  test("a spaced hyphen after the id parses like the em dash, so agents never need the em dash", () => {
+    const e = only(file(`### 42 - question · ${projects.calendar} · a title - with a hyphen\n\nbody\n\n> A:\n`));
+    expect([e.id, e.type, e.project, e.title]).toEqual([42, "question", projects.calendar, "a title - with a hyphen"]);
+  });
+
+  test("a hyphen without spaces after the id is still unparseable", () => {
+    const payload = parse(file("### 42-question · a · t\n\nbody\n\n> A:\n"));
+    expect(payload.entries).toEqual([]);
+    expect(payload.anomalies[0].kind).toBe("unparseable-heading");
+  });
+
   test("a file with no ## Open reports an anomaly rather than guessing", () => {
     const payload = parse("# Outbox\n\nsome prose\n");
     expect(payload.entries).toEqual([]);

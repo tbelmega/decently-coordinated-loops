@@ -45,8 +45,8 @@ const orphan: OrphanRow = {
 };
 
 /** The heading shape the loops-queues entry contract defines, and the only one the
- * readers of this file parse: id, type, project, title, em dash then middle dots. */
-const CANONICAL_HEADING = /^### (\d+) — (\S+) · (\S+) · (.+)$/m;
+ * readers of this file parse: id, type, project, title, a spaced hyphen then middle dots. */
+const CANONICAL_HEADING = /^### (\d+) - (\S+) · (\S+) · (.+)$/m;
 
 describe("appendOrphanRowEntry", () => {
   test("emits the canonical heading the entry contract defines", () => {
@@ -119,7 +119,13 @@ describe("appendOrphanRowEntry", () => {
   test("numbers against the whole file, so an id never collides with an archived entry", () => {
     const outbox = `# Outbox\n\n## Open\n\n### 2 — question · atlas · bar\n\n> A:\n\n## Answered\n\n### 7 — question · atlas · settled\n\n> A: yes\n`;
     const result = appendOrphanRowEntry(outbox, orphan);
-    expect(result).toContain("### 8 — question · atlas · ");
+    expect(result).toContain("### 8 - question · atlas · ");
+  });
+
+  test("counts entries written with either separator when numbering", () => {
+    const outbox = `# Outbox\n\n## Open\n\n### 4 - question · atlas · hyphen\n\n> A:\n\n### 2 — question · atlas · em dash\n\n> A:\n`;
+    const result = appendOrphanRowEntry(outbox, orphan);
+    expect(result).toContain("### 5 - question · atlas · ");
   });
 
   test("appends inside `## Open`, not after a later section", () => {
@@ -135,7 +141,7 @@ describe("appendOrphanRowEntry", () => {
 
   test("starts at 1 when there are no existing entries", () => {
     const result = appendOrphanRowEntry(`# Outbox\n\n## Open\n`, orphan);
-    expect(result).toContain("### 1 — question · atlas · ");
+    expect(result).toContain("### 1 - question · atlas · ");
   });
 
   test("is idempotent: re-appending the same orphan is a no-op", () => {

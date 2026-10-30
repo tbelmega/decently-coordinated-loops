@@ -264,7 +264,7 @@ function openSection(text: string): { head: string; open: string; tail: string }
 
 /** One entry under `## Open`. */
 export interface OutboxEntry {
-  /** From `### <id> — ...`. Stable and citable, but sparse because routed entries are deleted. */
+  /** From `### <id> - ...`. Stable and citable, but sparse because routed entries are deleted. */
   id: number;
   /** The label as written. Unknown values remain visible and produce an anomaly. */
   type: string;
@@ -306,7 +306,9 @@ export type KnownSlugs = { has(slug: string): boolean };
 
 const KNOWN_TYPES: ReadonlySet<string> = new Set(["question", "proposal", "approval", "decision"]);
 const RETIRED_TYPES: ReadonlySet<string> = new Set(["decide"]);
-const ENTRY_HEADING = /^(\d+)\s+—\s+(\S+)\s+·\s+(\S+)\s+·\s+(.+)$/;
+// The writer emits a spaced hyphen after the id; entries written before it used the em dash,
+// and both still parse, so neither agents nor tools ever need to type the em dash.
+const ENTRY_HEADING = /^(\d+)\s+[—-]\s+(\S+)\s+·\s+(\S+)\s+·\s+(.+)$/;
 const ANSWER_START = /^>\s*A:\s?(.*)$/;
 
 /** An entry is open exactly when it has no non-blank answer. */
@@ -384,7 +386,7 @@ export function parseOutbox(
     if (!match) {
       anomalies.push({
         kind: "unparseable-heading",
-        detail: `not "<id> — <type> · <project> · <title>": ${headingLine}`,
+        detail: `not "<id> - <type> · <project> · <title>": ${headingLine}`,
       });
       continue;
     }
@@ -432,7 +434,7 @@ export function parseOutbox(
 }
 
 /** Append one orphan-row entry to OUTBOX.md's `## Open` section, in the shape the
- * loops-queues entry contract defines: `### <id> — <type> · <project> · <title>` and a
+ * loops-queues entry contract defines: `### <id> - <type> · <project> · <title>` and a
  * prose body. No `- item:` line: the row is on the board precisely because no active
  * item file answers for it. Pure string transform; the caller does the file read/write.
  *
@@ -519,14 +521,14 @@ export function appendOutboxEntry(outboxText: string, entry: OutboxAppend): stri
  * must not collide with an entry that has since moved to a later section, or the two
  * become indistinguishable in every citation. */
 function nextEntryId(outboxText: string): number {
-  const existingIds = [...outboxText.matchAll(/^### (\d+) —/gm)].map((match) => parseInt(match[1], 10));
+  const existingIds = [...outboxText.matchAll(/^### (\d+)\s+[—-]\s/gm)].map((match) => parseInt(match[1], 10));
   return (existingIds.length ? Math.max(...existingIds) : 0) + 1;
 }
 
 /** The heading of an entry, with its project label reduced to the one whitespace-free
  * token the contract's readers split on. */
 export function outboxHeading(id: number, type: string, project: string, title: string): string {
-  return `### ${id} — ${type} · ${headingToken(project)} · ${title}`;
+  return `### ${id} - ${type} · ${headingToken(project)} · ${title}`;
 }
 
 /** One entry, ready to append. Kept to the entry contract's six body lines: the marker,

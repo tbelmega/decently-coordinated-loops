@@ -46,7 +46,7 @@ answers on `> A:` lines, in any order; partial answers and "later" are valid.
 with a sequential ID:
 
 ````markdown
-### 42 — question · myapp · Which backend for the session store?
+### 42 - question · myapp · Which backend for the session store?
 
 - item: myapp-session-store
 
@@ -56,14 +56,12 @@ Options: (a) Redis, (b) a Postgres table, (c) in-memory until it hurts.
 > A:
 ````
 
-The heading line is structural, not decoration: `### <id> — <type> · <project> ·
-<title>`, with an em dash after the id and middle dots between the fields. Only the
-first three separators are read as separators, so a title may contain both. **Those two
-characters are data, not typography:** `tools/outbox.ts` matches the em dash and the
-middle dots literally, so a hyphen or a hyphen-minus in their place fails the parse. A
-house or personal style rule against em dashes governs prose and does not reach this
-separator. IDs are
-sequential at append time but sparse over the file's life, because routed entries are
+The heading line is structural, not decoration: `### <id> - <type> · <project> ·
+<title>`, with a spaced hyphen after the id and middle dots between the fields. Only the
+first three separators are read as separators, so a title may contain both.
+`tools/outbox.ts` matches them literally: a middle dot is required between fields, and
+the hyphen needs a space on each side (older entries with an em dash there still
+parse). IDs are sequential at append time but sparse over the file's life, because routed entries are
 deleted; never renumber to close a gap, since answered entries are cited by ID.
 
 - **`- item: <slug>`** is optional and authoritative when present: it joins the entry

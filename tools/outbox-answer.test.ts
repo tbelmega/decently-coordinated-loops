@@ -24,6 +24,13 @@ describe("applyAnswer", () => {
     expect(answerOf(next, 41)).toBe("(a)");
   });
 
+  test("answers an entry whose heading uses the spaced hyphen", () => {
+    const hyphen = `### 47 - question · ${projects.calendar} · hyphenated\n\nthe ask\n\n> A:\n`;
+    const next = applyAnswer(file(one, hyphen), 47, "(a)");
+    expect(answerOf(next, 47)).toBe("(a)");
+    expect(answerOf(next, 41)).toBeNull();
+  });
+
   test("touches only the named entry", () => {
     const next = applyAnswer(file(one, two), 41, "(a)");
     expect(answerOf(next, 41)).toBe("(a)");
