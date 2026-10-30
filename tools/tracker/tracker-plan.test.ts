@@ -199,4 +199,25 @@ describe("planStatusSync", () => {
     expect(plan.transitions).toEqual([]);
     expect(plan.notes).toEqual([]);
   });
+
+  describe("unstarted intake statuses", () => {
+    const intake = { acme: { ...linear, pull: { unstartedStatuses: ["Triage", "Todo"] } } };
+
+    test("an idea linked to a ticket in an unmapped intake status earns no note", () => {
+      const plan = planStatusSync([item("workboard-pulled", "idea", ["ACM-7"])], [snapshot("ACM-7", "Triage")], intake);
+      expect(plan.notes).toEqual([]);
+      expect(plan.transitions).toEqual([]);
+    });
+
+    test("work that starts moves the ticket out of intake", () => {
+      const plan = planStatusSync([item("workboard-pulled", "in-progress", ["ACM-7"])], [snapshot("ACM-7", "Triage")], intake);
+      expect(plan.transitions.map((t) => [t.from, t.to])).toEqual([["Triage", "In Progress"]]);
+    });
+
+    test("without the intake list the same status stays unranked", () => {
+      const plan = planStatusSync([item("workboard-pulled", "in-progress", ["ACM-7"])], [snapshot("ACM-7", "Triage")], trackers);
+      expect(plan.notes.map((n) => n.kind)).toEqual(["unranked-status"]);
+    });
+  });
 });
+

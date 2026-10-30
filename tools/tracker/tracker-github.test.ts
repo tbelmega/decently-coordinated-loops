@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   GithubProjectsAdapter,
+  boardQuery,
+  parseComments,
   parseProjectBoard,
   projectNumber,
   projectOrg,
@@ -153,4 +155,136 @@ describe("GithubProjectsAdapter", () => {
     await adapter.fetchTickets(["#12"]);
     expect(calls.filter((call) => call.query.startsWith("query Board"))).toHaveLength(1);
   });
+
+  const fielded: TrackerConfig = { ...tracker, backlink: { slugField: "Slug", branchField: "Branch" } };
+
+  function fieldedPage(nodes: unknown[]) {
+    const base = page(nodes);
+    return {
+      organization: {
+        projectV2: { ...base.organization.projectV2, slugField: { id: "slug-field" }, branchField: { id: "branch-field" } },
+      },
+    };
+  }
+
+  test("a text field write addresses the project item and the configured field", async () => {
+    const { calls, request } = recording([fieldedPage([ISSUE])]);
+    const adapter = new GithubProjectsAdapter("acme", fielded, request);
+    const [record] = await adapter.fetchTickets(["#12"]);
+    await adapter.setTextField(record!, "Slug", "workboard-export");
+    expect(calls[1]!.query).toStartWith("mutation SetText");
+    expect(calls[1]!.variables).toEqual({ project: "project-1", item: "item-1", field: "slug-field", text: "workboard-export" });
+  });
+
+  test("an empty value clears the field instead of writing an empty string", async () => {
+    const { calls, request } = recording([fieldedPage([ISSUE])]);
+    const adapter = new GithubProjectsAdapter("acme", fielded, request);
+    const [record] = await adapter.fetchTickets(["#12"]);
+    await adapter.setTextField(record!, "Branch", "");
+    expect(calls[1]!.query).toStartWith("mutation ClearField");
+    expect(calls[1]!.variables).toEqual({ project: "project-1", item: "item-1", field: "branch-field" });
+  });
+
+  test("a configured field the project lacks fails with the field's name", async () => {
+    const { request } = recording([page([ISSUE])]);
+    const adapter = new GithubProjectsAdapter("acme", fielded, request);
+    const [record] = await adapter.fetchTickets(["#12"]);
+    await expect(adapter.setTextField(record!, "Slug", "x")).rejects.toThrow(/no text field "Slug"/);
+  });
+
+  test("lists only open issues for the pull", async () => {
+    const closed = { ...ISSUE, id: "item-2", content: { ...ISSUE.content, id: "issue-2", number: 13, state: "CLOSED" } };
+    const open = { ...ISSUE, content: { ...ISSUE.content, state: "OPEN" } };
+    const { request } = recording([page([open, closed])]);
+    const records = await new GithubProjectsAdapter("acme", tracker, request).listOpenTickets();
+    expect(records.map((r) => [r.ref.id, r.open])).toEqual([["#12", true]]);
+  });
+
+  test("closing and reopening address the issue", async () => {
+    const { calls, request } = recording([page([ISSUE])]);
+    const adapter = new GithubProjectsAdapter("acme", tracker, request);
+    const [record] = await adapter.fetchTickets(["#12"]);
+    await adapter.setOpen(record!, false);
+    await adapter.setOpen(record!, true);
+    expect(calls[1]!.query).toStartWith("mutation CloseIssue");
+    expect(calls[2]!.query).toStartWith("mutation ReopenIssue");
+    expect(calls[2]!.variables).toEqual({ id: "issue-1" });
+  });
 });
+
+describe("boardQuery and field values", () => {
+  test("asks for the configured text fields by name", () => {
+    const query = boardQuery({ slugField: "Slug", branchField: "Branch" });
+    expect(query).toContain('slugValue: fieldValueByName(name: "Slug")');
+    expect(query).toContain('branchField: field(name: "Branch")');
+    expect(boardQuery()).not.toContain("slugValue");
+  });
+
+  test("reads open state, author, creation time and field values", () => {
+    const node = {
+      ...ISSUE,
+      slugValue: { text: "workboard-export" },
+      branchValue: null,
+      content: { ...ISSUE.content, state: "OPEN", author: { login: "bob" }, createdAt: "2026-09-01T10:00:00Z" },
+    };
+    const item = parseProjectBoard(page([node]), { slugField: "Slug", branchField: "Branch" }).items[0]!;
+    const record = toRecord(item, "acme");
+    expect(record.open).toBe(true);
+    expect(record.author).toBe("bob");
+    expect(record.createdAt).toBe("2026-09-01T10:00:00Z");
+    expect(record.fields).toEqual({ Slug: "workboard-export" });
+  });
+});
+
+describe("parseComments", () => {
+  test("reads comments oldest first, with a ghost author for deleted accounts", () => {
+    const data = {
+      node: {
+        comments: {
+          nodes: [
+            { author: { login: "bob" }, createdAt: "2026-09-02T10:00:00Z", body: "Still happens." },
+            { author: null, createdAt: "2026-09-03T10:00:00Z", body: "Me too." },
+          ],
+        },
+      },
+    };
+    expect(parseComments(data)).toEqual([
+      { author: "bob", createdAt: "2026-09-02T10:00:00Z", body: "Still happens." },
+      { author: "ghost", createdAt: "2026-09-03T10:00:00Z", body: "Me too." },
+    ]);
+  });
+});
+
+describe("fetchComments", () => {
+  test("pages through every comment, oldest first", async () => {
+    const pages = [
+      { node: { comments: { pageInfo: { hasNextPage: true, endCursor: "c1" }, nodes: [{ author: { login: "bob" }, createdAt: "2026-09-02T10:00:00Z", body: "one" }] } } },
+      { node: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ author: { login: "eve" }, createdAt: "2026-09-03T10:00:00Z", body: "two" }] } } },
+    ];
+    const calls: Record<string, unknown>[] = [];
+    let index = 0;
+    const request = async (query: string, variables: Record<string, unknown>) => {
+      calls.push(variables);
+      return pages[index++];
+    };
+    const adapter = new GithubProjectsAdapter("acme", tracker, request);
+    const record = toRecord(parseProjectBoard(page([ISSUE])).items[0]!, "acme");
+    const comments = await adapter.fetchComments(record);
+    expect(comments.map((c) => c.body)).toEqual(["one", "two"]);
+    expect(calls[1]).toEqual({ id: "issue-1", cursor: "c1" });
+  });
+});
+
+describe("fetchDescription", () => {
+  test("reads the current body by issue id, not from the cached board", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const request = async (query: string, variables: Record<string, unknown>) => {
+      calls.push(variables);
+      return { node: { body: "Edited since." } };
+    };
+    const record = toRecord(parseProjectBoard(page([ISSUE])).items[0]!, "acme");
+    expect(await new GithubProjectsAdapter("acme", tracker, request).fetchDescription(record)).toBe("Edited since.");
+    expect(calls).toEqual([{ id: "issue-1" }]);
+  });
+});
+

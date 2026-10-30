@@ -82,4 +82,57 @@ describe("cli-tracker-sync", () => {
     const outbox = readFileSync(join(root, "OUTBOX.md"), "utf8");
     expect(outbox.match(/loops:tracker-sync acme/g)).toHaveLength(1);
   });
+
+  function githubRepo(tokenFile: string): string {
+    const root = dataRepo({
+      owner: "Alice",
+      trackers: {
+        acme: { kind: "github-projects", workspace: "Acme/workboard", team: "8", tokenFile, statusMap: { merged: "In review" } },
+      },
+      projects: { workboard: { tracker: "acme" } },
+    });
+    writeFileSync(
+      join(root, "items", "workboard-export.md"),
+      ["---", "title: Export", "project: workboard", "state: merged", 'tickets: ["#7"]', "next-actor: agent", "next-step: verify", "updated: 2026-09-20", "---", "Context.", ""].join("\n"),
+    );
+    return root;
+  }
+
+  test("names every phase in its usage", () => {
+    const result = spawnSync("bun", [SYNC, "bogus"], { cwd: dataRepo(), encoding: "utf8" });
+    expect(result.status).toBe(2);
+    for (const phase of ["status", "pull", "reconcile", "set", "link"]) expect(result.stderr).toContain(phase);
+  });
+
+  test("a host without the tracker's credential skips it quietly in every reading phase", () => {
+    const root = githubRepo("/nonexistent/dcl-gh-token");
+    for (const phase of ["status", "pull", "reconcile"]) {
+      const result = spawnSync("bun", [SYNC, phase], { cwd: root, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("acme: skipped, no token file at /nonexistent/dcl-gh-token on this host");
+    }
+    expect(readFileSync(join(root, "OUTBOX.md"), "utf8")).not.toContain("loops:tracker-sync");
+  });
+
+  test("link adds a ticket to an item without touching the tracker", () => {
+    const root = githubRepo("/nonexistent/dcl-gh-token");
+    const result = spawnSync("bun", [SYNC, "link", "workboard-export", "#9"], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(root, "items", "workboard-export.md"), "utf8")).toContain('tickets: ["#7", "#9"]');
+  });
+
+  test("link refuses an id of the wrong form for the item's tracker", () => {
+    const root = githubRepo("/nonexistent/dcl-gh-token");
+    const result = spawnSync("bun", [SYNC, "link", "workboard-export", "ACM-9"], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("a hash and a number");
+  });
+
+  test("set needs exactly one change to make", () => {
+    const root = githubRepo("/nonexistent/dcl-gh-token");
+    const result = spawnSync("bun", [SYNC, "set", "acme/#7"], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--status");
+  });
 });
+

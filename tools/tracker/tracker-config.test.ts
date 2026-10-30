@@ -70,6 +70,33 @@ describe("validateTrackers", () => {
   });
 });
 
+describe("validateTrackers backlink", () => {
+  const github = { kind: "github-projects", workspace: "Acme/workboard", team: "8", statusMap: {} };
+
+  test("a github project may name text fields for the slug and the branch", () => {
+    const parsed = validateTrackers({ acme: { ...github, backlink: { slugField: "Slug", branchField: "Branch" } } });
+    expect(parsed.acme!.backlink).toEqual({ slugField: "Slug", branchField: "Branch" });
+  });
+
+  test("either field alone is enough", () => {
+    expect(validateTrackers({ acme: { ...github, backlink: { branchField: "Branch" } } }).acme!.backlink).toEqual({
+      branchField: "Branch",
+    });
+  });
+
+  test("rejects a misspelled backlink key", () => {
+    expect(() => validateTrackers({ acme: { ...github, backlink: { slug: "Slug" } } })).toThrow(/backlink\.slug is not allowed/);
+  });
+
+  test("rejects an empty field name", () => {
+    expect(() => validateTrackers({ acme: { ...github, backlink: { slugField: " " } } })).toThrow(/backlink\.slugField/);
+  });
+
+  test("rejects backlink fields on linear, which has no custom text field to write", () => {
+    expect(() => validateTrackers(trackers({ backlink: { slugField: "Slug" } } as never))).toThrow(/backlink.*github-projects/);
+  });
+});
+
 describe("isTicketId", () => {
   test("a linear key is a team prefix and a number", () => {
     expect(isTicketId("linear", "ACM-123")).toBe(true);

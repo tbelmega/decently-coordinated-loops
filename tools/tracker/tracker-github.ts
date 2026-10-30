@@ -6,32 +6,90 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { TicketRecord, TrackerAdapter } from "./tracker-adapter.ts";
-import type { TrackerConfig } from "./tracker-config.ts";
+import type { TicketComment, TicketRecord, TrackerAdapter } from "./tracker-adapter.ts";
+import type { TrackerBacklinkConfig, TrackerConfig } from "./tracker-config.ts";
 
-export const BOARD_QUERY = `query Board($org: String!, $number: Int!, $cursor: String) {
+/** The board query, asking for the text fields the tracker keeps its backlinks in. Field
+ * names are JSON-quoted into the query, which is also how GraphQL quotes a string. */
+export function boardQuery(backlink: TrackerBacklinkConfig = {}): string {
+  const fieldDefinitions = BACKLINK_FIELDS.filter(([key]) => backlink[key])
+    .map(([key, alias]) => `\n      ${alias}Field: field(name: ${JSON.stringify(backlink[key])}) { ... on ProjectV2Field { id } }`)
+    .join("");
+  const fieldValues = BACKLINK_FIELDS.filter(([key]) => backlink[key])
+    .map(
+      ([key, alias]) =>
+        `\n          ${alias}Value: fieldValueByName(name: ${JSON.stringify(backlink[key])}) { ... on ProjectV2ItemFieldTextValue { text } }`,
+    )
+    .join("");
+  return `query Board($org: String!, $number: Int!, $cursor: String) {
   organization(login: $org) {
     projectV2(number: $number) {
       id
       field(name: "Status") {
         ... on ProjectV2SingleSelectField { id name options { id name } }
-      }
+      }${fieldDefinitions}
       items(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
           fieldValueByName(name: "Status") {
             ... on ProjectV2ItemFieldSingleSelectValue { name }
-          }
+          }${fieldValues}
           content {
             __typename
-            ... on Issue { id number title body url assignees(first: 1) { nodes { login } } }
+            ... on Issue {
+              id number title body url state createdAt
+              author { login }
+              assignees(first: 1) { nodes { login } }
+            }
             ... on PullRequest { id number }
           }
         }
       }
     }
   }
+}`;
+}
+
+/** The backlink config keys and the query alias each one is read under. */
+const BACKLINK_FIELDS: [keyof TrackerBacklinkConfig, string][] = [
+  ["slugField", "slug"],
+  ["branchField", "branch"],
+];
+
+export const BOARD_QUERY = boardQuery();
+
+export const COMMENTS_QUERY = `query Comments($id: ID!, $cursor: String) {
+  node(id: $id) {
+    ... on Issue {
+      comments(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { author { login } createdAt body }
+      }
+    }
+  }
+}`;
+
+export const BODY_QUERY = `query Body($id: ID!) {
+  node(id: $id) { ... on Issue { body } }
+}`;
+
+export const SET_TEXT_MUTATION = `mutation SetText($project: ID!, $item: ID!, $field: ID!, $text: String!) {
+  updateProjectV2ItemFieldValue(
+    input: { projectId: $project, itemId: $item, fieldId: $field, value: { text: $text } }
+  ) { projectV2Item { id } }
+}`;
+
+export const CLEAR_FIELD_MUTATION = `mutation ClearField($project: ID!, $item: ID!, $field: ID!) {
+  clearProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field }) { projectV2Item { id } }
+}`;
+
+export const CLOSE_ISSUE_MUTATION = `mutation CloseIssue($id: ID!) {
+  closeIssue(input: { issueId: $id }) { issue { id } }
+}`;
+
+export const REOPEN_ISSUE_MUTATION = `mutation ReopenIssue($id: ID!) {
+  reopenIssue(input: { issueId: $id }) { issue { id } }
 }`;
 
 export const SET_STATUS_MUTATION = `mutation SetStatus($project: ID!, $item: ID!, $field: ID!, $option: String!) {
@@ -56,11 +114,19 @@ export interface BoardItem {
   url: string;
   assignee?: string;
   status: string;
+  /** Absent when the board did not say, e.g. an older recorded fixture. */
+  open?: boolean;
+  author?: string;
+  createdAt?: string;
+  /** Configured text field values by field name; an empty field is absent. */
+  fields?: Record<string, string>;
 }
 
 export interface ProjectBoard {
   projectId: string;
   statusFieldId: string;
+  /** Configured text field ids by field name; a field the project lacks is absent. */
+  textFieldIds: Record<string, string>;
   statusOptions: { id: string; name: string }[];
   items: BoardItem[];
   /** Non-issue entries, counted rather than silently dropped: a board that is mostly
@@ -86,7 +152,7 @@ export function projectNumber(tracker: TrackerConfig): number {
 
 /** Pure: one page of the board. Pull requests and draft items are counted and skipped -
  * only issues are tickets a board item can advance. */
-export function parseProjectBoard(data: unknown): ProjectBoard {
+export function parseProjectBoard(data: unknown, backlink: TrackerBacklinkConfig = {}): ProjectBoard {
   const project = (data as { organization?: { projectV2?: unknown } }).organization?.projectV2 as
     | {
         id?: string;
@@ -98,6 +164,12 @@ export function parseProjectBoard(data: unknown): ProjectBoard {
   if (!project?.id) throw new Error("no such GitHub project - check the tracker's workspace org and project number");
   if (!project.field?.id) {
     throw new Error("the GitHub project has no single-select Status field, which is what the board state maps onto");
+  }
+  const textFieldIds: Record<string, string> = {};
+  for (const [key, alias] of BACKLINK_FIELDS) {
+    const name = backlink[key];
+    const id = (project as Record<string, { id?: string } | null | undefined>)[`${alias}Field`]?.id;
+    if (name && id) textFieldIds[name] = id;
   }
   const skipped = { pullRequests: 0, drafts: 0 };
   const items: BoardItem[] = [];
@@ -112,9 +184,12 @@ export function parseProjectBoard(data: unknown): ProjectBoard {
         title?: string;
         body?: string | null;
         url?: string;
+        state?: string;
+        createdAt?: string;
+        author?: { login?: string } | null;
         assignees?: { nodes?: { login?: string }[] };
       } | null;
-    };
+    } & Record<string, unknown>;
     const type = entry.content?.__typename ?? "DraftIssue";
     if (type === "PullRequest") {
       skipped.pullRequests += 1;
@@ -125,6 +200,13 @@ export function parseProjectBoard(data: unknown): ProjectBoard {
       continue;
     }
     const assignee = entry.content.assignees?.nodes?.[0]?.login;
+    const fields: Record<string, string> = {};
+    for (const [key, alias] of BACKLINK_FIELDS) {
+      const name = backlink[key];
+      const text = (entry[`${alias}Value`] as { text?: string } | null | undefined)?.text;
+      if (name && text) fields[name] = text;
+    }
+    const author = entry.content.author?.login;
     items.push({
       itemId: entry.id,
       contentId: entry.content.id,
@@ -135,6 +217,10 @@ export function parseProjectBoard(data: unknown): ProjectBoard {
       url: entry.content.url ?? "",
       ...(assignee ? { assignee } : {}),
       status: entry.fieldValueByName?.name ?? "",
+      ...(entry.content.state ? { open: entry.content.state === "OPEN" } : {}),
+      ...(author ? { author } : {}),
+      ...(entry.content.createdAt ? { createdAt: entry.content.createdAt } : {}),
+      ...(Object.keys(fields).length ? { fields } : {}),
     });
   }
   const pageInfo = project.items?.pageInfo;
@@ -142,6 +228,7 @@ export function parseProjectBoard(data: unknown): ProjectBoard {
     projectId: project.id,
     statusFieldId: project.field.id,
     statusOptions: project.field.options ?? [],
+    textFieldIds,
     items,
     skipped,
     ...(pageInfo?.hasNextPage && pageInfo.endCursor ? { nextCursor: pageInfo.endCursor } : {}),
@@ -172,7 +259,21 @@ export function toRecord(item: BoardItem, tracker: string): TicketRecord {
     title: item.title,
     url: item.url,
     ...(item.assignee ? { assignee: item.assignee } : {}),
+    ...(item.open === undefined ? {} : { open: item.open }),
+    ...(item.author ? { author: item.author } : {}),
+    ...(item.createdAt ? { createdAt: item.createdAt } : {}),
+    ...(item.fields ? { fields: item.fields } : {}),
   };
+}
+
+/** Pure: an issue's comments, oldest first. A deleted account reads as GitHub shows it. */
+export function parseComments(data: unknown): TicketComment[] {
+  const nodes =
+    (data as { node?: { comments?: { nodes?: unknown[] } } | null }).node?.comments?.nodes ?? [];
+  return nodes.map((node) => {
+    const comment = node as { author?: { login?: string } | null; createdAt?: string; body?: string };
+    return { author: comment.author?.login ?? "ghost", createdAt: comment.createdAt ?? "", body: comment.body ?? "" };
+  });
 }
 
 export type GraphQlRequest = (query: string, variables: Record<string, unknown>) => Promise<unknown>;
@@ -225,7 +326,8 @@ export class GithubProjectsAdapter implements TrackerAdapter {
     let cursor: string | undefined;
     let board: ProjectBoard | undefined;
     do {
-      const page = parseProjectBoard(await this.request(BOARD_QUERY, { org, number, cursor }));
+      const backlink = this.tracker.backlink ?? {};
+      const page = parseProjectBoard(await this.request(boardQuery(backlink), { org, number, cursor }), backlink);
       board = board
         ? {
             ...board,
@@ -249,10 +351,62 @@ export class GithubProjectsAdapter implements TrackerAdapter {
     return board.items.filter((item) => wanted.has(`#${item.number}`)).map((item) => toRecord(item, this.name));
   }
 
-  async setStatus(ticket: TicketRecord, status: string): Promise<void> {
+  async listOpenTickets(): Promise<TicketRecord[]> {
+    const board = await this.loadBoard();
+    return board.items.filter((item) => item.open === true).map((item) => toRecord(item, this.name));
+  }
+
+  /** Every comment, paged to the end: a pulled ticket is never pulled again, so a
+   * truncated discussion would stay truncated on the board for good. */
+  async fetchComments(ticket: TicketRecord): Promise<TicketComment[]> {
+    const comments: TicketComment[] = [];
+    let cursor: string | undefined;
+    do {
+      const data = await this.request(COMMENTS_QUERY, { id: ticket.externalId, ...(cursor ? { cursor } : {}) });
+      comments.push(...parseComments(data));
+      const pageInfo = (data as { node?: { comments?: { pageInfo?: { hasNextPage?: boolean; endCursor?: string } } } | null })
+        .node?.comments?.pageInfo;
+      cursor = pageInfo?.hasNextPage && pageInfo.endCursor ? pageInfo.endCursor : undefined;
+    } while (cursor);
+    return comments;
+  }
+
+  skippedEntries(): { pullRequests: number; drafts: number } | undefined {
+    return this.board?.skipped;
+  }
+
+  async fetchDescription(ticket: TicketRecord): Promise<string> {
+    const data = (await this.request(BODY_QUERY, { id: ticket.externalId })) as { node?: { body?: string | null } | null };
+    if (!data.node) throw new Error(`ticket ${ticket.ref.id} no longer exists`);
+    return data.node.body ?? "";
+  }
+
+  private async boardItem(ticket: TicketRecord): Promise<{ board: ProjectBoard; item: BoardItem }> {
     const board = await this.loadBoard();
     const item = board.items.find((candidate) => `#${candidate.number}` === ticket.ref.id);
     if (!item) throw new Error(`ticket ${ticket.ref.id} is not on the configured GitHub project board`);
+    return { board, item };
+  }
+
+  async setTextField(ticket: TicketRecord, field: string, value: string): Promise<void> {
+    const { board, item } = await this.boardItem(ticket);
+    const fieldId = board.textFieldIds[field];
+    if (!fieldId) {
+      throw new Error(`the GitHub project has no text field "${field}" - add it to the project or fix the tracker's backlink config`);
+    }
+    if (value === "") {
+      await this.request(CLEAR_FIELD_MUTATION, { project: board.projectId, item: item.itemId, field: fieldId });
+      return;
+    }
+    await this.request(SET_TEXT_MUTATION, { project: board.projectId, item: item.itemId, field: fieldId, text: value });
+  }
+
+  async setOpen(ticket: TicketRecord, open: boolean): Promise<void> {
+    await this.request(open ? REOPEN_ISSUE_MUTATION : CLOSE_ISSUE_MUTATION, { id: ticket.externalId });
+  }
+
+  async setStatus(ticket: TicketRecord, status: string): Promise<void> {
+    const { board, item } = await this.boardItem(ticket);
     await this.request(SET_STATUS_MUTATION, {
       project: board.projectId,
       item: item.itemId,

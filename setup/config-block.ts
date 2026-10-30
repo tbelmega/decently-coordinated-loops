@@ -67,7 +67,8 @@ the gate. ${owner} dumps raw thoughts into \`${dataRepo}/INBOX.md\` - when
 asked to "process the inbox" (or during unattended pickup), turn entries into board
 items per the loops-queues skill. Questions, proposals, and approvals that only
 ${owner} can resolve go into \`${dataRepo}/OUTBOX.md\` per the same skill; "process
-the outbox" and "interview me" are handled there too. When ${owner} says "pick up
+the outbox" and "interview me" are handled there too. When ${owner} asks to "sync the
+tracker", follow loops-board → External trackers → Sync. When ${owner} says "pick up
 the next available piece of work" (or similar) without naming an item, follow the
 loops-pickup skill. When ${owner} asks you to set yourself up for dispatch duty (or
 to inspect or stop a running dispatcher), follow the loops-dispatch skill.

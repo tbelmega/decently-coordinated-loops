@@ -28,6 +28,14 @@ export interface TrackerCommitConfig {
   body?: string;
 }
 
+/** Where a ticket carries its board references when the tracker has a field for them.
+ * Each named field is a single-line text field on the tracker's board; an absent one
+ * falls back to a managed line in the ticket description. */
+export interface TrackerBacklinkConfig {
+  slugField?: string;
+  branchField?: string;
+}
+
 export interface TrackerConfig {
   kind: TrackerKind;
   /** linear: the workspace slug; github-projects: "Org/repo". */
@@ -44,6 +52,7 @@ export interface TrackerConfig {
   /** Path to the file holding this tracker's API token ("~" expanded by the reader). */
   tokenFile?: string;
   commit?: TrackerCommitConfig;
+  backlink?: TrackerBacklinkConfig;
 }
 
 /** The id form each tracker issues. Used both to validate what an item claims and to
@@ -95,7 +104,27 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-const TRACKER_KEYS = ["kind", "workspace", "team", "url", "owner", "statusMap", "pull", "tokenFile", "commit"];
+const TRACKER_KEYS = ["kind", "workspace", "team", "url", "owner", "statusMap", "pull", "tokenFile", "commit", "backlink"];
+
+const BACKLINK_KEYS = ["slugField", "branchField"] as const;
+
+function validateBacklink(backlink: unknown, kind: TrackerKind, label: string): void {
+  if (typeof backlink !== "object" || backlink === null || Array.isArray(backlink)) {
+    throw new Error(`${label} must be an object`);
+  }
+  if (kind !== "github-projects") {
+    throw new Error(`${label} names board fields, which only a github-projects tracker has`);
+  }
+  for (const key of Object.keys(backlink)) {
+    if (!(BACKLINK_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`${label}.${key} is not allowed (${BACKLINK_KEYS.join(", ")})`);
+    }
+  }
+  for (const key of BACKLINK_KEYS) {
+    const field = (backlink as TrackerBacklinkConfig)[key];
+    if (field !== undefined && !nonEmptyString(field)) throw new Error(`${label}.${key} must be a non-empty field name`);
+  }
+}
 
 function validateCommit(commit: unknown, kind: TrackerKind, label: string): void {
   if (typeof commit !== "object" || commit === null || Array.isArray(commit)) {
@@ -176,6 +205,7 @@ export function validateTrackers(trackers: unknown, label = "trackers"): Record<
       }
     }
     if (candidate.commit !== undefined) validateCommit(candidate.commit, kind, `${path}.commit`);
+    if (candidate.backlink !== undefined) validateBacklink(candidate.backlink, kind, `${path}.backlink`);
   }
   return trackers as Record<string, TrackerConfig>;
 }

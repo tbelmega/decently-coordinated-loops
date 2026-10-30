@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { appendItemNote, planBacklinks, runStatusPhase } from "./tracker-status.ts";
+import { appendItemNote, itemBranchRef, planBacklinks, planFieldBacklinks, runStatusPhase } from "./tracker-status.ts";
 import type { TicketRecord, TrackerAdapter } from "./tracker-adapter.ts";
 import type { ItemFile } from "../types.ts";
 
@@ -54,6 +54,92 @@ describe("planBacklinks", () => {
   });
 });
 
+describe("planBacklinks with branches", () => {
+  function record(id: string, description: string): TicketRecord {
+    return { ref: { tracker: "acme", id }, status: "Todo", description, externalId: `uuid-${id}` };
+  }
+
+  test("adds the branch line for a linked item that has one", () => {
+    const plan = planBacklinks([record("ACM-7", "Body.")], new Map([["acme/ACM-7", ["workboard-export"]]]), {
+      branchesByTicket: new Map([["acme/ACM-7", ["agents/export"]]]),
+    });
+    expect(plan[0]!.description).toBe("Body.\n\nDCL: workboard-export\nDCL branch: agents/export");
+  });
+
+  test("with a slug field configured, the description keeps only the branch line managed", () => {
+    const plan = planBacklinks([record("ACM-7", "Body.")], new Map([["acme/ACM-7", ["workboard-export"]]]), {
+      branchesByTicket: new Map([["acme/ACM-7", ["agents/export"]]]),
+      backlinkByTracker: { acme: { slugField: "Slug" } },
+    });
+    expect(plan[0]!.description).toBe("Body.\n\nDCL branch: agents/export");
+  });
+
+  test("with both fields configured, the description is never written", () => {
+    const plan = planBacklinks([record("ACM-7", "Body.")], new Map([["acme/ACM-7", ["workboard-export"]]]), {
+      branchesByTicket: new Map([["acme/ACM-7", ["agents/export"]]]),
+      backlinkByTracker: { acme: { slugField: "Slug", branchField: "Branch" } },
+    });
+    expect(plan).toEqual([]);
+  });
+});
+
+describe("planFieldBacklinks", () => {
+  function record(id: string, fields: Record<string, string> = {}): TicketRecord {
+    return { ref: { tracker: "acme", id }, status: "Todo", description: "Body.", externalId: `uuid-${id}`, fields };
+  }
+
+  test("writes the slug and branch fields that differ from what the board wants", () => {
+    const plan = planFieldBacklinks(
+      [record("#7", { Slug: "old-slug" })],
+      new Map([["acme/#7", ["workboard-b", "workboard-a"]]]),
+      new Map([["acme/#7", ["agents/a"]]]),
+      { acme: { slugField: "Slug", branchField: "Branch" } },
+    );
+    expect(plan).toEqual([
+      { ticket: { tracker: "acme", id: "#7" }, externalId: "uuid-#7", field: "Slug", value: "workboard-a, workboard-b" },
+      { ticket: { tracker: "acme", id: "#7" }, externalId: "uuid-#7", field: "Branch", value: "agents/a" },
+    ]);
+  });
+
+  test("clears a branch field once no linked item has a branch", () => {
+    const plan = planFieldBacklinks(
+      [record("#7", { Slug: "workboard-a", Branch: "agents/a" })],
+      new Map([["acme/#7", ["workboard-a"]]]),
+      new Map(),
+      { acme: { slugField: "Slug", branchField: "Branch" } },
+    );
+    expect(plan).toEqual([{ ticket: { tracker: "acme", id: "#7" }, externalId: "uuid-#7", field: "Branch", value: "" }]);
+  });
+
+  test("plans nothing for a tracker without fields, or a ticket already in step", () => {
+    const slugs = new Map([["acme/#7", ["workboard-a"]]]);
+    expect(planFieldBacklinks([record("#7")], slugs, new Map(), {})).toEqual([]);
+    expect(planFieldBacklinks([record("#7", { Slug: "workboard-a" })], slugs, new Map(), { acme: { slugField: "Slug" } })).toEqual([]);
+  });
+});
+
+describe("itemBranchRef", () => {
+  function item(state: string, links: Record<string, string>): ItemFile {
+    return {
+      slug: "s", path: "items/s.md", title: "s", project: "workboard", state, assignee: "-", autonomy: "auto",
+      nextActor: "agent", dependsOn: [], nextStep: "-", updated: "2026-09-18", links,
+    };
+  }
+
+  test("prefers the review URL over the branch once work has started", () => {
+    expect(itemBranchRef(item("implemented", { branch: "agents/a", pr: "https://example.test/pull/4" }))).toBe("https://example.test/pull/4");
+    expect(itemBranchRef(item("in-progress", { branch: "agents/a" }))).toBe("agents/a");
+    expect(itemBranchRef(item("blocked", { branch: "agents/a" }))).toBe("agents/a");
+  });
+
+  test("names nothing before work starts, after a drop, or without a link", () => {
+    expect(itemBranchRef(item("spec-filed", { branch: "agents/a" }))).toBeUndefined();
+    expect(itemBranchRef(item("idea", { branch: "agents/a" }))).toBeUndefined();
+    expect(itemBranchRef(item("dropped", { branch: "agents/a" }))).toBeUndefined();
+    expect(itemBranchRef(item("merged", {}))).toBeUndefined();
+  });
+});
+
 describe("runStatusPhase", () => {
   const config = {
     owner: "Alice",
@@ -104,6 +190,10 @@ describe("runStatusPhase", () => {
     }
     async setDescription(externalId: string, description: string): Promise<void> {
       this.descriptionWrites.push({ id: externalId, description });
+    }
+    fieldWrites: { id: string; field: string; value: string }[] = [];
+    async setTextField(ticket: TicketRecord, field: string, value: string): Promise<void> {
+      this.fieldWrites.push({ id: ticket.ref.id, field, value });
     }
   }
 
@@ -195,4 +285,14 @@ describe("runStatusPhase", () => {
     expect(report.unresolved).toEqual([]);
     expect(report.itemWrites).toEqual([]);
   });
+
+  test("applying writes the branch of an in-progress item onto its ticket", async () => {
+    const adapter = new StubAdapter([record("ACM-7", "In Progress", "Body.\n\nDCL: workboard-export")]);
+    const linked = { ...item("workboard-export", "in-progress", ["ACM-7"]), links: { branch: "agents/export" } };
+    await run({ items: [linked], adapter, apply: true });
+    expect(adapter.descriptionWrites).toEqual([
+      { id: "uuid-ACM-7", description: "Body.\n\nDCL: workboard-export\nDCL branch: agents/export" },
+    ]);
+  });
 });
+

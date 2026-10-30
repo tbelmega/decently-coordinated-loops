@@ -4,7 +4,9 @@ import type { LoopsConfig } from "../config.ts";
 import type { ItemFile } from "../types.ts";
 import { planStatusSync, ticketKey } from "./tracker-plan.ts";
 import type { ItemNote, PlannerItem, TicketHold, TicketRef, TicketTransition, UnresolvedTicket } from "./tracker-plan.ts";
-import { applyBacklinks } from "./tracker-backlink.ts";
+import { applyManagedLines } from "./tracker-backlink.ts";
+import type { TrackerBacklinkConfig } from "./tracker-config.ts";
+import { BOARD_STATE_LADDER } from "../types.ts";
 import { resolveItemTickets } from "./tracker-items.ts";
 import type { TicketRecord, TrackerAdapter } from "./tracker-adapter.ts";
 
@@ -25,19 +27,85 @@ export interface BacklinkWrite {
   description: string;
 }
 
-/** The description updates that make each ticket name the work-streams it serves.
- * Tickets no item links are left alone: their description is a collaborator's text and
- * none of the board's business. */
-export function planBacklinks(records: TicketRecord[], slugsByTicket: Map<string, string[]>): BacklinkWrite[] {
+export interface BacklinkOptions {
+  /** Ticket key -> the branch or review URL of each linked item with work under way. */
+  branchesByTicket?: Map<string, string[]>;
+  /** The backlink fields each tracker declares; a kind stored in a field is not managed
+   * in the description. */
+  backlinkByTracker?: Record<string, TrackerBacklinkConfig | undefined>;
+}
+
+/** The description updates that make each ticket name the work-streams it serves and
+ * their branches. Tickets no item links are left alone: their description is a
+ * collaborator's text and none of the board's business. */
+export function planBacklinks(
+  records: TicketRecord[],
+  slugsByTicket: Map<string, string[]>,
+  options: BacklinkOptions = {},
+): BacklinkWrite[] {
   const writes: BacklinkWrite[] = [];
   for (const record of records) {
-    const slugs = slugsByTicket.get(ticketKey(record.ref));
+    const key = ticketKey(record.ref);
+    const slugs = slugsByTicket.get(key);
     if (!slugs || slugs.length === 0) continue;
-    const description = applyBacklinks(record.description, slugs);
+    const fields = options.backlinkByTracker?.[record.ref.tracker];
+    const description = applyManagedLines(record.description, {
+      ...(fields?.slugField ? {} : { slugs }),
+      ...(fields?.branchField ? {} : { branches: options.branchesByTicket?.get(key) ?? [] }),
+    });
     if (description === undefined) continue;
     writes.push({ ticket: record.ref, externalId: record.externalId, description });
   }
   return writes;
+}
+
+export interface FieldWrite {
+  ticket: TicketRef;
+  externalId: string;
+  field: string;
+  /** Empty clears the field. */
+  value: string;
+}
+
+/** The board-field updates for trackers that keep the slug or branch in a field. Values
+ * are sorted and comma-joined, so a ticket served by several work-streams reads the same
+ * on every run. */
+export function planFieldBacklinks(
+  records: TicketRecord[],
+  slugsByTicket: Map<string, string[]>,
+  branchesByTicket: Map<string, string[]>,
+  backlinkByTracker: Record<string, TrackerBacklinkConfig | undefined>,
+): FieldWrite[] {
+  const writes: FieldWrite[] = [];
+  for (const record of records) {
+    const key = ticketKey(record.ref);
+    const slugs = slugsByTicket.get(key);
+    if (!slugs || slugs.length === 0) continue;
+    const fields = backlinkByTracker[record.ref.tracker];
+    const wanted: [string | undefined, string[]][] = [
+      [fields?.slugField, slugs],
+      [fields?.branchField, branchesByTicket.get(key) ?? []],
+    ];
+    for (const [field, values] of wanted) {
+      if (!field) continue;
+      const value = [...new Set(values)].sort().join(", ");
+      if ((record.fields?.[field] ?? "") === value) continue;
+      writes.push({ ticket: record.ref, externalId: record.externalId, field, value });
+    }
+  }
+  return writes;
+}
+
+const WORK_STARTED_FROM = BOARD_STATE_LADDER.indexOf("in-progress");
+
+/** What a collaborator should open to follow an item's work: its review once one exists,
+ * else its branch. Nothing before work starts or after the item is dropped, and never a
+ * worktree path or host - both are private to one machine. */
+export function itemBranchRef(item: ItemFile): string | undefined {
+  const rank = (BOARD_STATE_LADDER as readonly string[]).indexOf(item.state);
+  const started = item.state === "blocked" || rank >= WORK_STARTED_FROM;
+  if (!started) return undefined;
+  return item.links.pr ?? item.links.branch;
 }
 
 export interface StatusRunInput {
@@ -61,6 +129,7 @@ export interface TrackerFailure {
 export interface StatusRunReport {
   transitions: TicketTransition[];
   backlinks: BacklinkWrite[];
+  fieldWrites: FieldWrite[];
   notes: ItemNote[];
   holds: TicketHold[];
   unresolved: UnresolvedTicket[];
@@ -120,9 +189,21 @@ export async function runStatusPhase(input: StatusRunInput): Promise<StatusRunRe
       slugsByTicket.set(key, [...(slugsByTicket.get(key) ?? []), item.slug]);
     }
   }
-  const backlinks = planBacklinks(records, slugsByTicket);
+  const itemsBySlugForBranches = new Map(items.map((item) => [item.slug, item]));
+  const branchesByTicket = new Map<string, string[]>();
+  for (const item of plannerItems) {
+    const branch = itemBranchRef(itemsBySlugForBranches.get(item.slug)!);
+    if (!branch) continue;
+    for (const ref of item.tickets) {
+      const key = ticketKey(ref);
+      branchesByTicket.set(key, [...(branchesByTicket.get(key) ?? []), branch]);
+    }
+  }
+  const backlinkByTracker = Object.fromEntries(Object.entries(trackers).map(([name, tracker]) => [name, tracker.backlink]));
+  const backlinks = planBacklinks(records, slugsByTicket, { branchesByTicket, backlinkByTracker });
+  const fieldWrites = planFieldBacklinks(records, slugsByTicket, branchesByTicket, backlinkByTracker);
 
-  const report: StatusRunReport = { ...plan, backlinks, itemWrites: [], failures, applied: apply };
+  const report: StatusRunReport = { ...plan, backlinks, fieldWrites, itemWrites: [], failures, applied: apply };
   if (!apply) return report;
 
   const recordsByKey = new Map(records.map((record) => [ticketKey(record.ref), record]));
@@ -144,7 +225,18 @@ export async function runStatusPhase(input: StatusRunInput): Promise<StatusRunRe
     }
   }
 
-  const itemsBySlug = new Map(items.map((item) => [item.slug, item]));
+  for (const write of fieldWrites) {
+    const adapter = adapters.get(write.ticket.tracker)!;
+    const key = ticketKey(write.ticket);
+    try {
+      if (!adapter.setTextField) throw new Error("this tracker has no board fields to write");
+      await adapter.setTextField(recordsByKey.get(key)!, write.field, write.value);
+    } catch (cause) {
+      failures.push({ tracker: write.ticket.tracker, message: `${key}: ${(cause as Error).message}` });
+    }
+  }
+
+  const itemsBySlug = itemsBySlugForBranches;
   const pending = new Map<string, string>();
   for (const note of plan.notes) {
     const item = itemsBySlug.get(note.slug);

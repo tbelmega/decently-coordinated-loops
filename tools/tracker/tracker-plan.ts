@@ -85,15 +85,20 @@ function stateRank(state: string): number | undefined {
  * can pull the ticket back to the other. A status nothing ranked - one outside the map,
  * or the cancelled status - yields undefined, which is what makes the sync leave it
  * alone. */
-function statusRank(tracker: TrackerConfig, status: string): number | undefined {
+export function statusRank(tracker: TrackerConfig, status: string): number | undefined {
   let best: number | undefined;
   for (const [state, mapped] of Object.entries(tracker.statusMap)) {
     if (mapped !== status) continue;
     const rank = stateRank(state);
     if (rank !== undefined && (best === undefined || rank > best)) best = rank;
   }
+  // An intake status the map leaves out sits below every board state: a ticket there is
+  // known to be unstarted, so the push may move it forward and nothing needs noting.
+  if (best === undefined && tracker.pull?.unstartedStatuses.includes(status)) return UNSTARTED_RANK;
   return best;
 }
+
+const UNSTARTED_RANK = -1;
 
 interface TicketGroup {
   ref: TicketRef;
@@ -201,7 +206,7 @@ function unrankedNote(item: PlannerItem, ticket: TicketRef, status: string): Ite
 /** The status of the least advanced linked item: a ticket several work-streams serve
  * reports the one furthest from done, so no sibling can call it delivered while another
  * is still building. Ties break by name, for a deterministic plan. */
-function leastAdvanced(tracker: TrackerConfig, live: PlannerItem[]): string {
+export function leastAdvanced(tracker: TrackerConfig, live: PlannerItem[]): string {
   const candidates = live.map((item) => tracker.statusMap[item.state]!);
   return candidates.reduce((best, status) => {
     const a = statusRank(tracker, status)!;

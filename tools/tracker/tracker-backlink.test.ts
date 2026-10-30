@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyBacklinks, backlinkLine } from "./tracker-backlink.ts";
+import { applyBacklinks, applyManagedLines, backlinkLine, branchLine, readBacklinkSlugs } from "./tracker-backlink.ts";
 
 const SLUG = "household-app-slideshow-photo-management";
 
@@ -36,5 +36,37 @@ describe("applyBacklinks", () => {
 
   test("an empty description gets the line alone", () => {
     expect(applyBacklinks("", [SLUG])).toBe(backlinkLine(SLUG));
+  });
+});
+
+describe("applyManagedLines", () => {
+  test("writes the branch line after the slug line", () => {
+    expect(applyManagedLines("Body.", { slugs: [SLUG], branches: ["agents/feature-x"] })).toBe(
+      `Body.\n\n${backlinkLine(SLUG)}\n${branchLine("agents/feature-x")}`,
+    );
+  });
+
+  test("clears a branch line once no branch is wanted, leaving the slug line", () => {
+    const once = applyManagedLines("Body.", { slugs: [SLUG], branches: ["agents/feature-x"] })!;
+    expect(applyManagedLines(once, { slugs: [SLUG], branches: [] })).toBe(`Body.\n\n${backlinkLine(SLUG)}`);
+  });
+
+  test("leaves slug lines alone when the slug lives in a field instead", () => {
+    const description = `Body.\n\n${backlinkLine(SLUG)}`;
+    expect(applyManagedLines(description, { branches: ["agents/feature-x"] })).toBe(
+      `Body.\n\n${backlinkLine(SLUG)}\n\n${branchLine("agents/feature-x")}`,
+    );
+  });
+
+  test("is idempotent with both kinds of line", () => {
+    const once = applyManagedLines("Body.", { slugs: [SLUG], branches: ["https://example.test/pull/4"] })!;
+    expect(applyManagedLines(once, { slugs: [SLUG], branches: ["https://example.test/pull/4"] })).toBeUndefined();
+  });
+});
+
+describe("readBacklinkSlugs", () => {
+  test("reads every slug line and ignores branch lines and prose", () => {
+    const description = `Body mentioning DCL: inline.\n\n${backlinkLine("a-one")}\n${backlinkLine("b-two")}\n${branchLine("x")}`;
+    expect(readBacklinkSlugs(description)).toEqual(["a-one", "b-two"]);
   });
 });

@@ -328,14 +328,62 @@ the run, and `tickets: local` settles it.
 
 `bun run tracker-sync status` pushes the projection. It only ever moves a ticket
 forward, leaves one in a status the map does not name exactly where it is, and records
-what it did not do as a line on the item. A missing credential or an unreachable API
-fails that tracker's run, leaves the board untouched, and files one outbox entry -
-nothing syncs until it is fixed, and later runs would otherwise be silent about it.
+what it did not do as a line on the item. A credential that is present but rejected, or
+an unreachable API, fails that tracker's run, leaves the board untouched, and files one
+outbox entry - nothing syncs until it is fixed, and later runs would otherwise be silent
+about it. A host that holds no credential for the tracker at all skips it quietly
+(Sync, below).
 
-Creating, linking or splitting a ticket is always proposed to the owner and never done on
-an agent's own initiative, and a ticket a human moved further than the board is left
-exactly where it is: record a line on the item and stop. An agent reverses a human's
-change in someone else's tracker only on a direct prompt.
+Creating or splitting a ticket is always proposed to the owner and never done on an
+agent's own initiative, and a ticket a human moved further than the board is left exactly
+where it is: record a line on the item and stop. An agent reverses a human's change in
+someone else's tracker only on a direct prompt. Linking follows the sync rules below: the
+pull links only on a mechanical fact, and a link judged on content is proposed.
+
+Each linked ticket carries its references back: the board slug and, once the item is
+`in-progress` or later (or `blocked`) with `links.branch` or `links.pr`, the review URL or
+branch - never a worktree path or host. They live in the board text fields a GitHub tracker
+names under `backlink` (`slugField`, `branchField`), else as `DCL: <slug>` and
+`DCL branch: <ref>` lines at the end of the ticket description. Both follow board state, so
+the status push keeps them current. A description write replaces the whole body, and GitHub
+cannot make it conditional: an edit a collaborator saves in the same moment is overwritten
+(it stays in the issue's edit history). Configure both backlink fields to avoid that.
+
+### Sync ("sync the tracker")
+
+When the owner asks to sync a tracker (or all of them), run the phases in order, each
+first as a dry run, from the data repo:
+
+1. **Status push** - `bun run tracker-sync status --apply`, as above.
+2. **Pull** - `bun run tracker-sync pull` lists every open ticket on the board that no item
+   in any folder names and whose backlink names no item. A ticket whose URL an item quotes,
+   or whose backlink names an item, is linked to it mechanically; every other one is filed
+   as a `supervised` `idea` carrying the ticket's description and comments verbatim. Before
+   `--apply`, look for existing items that plausibly cover each ticket to be filed (the
+   output flags items that mention the bare number; also judge titles and content). A
+   content match is never linked on judgment: attended, put it to the owner in the
+   interview below and, on a yes, `bun run tracker-sync link <item-slug> <ticket-id>`
+   before applying; unattended, let the pull file the idea and add one outbox `proposal`
+   naming the candidate item. Then `bun run tracker-sync pull --apply` and `bun run sync`.
+   The pull's only tracker write is the backlink, which is what stops a re-pull.
+3. **Reconcile** - `bun run tracker-sync reconcile` lists every ticket whose status,
+   open/closed state or presence disagrees with its items in a way the forward-only push
+   will not settle, each with a recommendation for both sides. Attended, interview the
+   owner one ticket at a time (loops-queues interview format: the ticket and item side by
+   side, then the recommendation) and apply each answer in the same run: board changes on
+   the item, tracker changes with `bun run tracker-sync set <tracker>/<id> --status <name>`
+   (or `--close` / `--reopen`) `--apply`. The owner's answer is the direct prompt that
+   permits moving a ticket against the push. Unattended runs never interview: they run
+   `bun run tracker-sync reconcile --record`, which writes each mismatch the status push
+   does not already note as a dated line on its items (idempotent, no outbox entry, no
+   tracker change), and the next attended sync collects those lines.
+
+**Agents without tracker access** advance work-streams on the board as usual and record
+nothing extra: every tracker write is derived from board state, and the next sync by any
+host with access applies the backlog in bulk. There is no separate queue of tracker
+updates. A host with no credential for a tracker (token file absent, `gh` not
+authenticated) skips it quietly in every phase; only a credential that is present and
+fails files the outbox entry.
 
 ## Project registry
 
@@ -363,10 +411,19 @@ Run from the data-repo root:
   vs. blocked by an unsatisfied or missing target. Board-state only; confirm an
   in-flight (`implemented`) target's real integration status with
   `bun run check-integration-status`.
-- `bun run tracker-sync status [--apply]` - project board state onto the tickets its
-  items name: forward-only transitions, plus the board slug recorded in each ticket.
-  Prints a plan and writes nothing without `--apply`. Run it after a state change in a
-  tracker project.
+- `bun run tracker-sync status [--tracker <name>] [--apply]` - project board state onto
+  the tickets its items name: forward-only transitions, plus the slug and branch
+  references on each ticket. Prints a plan and writes nothing without `--apply`. Run it
+  after a state change in a tracker project.
+- `bun run tracker-sync pull [--tracker <name>] [--project <project>] [--apply]` - file
+  every open, unlinked ticket as an `idea` item (External trackers → Sync).
+- `bun run tracker-sync reconcile [--tracker <name>] [--record]` - list mismatches
+  between linked tickets and their items, with recommendations; `--record` notes each on
+  its items instead (unattended runs).
+- `bun run tracker-sync set <tracker>/<id> (--status <name> | --close | --reopen)
+  [--apply]` - one ticket change, only on the owner's direct answer.
+- `bun run tracker-sync link <item-slug> <ticket-id>` - add a ticket to an item's
+  `tickets` (board side only; the next status push writes the backlink).
 - `bun run tickets <item-slug>` - the commit reference for that item's tickets: the
   subject suffix and, where the tracker needs one, the body line that links the commit
   without moving the ticket. Copy it rather than composing it.
