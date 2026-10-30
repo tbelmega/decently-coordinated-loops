@@ -408,7 +408,7 @@ never make more rounds the only option:
 | --- | --- |
 | Authorize extra rounds | Until authorized: `blocked` / `next-actor: owner` / `awaiting: approve`. Log approval, then resume. |
 | Decide an outstanding finding | Record `deferred-to-human`; hand over `REVIEW: BLOCKED`, with `blocked` / `owner` / `awaiting: decide`. |
-| Waive review and land as-is | Requires explicit owner opt-out. Once given: `implemented` / `owner` / `awaiting: review-merge`, `REVIEW: WAIVED`. |
+| Waive review and merge as-is | Requires explicit owner opt-out. Once given: `implemented` / `owner` / `awaiting: review-merge`, `REVIEW: WAIVED`. |
 | Drop the change | `dropped`. |
 | Take no action | Keep the accurate blocked state; nothing lands. |
 

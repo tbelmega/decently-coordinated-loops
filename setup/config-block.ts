@@ -37,128 +37,134 @@ export interface BlockParams {
   dclHome: string;
 }
 
+/** The operating guide's own section tag, and the first receipt line of a guide whose
+ * receipt the board's additions extend. */
+export const GUIDE_SECTION_OPEN = "<DECENTLY-CAPABLE-POWERS>";
+const GUIDE_RECEIPT_LINE = "<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE -";
+
+/** Whether a config file already holds an operating guide that defines the receipt the
+ * board's additions extend: its section tag as an entire trimmed line, like every other
+ * tag here, and that receipt's first line. An older guide with a different receipt gets
+ * the full block, so the file is never left without a receipt the additions fit. */
+export function guideDefinesReceipt(content: string): boolean {
+  return content.split("\n").some((line) => line.trim() === GUIDE_SECTION_OPEN) &&
+    content.includes(GUIDE_RECEIPT_LINE);
+}
+
+/** `full` defines work-streams and the whole receipt; `additions` assumes the operating
+ * guide in the same file defines both and states only what the board adds. */
+export type ReceiptForm = "full" | "additions";
+
 /** The generic awareness body, rendered with this instance's owner and paths.
  * Owner-specific policy does NOT belong here - it lives in the data repo's
  * HOUSE-RULES.md, which the body points agents at. Each harness wraps it: a markered
  * block for CLAUDE.md/AGENTS.md (renderConfigBlock), or a standalone .mdc rule for
  * Cursor (renderCursorRule). */
-function renderBody({ owner, dataRepo, dclHome }: BlockParams): string {
-  return `## Work-stream board (decently-coordinated-loops)
-The board tracks work-streams in registered projects: work that changes a project's
-behavior (for users, calling code, tests and CI, or agents reading its instructions) or
-whose state must outlive the conversation (a spec, a decision from ${owner}, a delivery,
-a later session); when unsure, it is one. Everything else is an errand (answering,
-locating code, saving a memory, a throwaway script, or a change that alters no behavior:
-comments, formatting, ignore files, metadata). Errands skip the board, the review and the
-receipt; one that changed files ends with the line \`Errand: <what changed>; no behavior
-change.\` A commit takes the class of what it commits; an errand found to change behavior
-becomes a work-stream. Before engaging the board in any repository, run:
+function renderBody({ owner, dataRepo, dclHome }: BlockParams, receipt: ReceiptForm): string {
+  const itemAdditions = `For a registered item, the first status also names the item's board state in
+parentheses:
 
-    bun "${dclHome}/tools/cli-registered.ts" --data-repo "${dataRepo}"
+- \`MERGED (MERGED|TESTED|DELIVERED|ACCEPTED)\`
+- \`READY TO MERGE (IMPLEMENTED_AND_REVIEW_PASSED|IMPLEMENTED_WITHOUT_REVIEW)\`, the
+  second whenever the review has not passed (requested, waived, or not configured)
+- \`INCOMPLETE (IN-PROGRESS|BLOCKED|IDEA|SPEC-FILED|DROPPED)\`
 
-If it prints a name (exit 0), this checkout is registered: follow the loops-board
-skill, read \`${dataRepo}/BOARD.md\` before starting a work-stream, and when its state
-or next step changes, update its item file and index row and commit there. If it exits
-non-zero, this repo is unregistered - do not read or update the board here, unless an
-obligation in \`${dataRepo}/HOUSE-RULES.md\` applies regardless of the current directory
-(those are gate-exempt). When a session gives birth to a new work-stream, register it on
-the board and add its repo to \`${dataRepo}/PROJECTS.md\` + \`loops.json\` so it passes
-the gate. ${owner} dumps raw thoughts into \`${dataRepo}/INBOX.md\` - when
-asked to "process the inbox" (or during unattended pickup), turn entries into board
-items per the loops-queues skill. Questions, proposals, and approvals that only
-${owner} can resolve go into \`${dataRepo}/OUTBOX.md\` per the same skill; "process
-the outbox" and "interview me" are handled there too. When ${owner} asks to "sync the
-tracker", follow loops-board → External trackers → Sync. When ${owner} says "pick up
-the next available piece of work" (or similar) without naming an item, follow the
-loops-pickup skill. When ${owner} asks you to set yourself up for dispatch duty (or
-to inspect or stop a running dispatcher), follow the loops-dispatch skill.
-Read \`${dataRepo}/HOUSE-RULES.md\` before any unattended work -
-it holds this instance's local policy. If this harness can't load skills by name,
-read them from \`${dclHome}/skills/*/SKILL.md\`.
+Also:
 
-## Completion review
-At the final implementation handoff of a registered work-stream item - attended or
-unattended, after all of its internal tasks and commits are complete and final
-verification passes - resolve \`${dataRepo}/HOUSE-RULES.md → Review mechanism\` and
-initiate it without waiting for an explicit request. If \`loops.json → review.reviewer\`
-is set, load loops-review and drive the bundled reviewer; a clean review of the current
-HEAD is its passing terminal signal.
+- \`REVIEW: PASSED\` needs current evidence: with the bundled reviewer, its \`status\`
+  command run immediately before the receipt, printing \`REVIEW_STATUS=passed\`. When it
+  reports \`carried_from\`, write \`REVIEW: PASSED (carried over from <sha>; <the delta in
+  plain words>; not re-reviewed)\`.
+- \`NEXT STEP/OPTIONS\` names who acts next.
+- Before printing the receipt, leave the item true even if ${owner} never replies: state,
+  next-actor, awaiting, next-step and \`links.base-sha\`/\`head-sha\` current, committed and
+  pushed, presuming no approval you have not received.`;
 
-**End** that final item handoff with this receipt - the last lines you print, below the
-prose summary, so the status is visible without scrolling. Use only these states;
-after the dash, give the sentence described below, then concise command, HEAD, URL,
-or ledger evidence:
+  const receiptText = receipt === "additions"
+    ? `End that handoff with the operating guide's completion receipt.
 
-    <WORK TYPE>: COMPLETE|INCOMPLETE - <one sentence: what this work was and what for>
+${itemAdditions}`
+    : `End that handoff with this receipt as the last lines you print, as plain paragraphs
+separated by blank lines, never in a code block (a Markdown renderer joins adjacent
+lines, and a code block does not wrap):
+
+    <WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>) - <one sentence: what this work was and what for>
 
     VERIFICATION: PASSED|FAILED|NOT RUN - <one sentence: what was checked>
 
     REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN - <reviewer, rounds>
 
-    NEXT STEP/OPTIONS: <the next action, or the alternatives when it is the owner's call>
+    NEXT STEP/OPTIONS: <who acts next and what; when it is ${owner}'s call, every real alternative, doing nothing included>
 
-Print the four lines as plain paragraphs separated by blank lines, never inside a
-code block: a Markdown renderer joins adjacent lines into one paragraph, and a code
-block does not wrap the sentences.
+The values are closed: write only those listed, because ${owner} and tools read them. A
+step you skipped or could not run, for any reason, is \`NOT RUN\` with the reason; never
+coin another value. \`MERGED\` means in the project's integration branch,
+\`READY TO MERGE\` finished and verified but not merged yet, \`INCOMPLETE\` anything else.
+\`<WORK TYPE>\` is IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS, or TASK when nothing
+narrower fits. Write each sentence for a reader switching in cold (plain words, no slugs
+or finding IDs), then brief evidence: command, HEAD, URL, or ledger. \`WAIVED\` needs
+${owner}'s explicit opt-out; \`REQUESTED\` means a person or asynchronous tool has the
+review and has not finished; a \`BLOCKED\` line also states the risk of merging now:
+what is unreviewed, what covers it anyway, your confidence and why, and the impact if
+wrong. Say "merge", never "land", to ${owner}.
 
-\`<WORK TYPE>\` names the kind of work actually done, as specifically as fits:
-IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS; TASK only when nothing narrower fits.
-The sentence after its status is for an owner who has just switched in from another
-thread and remembers nothing of this one: say in plain words what the work was and
-what it was for, without item slugs, finding IDs, or other references they would
-have to look up. The \`VERIFICATION\` sentence says what the check was (e.g. "typecheck
-and unit tests").
+${itemAdditions}`;
 
-\`REQUESTED\` means an asynchronous tool or human has the review but has not completed
-it; \`WAIVED\` requires the owner's explicit opt-out. Do not claim the overall item
-complete when its required review has not passed. If the bundled reviewer is active,
-run its \`status\` command immediately before the receipt; only its
-\`REVIEW_STATUS=passed\` result supports \`REVIEW: PASSED\`. A HEAD that moved past a
-passed review only by a rebase or a non-behavioral commit is carried over per
-loops-review, not reported as \`BLOCKED\`; when \`status\` reports \`carried_from\`, write
-\`REVIEW: PASSED (carried over from <sha>; <the delta in plain words>; not re-reviewed)\`.
-When \`REVIEW\` is \`BLOCKED\`, its line also states the risk of landing now: what is
-unreviewed, what covers it anyway (e.g. green tests), how confident you are in it and
-why, and the impact if it is wrong.
+  const definition = receipt === "additions"
+    ? `Work-streams and errands are as the operating guide defines them; errands also skip
+the board.`
+    : `A **work-stream** is work that changes a project's behavior (for users, calling code, tests
+and CI, or agents reading its instructions) or whose state must outlive the conversation (a
+spec, a decision from ${owner}, a delivery, a later session); when unsure, it is one.
+Anything else is an **errand**: it skips the board, the review and the receipt, and if it
+changed files it ends with the line \`Errand: <what changed>; no behavior change.\` A commit
+takes the class of what it commits, and an errand found to change behavior becomes a
+work-stream.`;
 
-\`NEXT STEP/OPTIONS\` is mandatory and names who acts next. When the item is cleanly
-handed over, one line is enough (e.g. the owner lands the recorded range).
+  return `## Work-stream board (decently-coordinated-loops)
+${definition}
 
-A failed or incomplete review attempt is yours to recover from, not the owner's: fix
-the cause and run the review again, leaving the item where it is - the attempt is
-recorded separately as the pending logical round with an alphabetic suffix, such as
-\`1-a\`, and costs no round. When a changed patch series supersedes the review base,
-the active review epoch starts again at round 1; prior epochs remain append-only audit
-history and do not consume the new epoch's configured round cap. A stale review is not
-free: a fresh round consumes one, and \`start\` refuses a same-base rerun when the last round was clean.
-Escalate only a round cap, an outstanding \`deferred-to-human\` finding, or a
-suspected review-mechanism defect (loops-review), and for a cap or a deferred finding
-enumerate every real exit with the board transition it requires:
+Before touching the board from any repository, run:
 
-- authorize rounds past the cap (\`--max-rounds\`, logged on the item) - until the
-  owner rules, the item sits \`blocked\` / \`next-actor: owner\` / \`awaiting: approve\`
-- disposition the outstanding finding \`deferred-to-human\` and hand over
-  \`REVIEW: BLOCKED\` - \`blocked\` / \`next-actor: owner\` / \`awaiting: decide\`
-- land as-is under the owner's explicit \`WAIVED\` opt-out - only the owner can give
-  it; once given the item is \`implemented\` / \`next-actor: owner\` /
-  \`awaiting: review-merge\`
-- drop the change - \`dropped\`
+    bun "${dclHome}/tools/cli-registered.ts" --data-repo "${dataRepo}"
 
-Never make "approve more rounds" the only option the owner can see. Before offering
-these exits, give the owner the loops-review cap decision brief: your recommendation,
-each finding still unresolved or fixed but not re-reviewed, and the remaining risk.
+Exit 0 (prints a name): this checkout is registered. Load loops-board, read
+\`${dataRepo}/BOARD.md\` before starting a work-stream, and whenever its state or next step
+changes, update its item file and index row and commit in the data repo. Non-zero: do not
+read or write the board from here, except for obligations \`${dataRepo}/HOUSE-RULES.md\`
+declares gate-exempt. When a work-stream starts in an unregistered repository, whatever its
+origin (a new project, a fork you will change, a legacy project you pick up, or a proof of
+concept that has become real work), offer ${owner} to register it, and say what it gains:
+a board item, review and pickup. Register it (\`PROJECTS.md\` + \`loops.json\`) only on
+${owner}'s yes. A repository that only hosts errands gets no offer.
 
-**Before printing the receipt, leave the item in a state that is still accurate if the
-owner never replies** - state, next-actor, awaiting, next-step, and the recorded
-\`base-sha\`/\`head-sha\` all true as of that moment, committed and pushed. Never park an
-item in a state that presumes an approval you have not received. The owner must be able
-to close the conversation at that point without leaving the board stale.`;
+Phrases from ${owner} and the skill each one loads: "process the inbox", "process the
+outbox", "interview me" → loops-queues; "sync the tracker" → loops-board; "pick up the
+next available piece of work", or any unattended work → loops-pickup; dispatch duty →
+loops-dispatch. Questions only ${owner} can answer go to \`${dataRepo}/OUTBOX.md\` per
+loops-queues. If this harness cannot load skills by name, read
+\`${dclHome}/skills/<name>/SKILL.md\`.
+
+## Completion review
+At the final handoff of a registered work-stream item, attended or unattended, once final
+verification passes: start the review mechanism named in \`${dataRepo}/HOUSE-RULES.md →
+Review mechanism\` without waiting to be asked (if \`loops.json → review.reviewer\` is set,
+that is loops-review). A failed review attempt is yours to fix and rerun. Escalate to
+${owner} only a round cap, a finding deferred to them, or a suspected review-mechanism
+defect, per loops-review, and never with "more rounds" as the only option offered.
+
+${receiptText}
+
+\`${dataRepo}/HOUSE-RULES.md\` beats the DCL skills where they differ. Where wording and
+${owner}'s evident intent diverge, follow the intent and say so, except for the closed
+receipt values and the registration check above, which never bend.`;
 }
 
 /** The section DCL upserts inside a shared config file's <GENERATED> wrapper
- * (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md). */
-export function renderConfigBlock(params: BlockParams): string {
-  return `${SECTION_OPEN}\n${PROVENANCE}\n${renderBody(params)}\n${SECTION_CLOSE}\n`;
+ * (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md). Pass `additions` when that file already holds
+ * the operating guide, so the receipt is defined once per file. */
+export function renderConfigBlock(params: BlockParams, receipt: ReceiptForm = "full"): string {
+  return `${SECTION_OPEN}\n${PROVENANCE}\n${renderBody(params, receipt)}\n${SECTION_CLOSE}\n`;
 }
 
 /** Cursor reads global rules as standalone `.mdc` files (YAML frontmatter + body) under
@@ -170,7 +176,7 @@ description: Work-stream board participation and pickup for decently-coordinated
 alwaysApply: true
 ---
 
-${renderBody(params)}
+${renderBody(params, "full")}
 `;
 }
 
@@ -182,7 +188,7 @@ export function renderKiroSteering(params: BlockParams): string {
 inclusion: always
 ---
 
-${renderBody(params)}
+${renderBody(params, "full")}
 `;
 }
 

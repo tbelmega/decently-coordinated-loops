@@ -22,6 +22,7 @@ import {
   LEGACY_END_MARK,
   LEGACY_START_MARK,
   detectConfigTargets,
+  guideDefinesReceipt,
   renderConfigBlock,
   renderCursorRule,
   renderKiroSteering,
@@ -434,10 +435,9 @@ describe("seed: bun run setup (reviewer activation after the first seed)", () =>
 });
 
 describe("generated receipt contract", () => {
-  // Both wrappers emit the same body, so assert the policy once per wrapper. Without
-  // this, deleting the fourth receipt line or the owner-no-reply rule from the
-  // template would leave the suite green while every seeded or refreshed harness
-  // config silently lost it.
+  // Every wrapper emits the same body, so assert the policy once per wrapper. Without
+  // this, deleting a receipt line or the owner-no-reply rule from the template would
+  // leave the suite green while every seeded or refreshed harness config lost it.
   const params = { owner: "casey", dataRepo: "/tmp/board", dclHome: "/tmp/dcl" };
 
   // Assert against whitespace-collapsed text: the clauses are wrapped for prose width,
@@ -449,10 +449,13 @@ describe("generated receipt contract", () => {
     ["cursor rule", renderCursorRule(params)],
     ["kiro steering", renderKiroSteering(params)],
   ];
+  const additions = renderConfigBlock(params, "additions");
+  // What a registered item adds to the receipt holds in both forms.
+  const allForms: ReadonlyArray<readonly [string, string]> = [...wrappers, ["additions block", additions]];
 
   test.each(wrappers)("%s states the four receipt lines in order", (_name, rendered) => {
     const positions = [
-      rendered.indexOf("<WORK TYPE>: COMPLETE|INCOMPLETE"),
+      rendered.indexOf("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)"),
       rendered.indexOf("VERIFICATION: PASSED|FAILED|NOT RUN"),
       rendered.indexOf("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN"),
       rendered.indexOf("NEXT STEP/OPTIONS:"),
@@ -466,12 +469,22 @@ describe("generated receipt contract", () => {
   // paragraph; the template itself must model the blank-line separation it requires.
   test.each(wrappers)("%s separates the receipt lines with blank lines", (_name, rendered) => {
     expect(rendered).toMatch(
-      /<WORK TYPE>: COMPLETE\|INCOMPLETE[^\n]*\n\n {4}VERIFICATION: [^\n]*\n\n {4}REVIEW: [^\n]*\n\n {4}NEXT STEP\/OPTIONS:/,
+      /<WORK TYPE>: MERGED\|READY TO MERGE\|INCOMPLETE[^\n]*\n\n {4}VERIFICATION: [^\n]*\n\n {4}REVIEW: [^\n]*\n\n {4}NEXT STEP\/OPTIONS:/,
     );
     expect(flatten(rendered)).toContain(
-      "Print the four lines as plain paragraphs separated by blank lines, never inside a " +
-        "code block:",
+      "as plain paragraphs separated by blank lines, never in a code block",
     );
+  });
+
+  test.each(wrappers)("%s closes the values and defines the merge states", (_name, rendered) => {
+    const flat = flatten(rendered);
+
+    expect(flat).toContain("The values are closed: write only those listed");
+    expect(flat).toContain(
+      "`MERGED` means in the project's integration branch, `READY TO MERGE` finished and " +
+        "verified but not merged yet, `INCOMPLETE` anything else.",
+    );
+    expect(flat).toContain('Say "merge", never "land", to casey.');
   });
 
   test.each(wrappers)(
@@ -480,95 +493,98 @@ describe("generated receipt contract", () => {
       const flat = flatten(rendered);
 
       expect(flat).toContain(
-        "`<WORK TYPE>` names the kind of work actually done, as specifically as fits: " +
-          "IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS; TASK only when nothing narrower fits.",
+        "`<WORK TYPE>` is IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS, or TASK when " +
+          "nothing narrower fits.",
       );
+      expect(flat).toContain("Write each sentence for a reader switching in cold");
       expect(flat).toContain(
-        "The sentence after its status is for an owner who has just switched in from another " +
-          "thread and remembers nothing of this one:",
-      );
-      expect(flat).toContain(
-        "The `VERIFICATION` sentence says what the check was (e.g. \"typecheck and unit tests\").",
-      );
-      expect(flat).toContain(
-        "When `REVIEW` is `BLOCKED`, its line also states the risk of landing now: what is " +
-          "unreviewed, what covers it anyway (e.g. green tests), how confident you are in it " +
-          "and why, and the impact if it is wrong.",
+        "a `BLOCKED` line also states the risk of merging now: what is unreviewed, what " +
+          "covers it anyway, your confidence and why, and the impact if wrong.",
       );
     },
   );
 
-  test.each(wrappers)("%s puts the receipt at the end of the handoff", (_name, rendered) => {
-    expect(flatten(rendered)).toContain(
-      "**End** that final item handoff with this receipt - the last lines you print, " +
-        "below the prose summary, so the status is visible without scrolling.",
+  test.each(allForms)("%s names the item's board state after the first status", (_name, rendered) => {
+    for (const value of [
+      "`MERGED (MERGED|TESTED|DELIVERED|ACCEPTED)`",
+      "`READY TO MERGE (IMPLEMENTED_AND_REVIEW_PASSED|IMPLEMENTED_WITHOUT_REVIEW)`",
+      "`INCOMPLETE (IN-PROGRESS|BLOCKED|IDEA|SPEC-FILED|DROPPED)`",
+    ]) {
+      expect(rendered).toContain(value);
+    }
+  });
+
+  test.each(allForms)("%s keeps review recovery and escalation with the agent", (_name, rendered) => {
+    const flat = flatten(rendered);
+
+    expect(flat).toContain("A failed review attempt is yours to fix and rerun.");
+    expect(flat).toContain(
+      "Escalate to casey only a round cap, a finding deferred to them, or a suspected " +
+        'review-mechanism defect, per loops-review, and never with "more rounds" as the only ' +
+        "option offered.",
     );
   });
 
-  test.each(wrappers)(
-    "%s gives every capped-review exit its board transition",
-    (_name, rendered) => {
-      const flat = flatten(rendered);
-
-      expect(flat).toContain(
-        "authorize rounds past the cap (`--max-rounds`, logged on the item) - until the " +
-          "owner rules, the item sits `blocked` / `next-actor: owner` / `awaiting: approve`",
-      );
-      expect(flat).toContain(
-        "disposition the outstanding finding `deferred-to-human` and hand over " +
-          "`REVIEW: BLOCKED` - `blocked` / `next-actor: owner` / `awaiting: decide`",
-      );
-      expect(flat).toContain(
-        "land as-is under the owner's explicit `WAIVED` opt-out - only the owner can give " +
-          "it; once given the item is `implemented` / `next-actor: owner` / `awaiting: review-merge`",
-      );
-      expect(flat).toContain("drop the change - `dropped`");
-      expect(flat).toContain(
-        'Never make "approve more rounds" the only option the owner can see.',
-      );
-      expect(flat).toContain(
-        "Before offering these exits, give the owner the loops-review cap decision brief: " +
-          "your recommendation, each finding still unresolved or fixed but not re-reviewed, " +
-          "and the remaining risk.",
-      );
-    },
-  );
-
-  test.each(wrappers)(
-    "%s keeps reviewer failure and staleness out of the owner's hands",
-    (_name, rendered) => {
-      const flat = flatten(rendered);
-
-      expect(flat).toContain(
-        "A failed or incomplete review attempt is yours to recover from, not the owner's: " +
-          "fix the cause and run the review again, leaving the item where it is - the attempt " +
-          "is recorded separately as the pending logical round with an alphabetic suffix, such " +
-          "as `1-a`, and costs no round.",
-      );
-      expect(flat).toContain(
-        "When a changed patch series supersedes the review base, the active review epoch starts " +
-          "again at round 1; prior epochs remain append-only audit history and do not consume the " +
-          "new epoch's configured round cap.",
-      );
-    },
-  );
-
-  test.each(wrappers)("%s reports a carried-over review as passed", (_name, rendered) => {
+  test.each(allForms)("%s reports a carried-over review as passed", (_name, rendered) => {
     expect(flatten(rendered)).toContain(
-      "A HEAD that moved past a passed review only by a rebase or a non-behavioral commit is " +
-        "carried over per loops-review, not reported as `BLOCKED`; when `status` reports " +
-        "`carried_from`, write `REVIEW: PASSED (carried over from <sha>; <the delta in plain " +
-        "words>; not re-reviewed)`.",
+      "When it reports `carried_from`, write `REVIEW: PASSED (carried over from <sha>; <the " +
+        "delta in plain words>; not re-reviewed)`.",
     );
   });
 
-  test.each(wrappers)("%s keeps the owner-no-reply rule intact", (_name, rendered) => {
+  test.each(allForms)("%s keeps the owner-no-reply rule intact", (_name, rendered) => {
     expect(flatten(rendered)).toContain(
-      "**Before printing the receipt, leave the item in a state that is still accurate if " +
-        "the owner never replies** - state, next-actor, awaiting, next-step, and the recorded " +
-        "`base-sha`/`head-sha` all true as of that moment, committed and pushed. Never park an " +
-        "item in a state that presumes an approval you have not received. The owner must be " +
-        "able to close the conversation at that point without leaving the board stale.",
+      "Before printing the receipt, leave the item true even if casey never replies: state, " +
+        "next-actor, awaiting, next-step and `links.base-sha`/`head-sha` current, committed and " +
+        "pushed, presuming no approval you have not received.",
+    );
+  });
+
+  test.each(allForms)("%s offers registration instead of registering unasked", (_name, rendered) => {
+    const flat = flatten(rendered);
+
+    expect(flat).toContain(
+      "When a work-stream starts in an unregistered repository, whatever its origin (a new " +
+        "project, a fork you will change, a legacy project you pick up, or a proof of concept " +
+        "that has become real work), offer casey to register it",
+    );
+    expect(flat).toContain("only on casey's yes. A repository that only hosts errands gets no offer.");
+  });
+
+  test.each(allForms)("%s lets intent beat wording except where it must not", (_name, rendered) => {
+    expect(flatten(rendered)).toContain(
+      "Where wording and casey's evident intent diverge, follow the intent and say so, except " +
+        "for the closed receipt values and the registration check above, which never bend.",
+    );
+  });
+
+  // The operating guide in the same file already defines work-streams and the receipt;
+  // the additions form must not restate either, or the file carries two definitions to
+  // drift apart.
+  test("the additions block defers the receipt and the definitions to the operating guide", () => {
+    const flat = flatten(additions);
+
+    expect(flat).toContain("End that handoff with the operating guide's completion receipt.");
+    expect(flat).toContain("Work-streams and errands are as the operating guide defines them");
+    expect(additions).not.toContain("<WORK TYPE>:");
+    expect(additions).not.toContain("VERIFICATION: PASSED|FAILED|NOT RUN");
+    expect(additions).not.toContain("A **work-stream** is work that changes");
+  });
+
+  test("only a guide that defines the merge-state receipt gets the additions form", () => {
+    const receipt = "    <WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE - <one sentence>\n";
+    expect(guideDefinesReceipt(`# Rules\n<GENERATED>\n  <DECENTLY-CAPABLE-POWERS>\n${receipt}`)).toBe(true);
+    // An older guide whose receipt the additions do not extend.
+    expect(guideDefinesReceipt(
+      "<DECENTLY-CAPABLE-POWERS>\n    <WORK TYPE>: COMPLETE|INCOMPLETE - <one sentence>\n",
+    )).toBe(false);
+    expect(guideDefinesReceipt(`# Rules\nmentions <DECENTLY-CAPABLE-POWERS> in prose\n${receipt}`)).toBe(false);
+    expect(guideDefinesReceipt("")).toBe(false);
+  });
+
+  test("an implemented item whose review is still pending has a truthful first status", () => {
+    expect(flatten(additions)).toContain(
+      "the second whenever the review has not passed (requested, waived, or not configured)",
     );
   });
 });
@@ -586,11 +602,8 @@ describe("config block", () => {
     expect(claudeMd).toContain(`${SECTION_CLOSE}\n${GENERATED_CLOSE}\n`);
     expect(claudeMd).toContain(dir);
     expect(claudeMd).toContain("casey");
-    expect(claudeMd).toContain("<WORK TYPE>: COMPLETE|INCOMPLETE");
+    expect(claudeMd).toContain("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)");
     expect(claudeMd).toContain("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN");
-    expect(claudeMd).toContain(
-      "after all of its internal tasks and commits are complete and final\nverification passes",
-    );
     // Re-running replaces the block instead of duplicating it.
     const rerun = run(["run", SEED, dir, "--join", "--owner", "casey"], { home });
     expect(rerun.status).toBe(0);
@@ -599,6 +612,26 @@ describe("config block", () => {
     expect(after.split(GENERATED_OPEN).length).toBe(2);
     // No .codex dir in this fake home - must not have been created.
     expect(existsSync(join(home, ".codex"))).toBe(false);
+  });
+
+  test("a config file that holds the operating guide gets only the board's receipt additions", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-home-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(
+      join(home, ".claude", "CLAUDE.md"),
+      `${GENERATED_OPEN}\n<DECENTLY-CAPABLE-POWERS>\n    <WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE - guide\n</DECENTLY-CAPABLE-POWERS>\n${GENERATED_CLOSE}\n`,
+    );
+    mkdirSync(join(home, ".claude-solo"), { recursive: true });
+    writeFileSync(join(home, ".claude-solo", "CLAUDE.md"), "# Solo rules\n");
+
+    seedNewRepo([], home);
+
+    const withGuide = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
+    expect(withGuide).toContain("End that handoff with the operating guide's completion receipt.");
+    expect(withGuide).not.toContain("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)");
+    expect(withGuide).toContain("INCOMPLETE - guide\n</DECENTLY-CAPABLE-POWERS>");
+    const solo = readFileSync(join(home, ".claude-solo", "CLAUDE.md"), "utf8");
+    expect(solo).toContain("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)");
   });
 
   test("seeds every alternate Claude profile, migrating legacy blocks", () => {

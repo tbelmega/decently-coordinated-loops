@@ -26,6 +26,7 @@ import { createInterface } from "node:readline/promises";
 import { allReviewers, isReviewerId, reviewerBin, reviewerIds } from "../tools/review/reviewers.ts";
 import {
   detectConfigTargets,
+  guideDefinesReceipt,
   renderConfigBlock,
   renderCursorRule,
   renderKiroReviewerAgent,
@@ -342,7 +343,9 @@ function installConfigBlock(opts: Options, root: string): void {
       const action = writeOwnedFile(target.path, renderKiroReviewerAgent());
       console.log(`  kiro reviewer agent ${action}: ${target.path}`);
     } else {
-      const outcome = upsertConfigBlock(target.path, block);
+      const current = existsSync(target.path) ? readFileSync(target.path, "utf8") : "";
+      const section = guideDefinesReceipt(current) ? renderConfigBlock(params, "additions") : block;
+      const outcome = upsertConfigBlock(target.path, section);
       if (outcome.action === "skipped") {
         console.log(`  ! config block skipped: ${target.path} - ${outcome.reason}; fix the tags and re-run`);
       } else {
