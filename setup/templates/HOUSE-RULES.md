@@ -4,7 +4,9 @@ Cross-project local policy for this instance: the owner-specific half of every D
 skill's extension points. Skills defer to the sections below wherever behavior is
 owner- or environment-specific; per-project specifics belong in
 [PROJECTS.md](PROJECTS.md) instead. Keep entries short and imperative; agents read
-this file before any unattended work.
+this file before starting any work-stream in a registered repository, attended or
+unattended. Move situational procedures to runbooks this file names, and dated rulings
+to a history file, so it stays short enough to read every time.
 
 ## Owner
 

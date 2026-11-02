@@ -12,9 +12,9 @@ on one), never with a question the owner has to answer first.
 Board and queue mechanics follow loops-board and loops-queues. Local policy (roster,
 review mechanism, merge policy, extra guardrails, dispatch tuning) lives in the data repo's
 `HOUSE-RULES.md`; per-project gates and paths in `PROJECTS.md`/`loops.json`. **Read
-`HOUSE-RULES.md` before any unattended work.** Where it and this skill differ, house rules
-win. Situational procedures live in `references/` next to this file; each is named below
-at the event that calls for it.
+`HOUSE-RULES.md` before any work-stream, unattended work included.** Where it and this
+skill differ, house rules win. Situational procedures live in `references/` next to this
+file; each is named below at the event that calls for it.
 
 ## 0. Prior obligations before new work
 

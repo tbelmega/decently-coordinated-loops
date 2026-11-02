@@ -543,6 +543,12 @@ describe("generated receipt contract", () => {
     );
   });
 
+  test.each(allForms)("%s has a registered work-stream read the house rules before it starts", (_name, rendered) => {
+    expect(flatten(rendered)).toMatch(
+      /this checkout is registered\. Load loops-board, read `[^`]*\/HOUSE-RULES\.md` and `[^`]*\/BOARD\.md` before starting a work-stream,/,
+    );
+  });
+
   test.each(allForms)("%s offers registration instead of registering unasked", (_name, rendered) => {
     const flat = flatten(rendered);
 

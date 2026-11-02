@@ -129,8 +129,9 @@ Before touching the board from any repository, run:
     bun "${dclHome}/tools/cli-registered.ts" --data-repo "${dataRepo}"
 
 Exit 0 (prints a name): this checkout is registered. Load loops-board, read
-\`${dataRepo}/BOARD.md\` before starting a work-stream, and whenever its state or next step
-changes, update its item file and index row and commit in the data repo. Non-zero: do not
+\`${dataRepo}/HOUSE-RULES.md\` and \`${dataRepo}/BOARD.md\` before starting a work-stream, and
+whenever its state or next step changes, update its item file and index row and commit in the
+data repo. Non-zero: do not
 read or write the board from here, except for obligations \`${dataRepo}/HOUSE-RULES.md\`
 declares gate-exempt. When a work-stream starts in an unregistered repository, whatever its
 origin (a new project, a fork you will change, a legacy project you pick up, or a proof of
