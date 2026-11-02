@@ -47,7 +47,10 @@ value until the base changes.
 2. **Start a round.** It reviews `<base-sha>..HEAD` into an item-scoped ledger under
    `.reviews/`.
 3. **Decide each finding.** Read the Markdown ledger, verify each finding against the code,
-   and record a reasoned decision (below).
+   and record a reasoned decision (below). The reviewer is a strong but fallible peer:
+   default to `accepted`, and record `rejected` only with concrete counter-evidence from the
+   code, tests, or the owner's decisions, never to avoid work; the confirmation round then
+   tests the rejection.
 4. **Remediate.** Implement accepted fixes and documentation obligations, rerun checks,
    commit. **This includes the last authorized round:** the cap limits review rounds, not
    fixes.
