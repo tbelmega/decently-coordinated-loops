@@ -32,7 +32,7 @@ or from a phone via the git host's editor.
   delete, don't ask the same question twice.
 - Never edit anything above the marker line.
 - **Pull the trackers too.** Where `loops.json` declares trackers, inbox processing also
-  runs the pull (loops-board → External trackers → Sync, step 2): new tickets are the
+  runs the pull (loops-board `references/tracker-sync.md` → Sync, step 2): new tickets are the
   tracker's inbox. Unattended, file content matches as an outbox `proposal` rather than
   asking; a host without the tracker's credential skips it quietly.
 

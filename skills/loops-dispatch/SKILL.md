@@ -109,7 +109,7 @@ precision the mechanism doesn't have.
 
 ## 4. Compose the pickup prompt
 
-Start from loops-pickup's suggested dispatch prompt. Every firing must re-derive its
+Start from this prompt. Every firing must re-derive its
 state from the board, so the prompt carries no context from this conversation beyond
 the standing restrictions:
 

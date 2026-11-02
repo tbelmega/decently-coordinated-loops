@@ -61,15 +61,16 @@ this file before any unattended work.
 
 ## Merge policy
 
-- Default: the owner lands agent branches on the integration branch (rebase);
+- Default: the owner merges agent branches into the integration branch (rebase);
   agents never merge or deploy unattended.
 
-<!-- To delegate landing to agents, replace the default with exact conditions. Require
+<!-- To delegate merging to agents, replace the default with exact conditions. Require
      a pre-review rebase + full gate, a clean current-HEAD review, and an exact
      expected-old-SHA compare-and-swap only while integration still equals the
      reviewed base. Require proof that the reviewed base is an ancestor of the
      reviewed head before using the narrowly scoped force-with-lease. If integration
-     moved, require rebase + gate + fresh review. State whether an integration push
+     moved, require rebase + gate + a recorded review carry-over (a fresh review only
+     when a conflict resolution changed reviewed code). State whether an integration push
      may trigger an authorized development deployment; keep release/prod boundaries
      explicit. -->
 

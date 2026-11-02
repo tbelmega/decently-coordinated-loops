@@ -13,7 +13,7 @@ cron, subagents) your harness lacks.
   them periodically rather than assume they persist.
 - **Each firing appends to the same conversation**, so context grows until compaction.
   This is survivable because durable state lives on the board, not in the conversation;
-  each wakeup re-hydrates from the item file (loops-pickup step 5).
+  each wakeup re-hydrates from the item file (`async-review.md` beside this file).
 - **A firing is a complete work cycle, not one preflight action.** It completes the
   whole prior-obligation sweep and then performs substantive eligible work. Queue
   routing, board updates, landed detection, parking, and slot maintenance do not
