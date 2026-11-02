@@ -105,7 +105,7 @@ never make more rounds the only option:
 
 | Owner choice | Item state and next action |
 | --- | --- |
-| Authorize extra rounds | Until authorized: `blocked` / `next-actor: owner` / `awaiting: approve`. Log the approval, then resume with `--max-rounds <n>`. |
+| Authorize extra rounds | Until authorized: `blocked` / `next-actor: owner` / `awaiting: approve`. Log the approval, then resume with `--max-rounds <n> --authorization "<owner ruling>"`. |
 | Decide an outstanding finding | Record `deferred-to-human`; hand over `REVIEW: BLOCKED`, with `blocked` / `owner` / `awaiting: decide`. |
 | Waive review and merge as-is | Needs the owner's explicit opt-out. Once given: `implemented` / `owner` / `awaiting: review-merge`, `REVIEW: WAIVED`. |
 | Drop the change | `dropped`. |

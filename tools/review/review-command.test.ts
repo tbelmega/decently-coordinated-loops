@@ -329,7 +329,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=passed model="codex (default)" epoch=1 rounds=1 total_rounds=1 residual_notes=0 head=${headSha} ledger=${relative(repository, paths.markdownPath)}`,
+      `REVIEW_STATUS=passed model="codex (default)" epoch=1 rounds=1 total_rounds=1 residual_notes=0 head=${headSha} ledger=${relative(repository, paths.markdownPath)}\nREVIEW_LINE=REVIEW: PASSED - codex (default), 1 round`,
     );
   });
 
@@ -359,7 +359,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=passed item="second-item" model="codex (default)" epoch=1 rounds=1 total_rounds=1 residual_notes=0 head=${headSha} ledger=${relative(repository, secondPaths.markdownPath)}`,
+      `REVIEW_STATUS=passed item="second-item" model="codex (default)" epoch=1 rounds=1 total_rounds=1 residual_notes=0 head=${headSha} ledger=${relative(repository, secondPaths.markdownPath)}\nREVIEW_LINE=REVIEW: PASSED - codex (default), 1 round`,
     );
   });
 
@@ -371,7 +371,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=not_run head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="no review ledger for current branch"`,
+      `REVIEW_STATUS=not_run head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="no review ledger for current branch"\nREVIEW_LINE=REVIEW: NOT RUN - no review ledger for current branch`,
     );
   });
 
@@ -394,7 +394,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="review evidence is invalid: review ledger branch is another-branch, expected feature/review-receipt"`,
+      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="review evidence is invalid: review ledger branch is another-branch, expected feature/review-receipt"\nREVIEW_LINE=REVIEW: BLOCKED - review evidence is invalid: review ledger branch is another-branch, expected feature/review-receipt`,
     );
   });
 
@@ -408,7 +408,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="review evidence is invalid: review ledger version must be 1"`,
+      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="review evidence is invalid: review ledger version must be 1"\nREVIEW_LINE=REVIEW: BLOCKED - review evidence is invalid: review ledger version must be 1`,
     );
   });
 
@@ -432,7 +432,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="working tree has uncommitted changes outside .reviews"`,
+      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="working tree has uncommitted changes outside .reviews"\nREVIEW_LINE=REVIEW: BLOCKED - working tree has uncommitted changes outside .reviews`,
     );
   });
 
@@ -457,7 +457,7 @@ describe("cli-review status", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe(
-      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="working tree has uncommitted changes outside .reviews"`,
+      `REVIEW_STATUS=blocked head=${headSha} ledger=${relative(repository, paths.markdownPath)} reason="working tree has uncommitted changes outside .reviews"\nREVIEW_LINE=REVIEW: BLOCKED - working tree has uncommitted changes outside .reviews`,
     );
   });
 });
@@ -3238,7 +3238,7 @@ describe("cli-review taxonomy, floor, and cap wiring (C1/C7)", () => {
     expect(
       runStart(repository, dataRepo, "capped-item", "master", {
         FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({priority: "P2", title: "Nit worth tracking"})]),
-      }, ["--max-rounds", "2"]).status,
+      }, ["--max-rounds", "2", "--authorization", "owner approved a second round"]).status,
     ).toBe(0);
     const ledger = readItemLedger(repository, "capped-item");
     expect(ledger.maxRoundsOverride).toBe(2);
@@ -3247,6 +3247,44 @@ describe("cli-review taxonomy, floor, and cap wiring (C1/C7)", () => {
     // One live round of an authorized two: the cap is not reached, so no cap exit.
     const status = runStatus(repository, "capped-item", repository, dataRepo);
     expect(status.stdout).not.toContain("cap_exit=true");
+  });
+
+  test("--max-rounds above the configured cap refuses without the owner's recorded authorization", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 1, capExit: true});
+    const refused = runStart(repository, dataRepo, "unauthorized-item", "master", {}, ["--max-rounds", "2"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('--max-rounds 2 exceeds the configured cap of 1; pass --authorization "<owner ruling>"');
+    const blank = runStart(repository, dataRepo, "unauthorized-item", "master", {}, ["--max-rounds", "2", "--authorization", "  "]);
+    expect(blank.status).not.toBe(0);
+    expect(blank.stderr).toContain("--authorization");
+    const paths = reviewEvidencePaths(repository, git(repository, ["branch", "--show-current"]), "unauthorized-item");
+    expect(existsSync(paths.jsonPath)).toBe(false);
+  });
+
+  test("--max-rounds within the configured cap needs no authorization", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 3});
+    expect(runStart(repository, dataRepo, "within-cap-item", "master", {}, ["--max-rounds", "3"]).status).toBe(0);
+  });
+
+  test("the owner's round-cap authorization is recorded on the ledger and its evidence", () => {
+    const { repository } = createReviewRepository();
+    const dataRepo = keyedDataRepo({maxRounds: 1});
+    expect(
+      runStart(repository, dataRepo, "authorized-item", "master", {}, [
+        "--max-rounds", "2", "--authorization", "Owner approved one more round in OUTBOX 142",
+      ]).status,
+    ).toBe(0);
+    const ledger = readItemLedger(repository, "authorized-item");
+    expect(ledger.maxRoundsOverride).toBe(2);
+    expect(ledger.maxRoundsAuthorizations).toEqual([
+      {maxRounds: 2, authorization: "Owner approved one more round in OUTBOX 142", recordedAt: expect.any(String)},
+    ]);
+    const paths = reviewEvidencePaths(repository, git(repository, ["branch", "--show-current"]), "authorized-item");
+    expect(readFileSync(paths.markdownPath, "utf8")).toContain(
+      "- Max rounds authorization (2): Owner approved one more round in OUTBOX 142",
+    );
   });
 
   test("a round records the effective cap even when no cap was configured", () => {
@@ -3267,7 +3305,7 @@ describe("cli-review taxonomy, floor, and cap wiring (C1/C7)", () => {
     expect(
       runStart(repository, dataRepo, "capped-item", "master", {
         FAKE_FINDINGS_JSON: JSON.stringify([fakeFinding({priority: "P1"})]),
-      }, ["--max-rounds", "4"]).status,
+      }, ["--max-rounds", "4", "--authorization", "owner approved four rounds"]).status,
     ).toBe(0);
     expect(readItemLedger(repository, "capped-item").maxRoundsOverride).toBe(4);
     runDisposition(repository, "capped-item", "E1-R1-F1", "accepted", "the defect is real", ["--data-repo", dataRepo]);
@@ -3275,7 +3313,7 @@ describe("cli-review taxonomy, floor, and cap wiring (C1/C7)", () => {
     git(repository, ["commit", "-qam", "Address the finding"]);
     // A second round asked for a cap of 2. The recorded authorization stays 4, so the
     // rounds the owner allowed are still there to be used.
-    expect(runStart(repository, dataRepo, "capped-item", "master", {}, ["--max-rounds", "2"]).status).toBe(0);
+    expect(runStart(repository, dataRepo, "capped-item", "master", {}, ["--max-rounds", "2", "--authorization", "owner approved two rounds"]).status).toBe(0);
     expect(readItemLedger(repository, "capped-item").maxRoundsOverride).toBe(4);
   });
 
@@ -3592,6 +3630,9 @@ describe("cli-review carry-over", () => {
     expect(status.stdout).toContain("REVIEW_STATUS=passed");
     expect(status.stdout).toContain(`carried_from=${reviewedHead} carried_files=1 independently_reviewed=false`);
     expect(status.stdout).toContain(`head=${currentHead}`);
+    expect(status.stdout).toContain(
+      `\nREVIEW_LINE=REVIEW: PASSED (carried over from ${reviewedHead.slice(0, 12)}; Only adds an ignore file; no reviewed behavior changes; not re-reviewed) - codex (default), 1 round\n`,
+    );
     const paths = reviewEvidencePaths(repository, "feature/review-receipt", item);
     const markdown = readFileSync(paths.markdownPath, "utf8");
     expect(markdown).toContain("Only adds an ignore file; no reviewed behavior changes");

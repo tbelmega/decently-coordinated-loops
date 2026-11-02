@@ -525,11 +525,14 @@ describe("generated receipt contract", () => {
     );
   });
 
-  test.each(allForms)("%s reports a carried-over review as passed", (_name, rendered) => {
-    expect(flatten(rendered)).toContain(
-      "When it reports `carried_from`, write `REVIEW: PASSED (carried over from <sha>; <the " +
-        "delta in plain words>; not re-reviewed)`.",
+  test.each(allForms)("%s copies the REVIEW line from the status command", (_name, rendered) => {
+    const flat = flatten(rendered);
+    expect(flat).toContain(
+      "its `status` command run immediately before the receipt, printing `REVIEW_STATUS=passed`. " +
+        "Copy the REVIEW line verbatim from its `REVIEW_LINE=` output, which already carries " +
+        "every disclosure the status requires (carry-over, residual notes, cap exit, profile).",
     );
+    expect(flat).not.toContain("When it reports `carried_from`");
   });
 
   test.each(allForms)("%s keeps the owner-no-reply rule intact", (_name, rendered) => {

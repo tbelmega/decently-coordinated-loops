@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isOpen, parseOutbox } from "./outbox.ts";
+import { isOpen, outboxHeadingProblems, parseOutbox } from "./outbox.ts";
 import { TEST_IDENTITIES } from "./test-identities.ts";
 
 const { host, items, owner, projects } = TEST_IDENTITIES;
@@ -295,5 +295,39 @@ describe("answerable", () => {
     const e = only(file("### 1 — question · a · t\n\nbody with no answer line\n"));
     expect(e.answerable).toBe(false);
     expect(e.answer).toBeNull();
+  });
+});
+
+describe("outboxHeadingProblems", () => {
+  test("accepts spaced-hyphen and legacy em-dash headings with known types", () => {
+    const text = file(
+      "### 7 - question · alpha · Which store?\n\n> A:\n",
+      "### 9 \u2014 decision · beta · Kept the cache\n\n> A:\n",
+    );
+    expect(outboxHeadingProblems(text)).toEqual([]);
+  });
+
+  test("reports an unparseable heading, an unknown type, and a reused id with their line numbers", () => {
+    const text = [
+      "# Outbox",
+      "",
+      "```markdown",
+      "### 42 - question · myapp · Example inside a fence is not an entry",
+      "```",
+      "",
+      "## Open",
+      "",
+      "### 7 - question · alpha · Which store?",
+      "### 8 question alpha no separators",
+      "### 9 - ask · alpha · Unknown type",
+      "### 7 - approval · beta · Reused id",
+      "### 10 - decide · beta · Retired type",
+    ].join("\n");
+    expect(outboxHeadingProblems(text)).toEqual([
+      {line: 10, detail: 'not "### <id> - <type> · <project> · <title>": ### 8 question alpha no separators'},
+      {line: 11, detail: 'entry 9 has type "ask"; the types are question, proposal, approval, decision'},
+      {line: 12, detail: "entry id 7 is already used on line 9"},
+      {line: 13, detail: 'entry 10 uses the retired type "decide" - re-type it as `question` when routing', advisory: true},
+    ]);
   });
 });

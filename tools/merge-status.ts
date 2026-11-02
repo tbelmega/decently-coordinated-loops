@@ -136,6 +136,27 @@ export interface MergeReportRow {
   error?: string;
 }
 
+const STATE_ICON: Record<PrState | "ERROR", string> = { MERGED: "\u2713", OPEN: "\u00b7", CLOSED: "\u2717", ERROR: "!" };
+
+/** The printed state word: the report speaks of merged work, not "landed" work, because
+ *  the owner reads it. OPEN reads PENDING, since for the git adapter there is no PR. */
+const STATE_LABEL: Record<PrState | "ERROR", string> = { MERGED: "MERGED", OPEN: "PENDING", CLOSED: "CLOSED", ERROR: "ERROR" };
+
+/** One printed report line for `bun run check-integration-status`. */
+export function renderMergeReportRow(row: MergeReportRow): string {
+  const flags: string[] = [];
+  if (row.staleReviewMerge) flags.push("STALE \u2192 advance");
+  if (row.closedUnmerged) flags.push("CLOSED, not merged");
+  if (row.error) flags.push(row.error);
+  const suffix = flags.length ? `  [${flags.join("; ")}]` : "";
+  return `  ${STATE_ICON[row.state]} ${STATE_LABEL[row.state].padEnd(7)} ${row.itemState}/${row.awaiting ?? "-"}  ${row.slug}  ${row.ref}${suffix}`;
+}
+
+/** One printed line for an item whose work is merged but still awaits review-merge. */
+export function renderStaleRow(row: MergeReportRow): string {
+  return `  - ${row.slug} (merged ${row.mergedAt ?? "?"}) - ${row.ref}`;
+}
+
 export interface MergeReport {
   rows: MergeReportRow[];
   /** Rows a human/agent should act on now: MERGED but still awaiting review-merge. */
@@ -238,12 +259,12 @@ const LINE_REWRITTEN_KEYS = new Set([...Object.keys(MERGED_FIELD_VALUES), "await
 function parseTopLevelScalarKeys(block: string): ScalarKeySource[] {
   const document = parseDocument(block, { keepSourceTokens: true, uniqueKeys: false });
   if (!isMap(document.contents) || document.contents.flow) {
-    throw new Error("landed update requires a block-style root mapping");
+    throw new Error("recording the merge requires a block-style root mapping");
   }
   const keys: ScalarKeySource[] = [];
   for (const pair of document.contents.items) {
     if (!isScalar(pair.key) || typeof pair.key.value !== "string" || !pair.key.range) {
-      throw new Error("landed update requires scalar top-level keys");
+      throw new Error("recording the merge requires scalar top-level keys");
     }
     if (LINE_REWRITTEN_KEYS.has(pair.key.value)) {
       const keyLineEnd = block.indexOf("\n", pair.key.range[1]);
@@ -253,7 +274,7 @@ function parseTopLevelScalarKeys(block: string): ScalarKeySource[] {
         isNode(pair.value) && pair.value.range !== undefined && pair.value.range[1] <= lineEnd
       );
       if (!valueIndicator || valueIndicator.offset > lineEnd || !valueEndsOnKeyLine) {
-        throw new Error("landed update requires single-line lifecycle fields");
+        throw new Error("recording the merge requires single-line lifecycle fields");
       }
     }
     keys.push({ key: pair.key.value, start: pair.key.range[0], end: pair.key.range[1] });

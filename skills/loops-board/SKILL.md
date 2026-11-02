@@ -152,7 +152,7 @@ is a durable structural fact set at filing time, not a status; "blocked on a dep
 is derived from it and the targets' merged status, never stored separately.
 
 A target is **satisfied** only when its work is on the project's integration branch:
-`bun run check-integration-status` reports it LANDED, or its state is
+`bun run check-integration-status` reports it MERGED, or its state is
 `merged`/`tested`/`delivered`/`accepted`. `implemented` is **not** satisfied (review
 requested is not merged), nor is `dropped`. Exception: deliberate stacking within one
 permanent slot may build on an unmerged target when the new item records that target as

@@ -34,6 +34,8 @@ import {
   parsePrUrl,
   planLandedCheck,
   prepareLandedWrites,
+  renderMergeReportRow,
+  renderStaleRow,
   statusKey,
   tokenPathForOrg,
   workRef,
@@ -187,22 +189,7 @@ for (const item of checkable) {
 
 const report = buildMergeReport(checkable, statusByKey);
 
-const icon = (state: PrState | "ERROR"): string =>
-  state === "MERGED" ? "✓" : state === "ERROR" ? "!" : state === "CLOSED" ? "✗" : "·";
-
-const label = (state: PrState | "ERROR"): string =>
-  state === "MERGED" ? "LANDED" : state === "OPEN" ? "PENDING" : state;
-
-for (const row of report.rows) {
-  const flags: string[] = [];
-  if (row.staleReviewMerge) flags.push("STALE → advance");
-  if (row.closedUnmerged) flags.push("CLOSED, not landed");
-  if (row.error) flags.push(row.error);
-  const suffix = flags.length ? `  [${flags.join("; ")}]` : "";
-  console.log(
-    `  ${icon(row.state)} ${label(row.state).padEnd(7)} ${row.itemState}/${row.awaiting ?? "-"}  ${row.slug}  ${row.ref}${suffix}`,
-  );
-}
+for (const row of report.rows) console.log(renderMergeReportRow(row));
 
 const flippable = itemsToFlipMerged(checkable, statusByKey);
 
@@ -245,7 +232,7 @@ if (report.stale.length) {
     `\n${report.stale.length} item(s) have integrated work but are still awaiting review-merge - record with \`bun run check-integration-status --apply\`:`,
   );
   for (const row of report.stale) {
-    console.log(`  - ${row.slug} (landed ${row.mergedAt ?? "?"}) - ${row.ref}`);
+    console.log(renderStaleRow(row));
   }
   process.exit(1);
 }

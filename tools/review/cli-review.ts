@@ -97,6 +97,7 @@ import {
 import { reviewPrompt, type ReviewContextDocument } from "./review-prompt.ts";
 import {
   evaluateReviewStatus,
+  renderReviewLine,
   renderReviewStatus,
   reviewEvidencePaths,
   type ReviewStatus,
@@ -141,6 +142,10 @@ interface StartOptions {
   applyProfile?: (name: string) => ReviewConfig;
   /** An explicit --max-rounds keeps owner precedence over a profile's cap. */
   maxRoundsFlag?: number;
+  /** The cap configuration resolves for this run, before any --max-rounds raise. */
+  configuredMaxRounds?: number;
+  /** The owner's ruling (`--authorization`) that a --max-rounds above the configured cap requires. */
+  maxRoundsAuthorization?: string;
   /** Explicit run-level `--reviewer` / `--model` / `--effort`. Kept apart from the
    * resolved defaults because they outrank a persona's own values: the skill promises
    * these flags override configuration for one run, which is what makes a diagnostic
@@ -406,6 +411,7 @@ function parseStartOptions(args: string[]): StartOptions {
   } = {};
   let baseRef = "";
   let maxRounds: number | undefined;
+  let authorization: string | undefined;
   let stepBack: string | undefined;
   let shadowFull = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -425,6 +431,7 @@ function parseStartOptions(args: string[]): StartOptions {
     else if (arg === "--implementer-effort" && value && !value.startsWith("--")) flags.implementerEffort = value;
     else if (arg === "--item" && value) flags.item = value;
     else if (arg === "--step-back" && value) stepBack = value;
+    else if (arg === "--authorization" && value) authorization = value;
     else if (arg === "--max-rounds" && value) {
       maxRounds = Number(value);
       if (!Number.isInteger(maxRounds) || maxRounds < 1) {
@@ -451,6 +458,8 @@ function parseStartOptions(args: string[]): StartOptions {
     },
     maxRounds: maxRounds ?? configured.maxRounds,
     ...(maxRounds !== undefined ? {maxRoundsFlag: maxRounds} : {}),
+    ...(configured.maxRounds !== undefined ? {configuredMaxRounds: configured.maxRounds} : {}),
+    ...(authorization !== undefined ? {maxRoundsAuthorization: authorization} : {}),
     ...(flags.reviewer !== undefined && isReviewerId(flags.reviewer)
       ? {reviewerFlag: getReviewer(flags.reviewer)}
       : {}),
@@ -919,6 +928,7 @@ async function startReview(options: StartOptions): Promise<void> {
       options = {
         ...options,
         maxRounds: options.maxRoundsFlag ?? review.maxRounds,
+        configuredMaxRounds: review.maxRounds,
         auditPasses: review.auditPasses ?? [...reviewAuditPasses],
         ...(review.severityFloor ? {severityFloor: review.severityFloor} : {severityFloor: undefined}),
         ...(review.terminalRejection ? {terminalRejection: true} : {terminalRejection: undefined}),
@@ -931,6 +941,18 @@ async function startReview(options: StartOptions): Promise<void> {
       // Project/global selection is already folded into the resolved options; the
       // name is validated here so an unknown profile fails the start, not the gate.
       options.applyProfile(selectedProfile);
+    }
+    // Rounds past the configured cap are the owner's call alone, so the raise is refused
+    // unless it carries the owner's ruling, which the ledger then records as its authority.
+    const configuredCap = options.configuredMaxRounds ?? DEFAULT_REVIEW_MAX_ROUNDS;
+    if (
+      options.maxRoundsFlag !== undefined &&
+      options.maxRoundsFlag > configuredCap &&
+      !options.maxRoundsAuthorization?.trim()
+    ) {
+      throw new Error(
+        `--max-rounds ${options.maxRoundsFlag} exceeds the configured cap of ${configuredCap}; pass --authorization "<owner ruling>" recording the owner's approval of the extra rounds`,
+      );
     }
     const currentPatchIds = gitPatchIds(repository, resolvedBaseSha, headSha);
     let ledger: ReviewLedger;
@@ -1008,7 +1030,17 @@ async function startReview(options: StartOptions): Promise<void> {
     // can bring the cap-exit threshold down to where residual work ships early.
     if (options.maxRoundsFlag !== undefined) {
       const authorized = Math.max(ledger.maxRoundsOverride ?? 0, options.maxRoundsFlag);
-      if (ledger.maxRoundsOverride !== authorized) ledger = {...ledger, maxRoundsOverride: authorized};
+      if (ledger.maxRoundsOverride !== authorized) {
+        const ruling = options.maxRoundsAuthorization?.trim();
+        ledger = {
+          ...ledger,
+          maxRoundsOverride: authorized,
+          ...(ruling
+            ? {maxRoundsAuthorizations: [...(ledger.maxRoundsAuthorizations ?? []),
+                {maxRounds: authorized, authorization: ruling, recordedAt: new Date().toISOString()}]}
+            : {}),
+        };
+      }
     }
 
     // Recorded at creation and never rewritten or backfilled: a binding a later run can
@@ -1985,7 +2017,7 @@ function currentReviewStatus(item?: string, dataRepo?: string): ReviewStatus {
 
 function printReviewStatus(item?: string, dataRepo?: string): void {
   const status = currentReviewStatus(item, dataRepo);
-  process.stdout.write(`${renderReviewStatus(status)}\n`);
+  process.stdout.write(`${renderReviewStatus(status)}\n${renderReviewLine(status)}\n`);
   if (status.kind !== "passed") process.exitCode = 1;
 }
 

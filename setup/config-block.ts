@@ -72,9 +72,9 @@ parentheses:
 Also:
 
 - \`REVIEW: PASSED\` needs current evidence: with the bundled reviewer, its \`status\`
-  command run immediately before the receipt, printing \`REVIEW_STATUS=passed\`. When it
-  reports \`carried_from\`, write \`REVIEW: PASSED (carried over from <sha>; <the delta in
-  plain words>; not re-reviewed)\`.
+  command run immediately before the receipt, printing \`REVIEW_STATUS=passed\`. Copy the
+  REVIEW line verbatim from its \`REVIEW_LINE=\` output, which already carries every
+  disclosure the status requires (carry-over, residual notes, cap exit, profile).
 - \`NEXT STEP/OPTIONS\` names who acts next.
 - Before printing the receipt, leave the item true even if ${owner} never replies: state,
   next-actor, awaiting, next-step and \`links.base-sha\`/\`head-sha\` current, committed and

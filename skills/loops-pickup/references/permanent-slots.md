@@ -10,9 +10,9 @@ Run the integration-status check (`bun run check-integration-status`) before cha
 branch state. Branch position by itself is never the cleanup proof.
 
 - Delete a local named stack branch only after its exact `base-sha..head-sha` range
-  reports LANDED and that integration is recorded on the board. Switch away from the
+  reports MERGED and that integration is recorded on the board. Switch away from the
   branch first. A rebase-shaped integration may require `git branch -D`; use it only with
-  both the exact LANDED result and the board record. Keep remote branches unless project
+  both the exact MERGED result and the board record. Keep remote branches unless project
   policy says they are disposable.
 - When the whole stack is integrated, return the worktree to its persistent base branch
   and bring that branch level with the integration branch.

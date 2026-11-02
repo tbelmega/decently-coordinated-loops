@@ -8,7 +8,7 @@ import {
   type Review,
   type ReviewRoundAudit,
 } from "./review-ledger.ts";
-import { evaluateReviewStatus, renderReviewStatus } from "./review-status.ts";
+import { evaluateReviewStatus, renderReviewLine, renderReviewStatus } from "./review-status.ts";
 
 const finding = {
   priority: "P1" as const,
@@ -505,6 +505,62 @@ describe("renderReviewStatus", () => {
       }),
     ).toBe(
       'REVIEW_STATUS=blocked head=abcdef123456 ledger=.reviews/feature.md reason="latest review has findings"',
+    );
+  });
+});
+
+describe("renderReviewLine", () => {
+  const passed = {
+    kind: "passed" as const,
+    headSha: "abcdef123456",
+    ledgerPath: ".reviews/feature.md",
+    model: "codex (default)",
+    epoch: 1,
+    rounds: 2,
+    totalRounds: 2,
+  };
+
+  test("a plain pass names the reviewer and the round count", () => {
+    expect(renderReviewLine({...passed, residualNotes: 0})).toBe("REVIEW_LINE=REVIEW: PASSED - codex (default), 2 rounds");
+  });
+
+  test("each disclosure the passing status carries appears in one parenthesis", () => {
+    expect(renderReviewLine({...passed, residualNotes: 2})).toBe("REVIEW_LINE=REVIEW: PASSED (residual notes: 2) - codex (default), 2 rounds");
+    expect(renderReviewLine({...passed, profile: "mvp"})).toBe("REVIEW_LINE=REVIEW: PASSED (profile: mvp) - codex (default), 2 rounds");
+    expect(renderReviewLine({...passed, capExit: true, residualObligations: 1})).toBe(
+      "REVIEW_LINE=REVIEW: PASSED (cap exit; residual obligations: 1) - codex (default), 2 rounds",
+    );
+    expect(renderReviewLine({...passed, testCapExit: true, testVerifiedFixes: 2})).toBe(
+      "REVIEW_LINE=REVIEW: PASSED (test-backed cap exit; fixes not independently re-reviewed) - codex (default), 2 rounds",
+    );
+    expect(
+      renderReviewLine({...passed, profile: "mvp", residualNotes: 3, carriedFrom: "0123456789abcdef0123456789abcdef01234567",
+        carriedFiles: 1, carriedReason: "ignore file\nonly"}),
+    ).toBe(
+      "REVIEW_LINE=REVIEW: PASSED (profile: mvp; residual notes: 3; carried over from 0123456789ab; ignore file only; not re-reviewed) - codex (default), 2 rounds",
+    );
+  });
+
+  test("a carried status discloses the recorded carry-over reason", () => {
+    const ledger = {
+      ...addReviewRound(
+        createReviewLedger({branch: "feature", baseRef: "master", baseSha: "base"}),
+        {headSha: "reviewed", model: "codex-default", reviewedAt: "2026-07-19T12:00:00Z", review: cleanReview},
+      ),
+      carryOvers: [{reviewedHeadSha: "reviewed", headSha: "moved", deltaFiles: [".gitignore"],
+        reason: "ignore file only", recordedAt: "2026-07-19T13:00:00Z"}],
+    };
+    expect(renderReviewLine(evaluateReviewStatus(ledger, "moved", ".reviews/feature.md"))).toBe(
+      "REVIEW_LINE=REVIEW: PASSED (carried over from reviewed; ignore file only; not re-reviewed) - codex-default, 1 round",
+    );
+  });
+
+  test("blocked and not_run carry their reason", () => {
+    expect(renderReviewLine({kind: "blocked", headSha: "h", ledgerPath: "l", reason: "latest review has findings"})).toBe(
+      "REVIEW_LINE=REVIEW: BLOCKED - latest review has findings",
+    );
+    expect(renderReviewLine({kind: "not_run", headSha: "h", ledgerPath: "l", reason: "no review ledger for current branch"})).toBe(
+      "REVIEW_LINE=REVIEW: NOT RUN - no review ledger for current branch",
     );
   });
 });

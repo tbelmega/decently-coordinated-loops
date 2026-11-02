@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { loadArchiveDir, loadForDeliveryDir, loadItemsDir } from "./parse.ts";
 import { runPreflight } from "./preflight.ts";
-import { printDanglingDeps, printDuplicateSlugs, printMissingTicketDecisions, printPreflightReport, printValidationReport } from "./report.ts";
+import { outboxHeadingProblems } from "./outbox.ts";
+import { printDanglingDeps, printDuplicateSlugs, printMissingTicketDecisions, printOutboxHeadingProblems, printPreflightReport, printValidationReport } from "./report.ts";
 import { missingTicketDecisions } from "./tracker/tracker-items.ts";
 import { findDuplicateSlugs, validateItems } from "./validate.ts";
 import { buildUniverse, computeReadiness, danglingDeps } from "./readiness.ts";
@@ -51,6 +52,13 @@ const universe = buildUniverse([...items, ...forDeliveryItems, ...archiveItems])
 const dangling = danglingDeps(computeReadiness([...items, ...forDeliveryItems], universe));
 printDanglingDeps(dangling);
 
+// OUTBOX.md entry headings are structural: the routing and answer tools read the id, type,
+// and project from them, so a heading they cannot parse is an entry that silently drops out
+// of routing, and a reused id makes answers ambiguous. An integrity error with its line.
+const outboxPath = join(ROOT, "OUTBOX.md");
+const outboxProblems = existsSync(outboxPath) ? outboxHeadingProblems(readFileSync(outboxPath, "utf8")) : [];
+printOutboxHeadingProblems(outboxProblems);
+
 // Version-stamp drift check (warning only, never fails the run): the data repo records
 // which DCL commit seeded it; if the DCL clone serving this run has moved on,
 // templates/contracts may have evolved past what this instance was seeded with. Clear
@@ -77,7 +85,8 @@ if (
   report.mismatches.length ||
   anomalies.length ||
   duplicateSlugs.length ||
-  dangling.length
+  dangling.length ||
+  outboxProblems.some((problem) => !problem.advisory)
 ) {
   process.exit(1);
 }

@@ -55,6 +55,8 @@ export interface PassedReviewStatus extends ReviewStatusBase {
    * attestation; the delta was not independently reviewed. */
   carriedFrom?: string;
   carriedFiles?: number;
+  /** The implementer's recorded reason for the carry-over, disclosed in the receipt line. */
+  carriedReason?: string;
   /** C8: the review profile this ledger is bound to. */
   profile?: string;
 }
@@ -104,7 +106,7 @@ export function evaluateReviewStatus(
       const reviewed = evaluateReviewStatus(ledger, latestRound.headSha, ledgerPath, classes, terminalRejection, capExit);
       if (reviewed.kind === "passed") {
         return {...reviewed, headSha: currentHeadSha, carriedFrom: carryOver.reviewedHeadSha,
-          carriedFiles: carryOver.deltaFiles.length};
+          carriedFiles: carryOver.deltaFiles.length, carriedReason: carryOver.reason};
       }
     }
     return {
@@ -267,4 +269,25 @@ export function renderReviewStatus(status: ReviewStatus): string {
     `ledger=${status.ledgerPath}`,
     `reason=${JSON.stringify(status.reason)}`,
   ].join(" ");
+}
+
+/** The handoff receipt's REVIEW line, composed from the same status so an agent copies it
+ * verbatim instead of re-deriving the disclosures a passing status requires. One line:
+ * whitespace inside recorded reasons is collapsed. */
+export function renderReviewLine(status: ReviewStatus): string {
+  const oneLine = (text: string): string => text.replaceAll(/\s+/g, " ").trim();
+  if (status.kind !== "passed") {
+    return `REVIEW_LINE=REVIEW: ${status.kind === "blocked" ? "BLOCKED" : "NOT RUN"} - ${oneLine(status.reason)}`;
+  }
+  const disclosures = [
+    ...(status.profile ? [`profile: ${oneLine(status.profile)}`] : []),
+    ...((status.residualNotes ?? 0) > 0 ? [`residual notes: ${status.residualNotes}`] : []),
+    ...(status.capExit ? [`cap exit; residual obligations: ${status.residualObligations ?? 0}`] : []),
+    ...(status.testCapExit ? ["test-backed cap exit; fixes not independently re-reviewed"] : []),
+    ...(status.carriedFrom
+      ? [`carried over from ${status.carriedFrom.slice(0, 12)}; ${oneLine(status.carriedReason ?? "carry-over reason not recorded")}; not re-reviewed`]
+      : []),
+  ];
+  const rounds = `${status.totalRounds} round${status.totalRounds === 1 ? "" : "s"}`;
+  return `REVIEW_LINE=REVIEW: PASSED${disclosures.length ? ` (${disclosures.join("; ")})` : ""} - ${oneLine(status.model)}, ${rounds}`;
 }

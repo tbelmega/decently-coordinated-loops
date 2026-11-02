@@ -112,9 +112,11 @@ incomplete, or regressed and scan for new defects; the CLI chooses full or scope
 ## Owner-only authorizations
 
 Only the owner authorizes rounds past the cap (`--max-rounds`), `--owner` attribution, a
-draft `--authorization`, and waiving review. The CLI records these flags without
-verifying them, so passing one without the owner's ruling (in this session or in the
-outbox) fabricates an authorization. Quote the ruling in the reason or the item log.
+draft `--authorization`, and waiving review. `start --max-rounds` above the configured
+cap refuses without `--authorization "<owner ruling>"`, which the ledger records. The CLI
+records these flags without verifying them, so passing one without the owner's ruling
+(in this session or in the outbox) fabricates an authorization. Quote the ruling in the
+reason or the item log.
 
 ## Recovery, caps, and escalation
 
@@ -162,17 +164,19 @@ bun "$DCL_HOME/tools/review/cli-review.ts" status --item <item-slug> --data-repo
 ```
 
 Omit `--item` only for an owner-requested review with no item. **Exit 0 with
-`REVIEW_STATUS=passed` is the only evidence for `REVIEW: PASSED`.** Report a nonzero
-`blocked` or `not_run` as `REVIEW: BLOCKED` or `REVIEW: NOT RUN`. A passing result may
-require a disclosure:
+`REVIEW_STATUS=passed` is the only evidence for `REVIEW: PASSED`.** Copy the receipt's
+REVIEW line verbatim from the `REVIEW_LINE=` output line: it already reads
+`REVIEW: BLOCKED - <reason>` or `REVIEW: NOT RUN - <reason>` for a nonzero exit, and
+carries every disclosure a pass requires (profile, residual notes, cap exit, test-backed
+cap exit, carry-over) followed by the reviewer and round count. Some disclosures also need
+prose next to the receipt:
 
-| Passing output | Required handoff disclosure |
+| Passing output | Also say in the handoff |
 | --- | --- |
-| `residual_notes=n` | Always printed. If nonzero, `REVIEW: PASSED (residual notes: n)`; the notes need no decision. |
-| `carried_from=<sha>` | `REVIEW: PASSED (carried over from <sha>; <the delta in plain words>; not re-reviewed)`. |
-| `cap_exit=true residual_obligations=n` | Name the residual obligations in prose. |
-| `test_cap_exit=true ...` | Name the fixes and test evidence; `REVIEW: PASSED (test-backed cap exit; fixes not independently re-reviewed)`. |
-| `profile="mvp"` | Include it, e.g. `REVIEW: PASSED (profile: mvp, ...)`. |
+| `residual_notes=n` | Nothing; the notes need no decision. |
+| `carried_from=<sha>` | The delta in plain words, if the recorded reason does not already say it. |
+| `cap_exit=true residual_obligations=n` | Name the residual obligations. |
+| `test_cap_exit=true ...` | Name the fixes and the test evidence. |
 
 Record `links.base-sha` and `links.head-sha` on the item, plus `links.stack-parent` when
 stacked, so later branch movement cannot change the recorded range. Keep state, next actor,

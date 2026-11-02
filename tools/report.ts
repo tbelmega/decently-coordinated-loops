@@ -1,6 +1,7 @@
 import type { PreflightReport } from "./preflight.ts";
 import type { DuplicateSlug, ItemAnomaly } from "./validate.ts";
 import type { DanglingDep } from "./readiness.ts";
+import type { OutboxHeadingProblem } from "./outbox.ts";
 
 /** Human-readable preflight summary, shared by the sync and check CLIs. */
 export function printPreflightReport(report: PreflightReport): void {
@@ -81,5 +82,16 @@ export function printDanglingDeps(dangling: DanglingDep[]): void {
   console.log(`\nDangling depends-on targets (${dangling.length} - target resolves to no item):`);
   for (const dep of dangling) {
     console.log(`  - ${dep.slug}: depends-on target "${dep.target}" not found`);
+  }
+}
+
+/** Human-readable OUTBOX heading summary, one `OUTBOX.md:<line>:` row per problem so the
+ * line can be opened directly. Advisory rows are listed but do not fail the check. */
+export function printOutboxHeadingProblems(problems: OutboxHeadingProblem[]): void {
+  if (!problems.length) return;
+  const failing = problems.filter((problem) => !problem.advisory).length;
+  console.log(`\nOUTBOX.md headings (${failing} failing, ${problems.length - failing} advisory - expected "### <id> - <type> · <project> · <title>"):`);
+  for (const problem of problems) {
+    console.log(`  - OUTBOX.md:${problem.line}: ${problem.advisory ? "(advisory) " : ""}${problem.detail}`);
   }
 }

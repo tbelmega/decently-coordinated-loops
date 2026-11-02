@@ -140,3 +140,24 @@ describe("cli-check ticket advisory", () => {
     expect(result.stdout).not.toContain("tickets: local");
   });
 });
+
+// OUTBOX.md headings are structural: readers parse `### <id> - <type> · <project> · <title>`,
+// so a heading they cannot read is an entry the owner never sees routed.
+describe("cli-check OUTBOX headings", () => {
+  test("fails on a malformed heading, naming its line", () => {
+    const root = dataRepo("items");
+    writeFileSync(join(root, "OUTBOX.md"), "# Outbox\n\n## Open\n\n### 3 - question · atlas · Fine\n\n> A:\n\n### 4 question atlas broken\n");
+    const result = spawnSync("bun", [CHECK], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("OUTBOX.md:9:");
+    expect(result.stdout).toContain("### 4 question atlas broken");
+  });
+
+  test("passes legacy em-dash headings", () => {
+    const root = dataRepo("items");
+    writeFileSync(join(root, "OUTBOX.md"), "# Outbox\n\n## Open\n\n### 3 \u2014 question · atlas · Legacy\n\n> A:\n");
+    const result = spawnSync("bun", [CHECK], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("OUTBOX.md:");
+  });
+});

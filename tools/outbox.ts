@@ -433,6 +433,49 @@ export function parseOutbox(
   return { readAt, entries, anomalies };
 }
 
+export interface OutboxHeadingProblem {
+  /** 1-based line number in OUTBOX.md. */
+  line: number;
+  detail: string;
+  /** Reported but not a failure: a form the entry contract still tolerates until routed. */
+  advisory?: true;
+}
+
+/** Every `### ` heading in OUTBOX.md that readers could not route: one that does not match
+ * the entry heading, names a type outside the closed vocabulary, or reuses an id. Headings
+ * inside fenced code blocks are examples, not entries. A surviving retired type is
+ * advisory, because the contract re-types it at routing rather than forbidding it. */
+export function outboxHeadingProblems(text: string): OutboxHeadingProblem[] {
+  const problems: OutboxHeadingProblem[] = [];
+  const lineById = new Map<number, number>();
+  let fenced = false;
+  text.split("\n").forEach((rawLine, index) => {
+    const line = index + 1;
+    if (/^\s*(```|~~~)/.test(rawLine)) {
+      fenced = !fenced;
+      return;
+    }
+    if (fenced || !rawLine.startsWith("### ")) return;
+    const heading = rawLine.trim();
+    const match = ENTRY_HEADING.exec(heading.slice(4).trim());
+    if (!match) {
+      problems.push({line, detail: `not "### <id> - <type> · <project> · <title>": ${heading}`});
+      return;
+    }
+    const id = parseInt(match[1], 10);
+    const type = match[2];
+    if (RETIRED_TYPES.has(type)) {
+      problems.push({line, detail: `entry ${id} uses the retired type "${type}" - re-type it as \`question\` when routing`, advisory: true});
+    } else if (!KNOWN_TYPES.has(type)) {
+      problems.push({line, detail: `entry ${id} has type "${type}"; the types are ${[...KNOWN_TYPES].join(", ")}`});
+    }
+    const earlier = lineById.get(id);
+    if (earlier !== undefined) problems.push({line, detail: `entry id ${id} is already used on line ${earlier}`});
+    else lineById.set(id, line);
+  });
+  return problems;
+}
+
 /** Append one orphan-row entry to OUTBOX.md's `## Open` section, in the shape the
  * loops-queues entry contract defines: `### <id> - <type> · <project> · <title>` and a
  * prose body. No `- item:` line: the row is on the board precisely because no active

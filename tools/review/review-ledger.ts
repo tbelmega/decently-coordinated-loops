@@ -250,6 +250,9 @@ export interface ReviewLedger {
    * raise outlives the invocation: later starts and `status` honor it instead of
    * treating the lower configured cap as already reached. */
   maxRoundsOverride?: number;
+  /** The owner rulings (`start --authorization`) behind each raise of maxRoundsOverride.
+   * Absent on ledgers written before the ruling was required. */
+  maxRoundsAuthorizations?: MaxRoundsAuthorization[];
   branch: string;
   baseRef: string;
   baseSha: string;
@@ -1081,6 +1084,9 @@ export function parseReviewLedger(input: unknown): ReviewLedger {
           return { maxRoundsOverride: input.maxRoundsOverride };
         })()
       : {}),
+    ...(input.maxRoundsAuthorizations !== undefined
+      ? {maxRoundsAuthorizations: parseMaxRoundsAuthorizations(input.maxRoundsAuthorizations)}
+      : {}),
     branch: requiredString(input, "branch", "review ledger"),
     baseRef: requiredString(input, "baseRef", "review ledger"),
     baseSha: requiredString(input, "baseSha", "review ledger"),
@@ -1187,6 +1193,7 @@ export function supersedeLedgerBase(
   // because everything else here is deliberately carried forward.
   const {
     maxRoundsOverride: _superseded,
+    maxRoundsAuthorizations: _supersededAuthorizations,
     implementerIdentity: _supersededIdentity,
     ...carried
   } = ledger;
@@ -1624,6 +1631,31 @@ function renderDisposition(disposition: ReviewDisposition): string {
   return `**${disposition.kind}**${attribution}${waivedClass}${tracks}${causality}${urgency}${escalation} - ${disposition.reason}${doc}`;
 }
 
+export interface MaxRoundsAuthorization {
+  maxRounds: number;
+  authorization: string;
+  recordedAt: string;
+}
+
+function parseMaxRoundsAuthorizations(value: unknown): MaxRoundsAuthorization[] {
+  if (!Array.isArray(value)) throw new Error("review ledger maxRoundsAuthorizations must be an array");
+  return value.map((entry: unknown, index): MaxRoundsAuthorization => {
+    const where = `review ledger maxRoundsAuthorizations[${index}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new Error(`${where} must be an object`);
+    const input = entry as Record<string, unknown>;
+    if (typeof input.maxRounds !== "number" || !Number.isInteger(input.maxRounds) || input.maxRounds < 1) {
+      throw new Error(`${where}.maxRounds must be an integer >= 1`);
+    }
+    if (typeof input.authorization !== "string" || !input.authorization.trim()) {
+      throw new Error(`${where}.authorization must be a non-empty string`);
+    }
+    if (typeof input.recordedAt !== "string" || !Number.isFinite(Date.parse(input.recordedAt))) {
+      throw new Error(`${where}.recordedAt must be a timestamp`);
+    }
+    return {maxRounds: input.maxRounds, authorization: input.authorization, recordedAt: input.recordedAt};
+  });
+}
+
 /** The round cap in force for a ledger: the configured one, raised by an owner
  * authorization the ledger recorded (`start --max-rounds`, C7). Monotone by
  * construction - a recorded override only ever raises, so a stale record can never
@@ -1659,6 +1691,8 @@ export function renderReviewLedger(ledger: ReviewLedger): string {
     ...(ledger.item ? [`- Item: \`${ledger.item}\``] : []),
     ...(ledger.profile ? [`- Profile: \`${ledger.profile}\``] : []),
     ...(ledger.maxRoundsOverride !== undefined ? [`- Max rounds (owner-authorized): ${ledger.maxRoundsOverride}`] : []),
+    ...(ledger.maxRoundsAuthorizations ?? []).map((entry) =>
+      `- Max rounds authorization (${entry.maxRounds}): ${entry.authorization.replaceAll(/\s+/g, " ")}`),
     `- Branch: \`${ledger.branch}\``,
     `- Base ref: \`${ledger.baseRef}\``,
     `- Base SHA: \`${ledger.baseSha}\``,

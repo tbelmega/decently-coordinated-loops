@@ -8,6 +8,8 @@ import {
   parsePrUrl,
   planLandedCheck,
   prepareLandedWrites,
+  renderMergeReportRow,
+  renderStaleRow,
   statusKey,
   statusKeyFor,
   tokenPathForOrg,
@@ -520,5 +522,43 @@ Context paragraph.
     // regression: a naive `state:`/`updated:` replace must anchor to the line start so
     // it never rewrites an indented nested key under links:
     expect(result.match(/pull\/44/g)?.length).toBe(1);
+  });
+});
+
+// The owner reads this report; "land" is ambiguous to them, so the printed vocabulary is
+// "merged" even though config keys and script names keep their older spelling.
+describe("integration-status report output", () => {
+  const row = {
+    slug: "atlas-search-index",
+    title: "Search index",
+    ref: "feature/search",
+    itemState: "implemented",
+    awaiting: "review-merge",
+    staleReviewMerge: false,
+    closedUnmerged: false,
+  };
+
+  test("an integrated item reads MERGED, never LANDED", () => {
+    const line = renderMergeReportRow({...row, state: "MERGED"});
+    expect(line).toBe("  \u2713 MERGED  implemented/review-merge  atlas-search-index  feature/search");
+    expect(line).not.toMatch(/land/i);
+  });
+
+  test("a pending item reads PENDING", () => {
+    expect(renderMergeReportRow({...row, state: "OPEN"})).toBe(
+      "  \u00b7 PENDING implemented/review-merge  atlas-search-index  feature/search",
+    );
+  });
+
+  test("a closed, unmerged review says not merged", () => {
+    const line = renderMergeReportRow({...row, state: "CLOSED", closedUnmerged: true});
+    expect(line).toContain("[CLOSED, not merged]");
+    expect(line).not.toMatch(/land/i);
+  });
+
+  test("a stale row names its merge date", () => {
+    expect(renderStaleRow({...row, state: "MERGED", staleReviewMerge: true, mergedAt: "2026-07-10T23:11:40Z"})).toBe(
+      "  - atlas-search-index (merged 2026-07-10T23:11:40Z) - feature/search",
+    );
   });
 });
