@@ -1,6 +1,6 @@
 ---
 name: loops-queues
-description: Use when processing the inbox ("process the inbox"), writing to or processing the outbox ("process the outbox"), or when the owner says "interview me"; the contracts for both queues and interview mode
+description: Use when processing the inbox ("process the inbox"), writing to or processing the outbox ("process the outbox"), or when the owner says "interview me" without naming another topic; the contracts for both queues and interview mode
 ---
 
 # The queues: inbox and outbox
@@ -141,14 +141,17 @@ at all is unchanged, including resolving first everything you can resolve yourse
 
 ## Interview mode
 
-When the owner says "interview me" (optionally with a time budget): pull the board
-and the outbox, then interview live, one question at a time, highest-leverage first:
+When the owner says "interview me" without naming another topic (optionally with a time
+budget): pull the board and the outbox, then interview live, one question at a time,
+highest-leverage first:
 
 1. blockers on in-progress work,
 2. open outbox entries,
 3. autonomy approvals for near-eligible items,
 4. probing vague `idea` items toward spec-readiness.
 
-Use structured multiple-choice prompts where the harness supports them. Route every
+Each question stands on its own: what is at stake, the options and what each causes, and
+your recommendation, never a slug, finding ID or earlier option the owner would have to
+look up. Use structured multiple-choice prompts where the harness supports them. Route every
 answer immediately; an interview ends with the board updated and the outbox
 shorter, not with notes to file later.

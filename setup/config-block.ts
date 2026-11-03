@@ -140,9 +140,9 @@ a board item, review and pickup. Register it (\`PROJECTS.md\` + \`loops.json\`) 
 ${owner}'s yes. A repository that only hosts errands gets no offer.
 
 Phrases from ${owner} and the skill each one loads: "process the inbox", "process the
-outbox", "interview me" → loops-queues; "sync the tracker" → loops-board; "pick up the
-next available piece of work", or any unattended work → loops-pickup; dispatch duty →
-loops-dispatch. Questions only ${owner} can answer go to \`${dataRepo}/OUTBOX.md\` per
+outbox", "interview me" with no other topic → loops-queues; "sync the tracker" →
+loops-board; "pick up the next available piece of work", or any unattended work →
+loops-pickup; dispatch duty → loops-dispatch. Questions only ${owner} can answer go to \`${dataRepo}/OUTBOX.md\` per
 loops-queues. If this harness cannot load skills by name, read
 \`${dclHome}/skills/<name>/SKILL.md\`.
 
