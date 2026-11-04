@@ -108,10 +108,12 @@ steps:
     title: Publish the board changes and report
     phase: Publish
     instruction: |
-      Commit every change in the data repo, including entries other sessions left uncommitted in
-      this checkout, with subjects that state what changed. Pull with `--rebase`, re-run
-      `bun run sync` if the rebase brought anything in, and push `master`. These are bookkeeping
-      commits: they need no review.
+      Commit the changes this sync made, with subjects that state what changed. Changes another
+      session left uncommitted in this checkout are not yours: commit them only where the house
+      rules allow it for this checkout; otherwise leave them untouched, and since this step's
+      gate needs a clean tree, report the step blocked and name the files. Pull with
+      `--rebase`, re-run `bun run sync` if the rebase brought anything in, and push the
+      checkout's branch to its upstream. These are bookkeeping commits: they need no review.
 
       Then report to the owner, most important first: what remains open (match questions not
       asked, mismatches recorded rather than settled, trackers that failed), then what changed
@@ -120,5 +122,6 @@ steps:
       with an errand line.
     gates:
       - script: >-
-          test -z "$(git status --porcelain)" && git fetch -q &&
-          test -z "$(git log --oneline @{u}..HEAD)"
+          git rev-parse --verify -q @{u} >/dev/null &&
+          dirty=$(git status --porcelain) && test -z "$dirty" &&
+          git fetch -q && ahead=$(git rev-list --count @{u}..HEAD) && test "$ahead" = 0
