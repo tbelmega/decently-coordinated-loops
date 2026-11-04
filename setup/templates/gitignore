@@ -1,2 +1,4 @@
 node_modules/
 .loops-sync.lock
+# Local fuse-flow run state, when a sync runs as a workflow (loops-board tracker-sync).
+.konductor/

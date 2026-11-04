@@ -37,6 +37,16 @@ updates.
 
 ## Sync ("sync the tracker")
 
+**With fuse-flow installed, an attended sync runs as a workflow.** When
+`~/.konductor/fuse-konductor-clone` exists, its `clone=` line names a fuse-konductor clone:
+from the data repo, run
+`<clone>/fuse/flow/fuse-flow start tracker-sync-<YYYY-MM-DD> --workflow <DCL clone>/workflows/tracker-sync.yml`
+and follow what it prints, step by step, instead of the phases below. A slug already taken
+today resumes that run; `fuse-flow list` shows the runs, so give a new one a suffix
+(`-2`). The data repo must ignore `.konductor/`, where fuse-flow keeps the run state. The
+workflow carries these phases with their rules; unattended runs, and the pull that inbox
+processing runs, follow the phases below.
+
 Run the phases in order, each first as a dry run, from the data repo:
 
 1. **Status push** - `bun run tracker-sync status --apply`, as above.

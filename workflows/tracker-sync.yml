@@ -1,0 +1,124 @@
+# An attended sync of the data repo's external trackers ("sync the tracker"), as a fuse-flow
+# workflow: the same three phases as loops-board references/tracker-sync.md -> Sync (status
+# push, pull, reconcile), plus a publish step whose gate refuses to finish while the data repo
+# has uncommitted or unpushed changes. The shared-state rules in loops-board -> External
+# trackers apply to every step. Unattended pulls, such as the one inbox processing runs, keep
+# following the prose phases.
+#
+# Run every command from the data-repo root, which is also where fuse-flow keeps this
+# workflow's run state (.konductor/, ignored by git):
+#   <fuse-konductor clone>/fuse/flow/fuse-flow start tracker-sync-<YYYY-MM-DD> \
+#     --workflow <DCL clone>/workflows/tracker-sync.yml
+version: 1
+name: tracker-sync
+description: >
+  An attended sync of the board with its external trackers: push board state onto linked
+  tickets, pull new tickets onto the board with every content match put to the owner, reconcile
+  the mismatches the push cannot settle, and publish the board changes.
+steps:
+  - id: status-push
+    title: Push board state to the trackers
+    phase: Status push
+    instruction: |
+      Run `git pull --rebase` so the sync starts from the pushed board, then `bun run tracker-sync status`
+      as a dry run and read its plan. The push only moves tickets forward and leaves a ticket
+      that a human moved further where it is, recording a line on its item instead. When the plan
+      shows nothing you would not expect, run `bun run tracker-sync status --apply`. A tracker
+      whose credential is rejected or whose API is unreachable fails its run and files an outbox
+      entry; tell the owner, and continue with the other trackers. Keep the counts the run
+      prints (tickets moved, references written, lines recorded) for the final report.
+    gates:
+      - script: bun run check
+
+  - id: pull-plan
+    title: Plan the pull and its match questions
+    phase: Pull
+    instruction: |
+      Run `bun run tracker-sync pull` as a dry run. It lists every open ticket that no item names:
+      tickets it will link mechanically (an item quotes the ticket URL, or the ticket's backlink
+      names an item) and tickets it will file as new `idea` items, each with any
+      `possible match` it found. A content match is never linked on your judgment, so every
+      ticket to be filed that plausibly belongs to an existing item becomes a question for the
+      owner. Look for such items yourself as well: the flagged ones, and any whose title or
+      content covers the ticket.
+
+      Write the plan file. Under one heading per tracker, list the counts to link and to file.
+      Then write one question per candidate match, ready to be asked as it stands, because the
+      owner sees only the question and must not have to look anything up to answer it:
+      - the ticket: id, title, and two or three lines on what it asks for, from its description;
+      - the candidate item: slug, title, state, and whether its text already names the ticket
+        (quote the line if it does);
+      - what a yes causes: the ticket joins the item's `tickets`, and the next status push
+        projects the item's state onto it; say what that means here, such as "the item is
+        delivered, so the ticket moves to the delivered status" or "the ticket stays where it
+        is";
+      - what a no causes: the ticket is filed as its own `idea`;
+      - your recommendation, with its reason.
+      Several tickets for the same item may share one question when the same answer settles them
+      all. A tracker with more than a handful of questions also gets one opening question:
+      go through them all now, or answer only some and file the rest as ideas with an outbox
+      `proposal` each naming its candidate item.
+    produces:
+      - artifact: pull-plan
+        path: .konductor/tracker-sync/{slug}/pull-plan.md
+        description: Per tracker, what the pull links and files, and the match questions for the owner.
+
+  - id: pull-apply
+    title: Settle the matches and apply the pull
+    phase: Pull
+    condition:
+      agent: the pull plan lists at least one ticket to link or to file
+    instruction: |
+      Ask the owner the plan's questions one at a time, as the plan states them; after each
+      answer, act on it before you ask the next. On a yes, run
+      `bun run tracker-sync link <item-slug> <ticket-id>`. On a no, nothing is needed: the pull
+      files the ticket. For a question the owner chose not to answer now, add one outbox
+      `proposal` naming the ticket and its candidate item, per loops-queues. Record each answer in
+      the plan file. Then run `bun run tracker-sync pull --apply` and `bun run sync`. Its only
+      tracker write is the backlink, which stops the next pull from filing the ticket again.
+    consumes: [pull-plan]
+    updates:
+      - artifact: pull-plan
+        path: .konductor/tracker-sync/{slug}/pull-plan.md
+    gates:
+      - script: bun run check
+
+  - id: reconcile
+    title: Reconcile what the push cannot settle
+    phase: Reconcile
+    instruction: |
+      Run `bun run tracker-sync reconcile`. It lists every ticket whose status, open or closed
+      state, or presence disagrees with its items in a way the forward-only push does not settle,
+      each with a recommendation for both sides. When it lists none, say so and finish the step.
+
+      Otherwise first tell the owner how many there are and offer two ways on: go through them
+      now, one at a time, or record them all with `bun run tracker-sync reconcile --record`,
+      which writes a dated line on each item for a later sync and changes no ticket. The owner
+      may also do some now and record the rest. Ask each mismatch so that it stands on its own:
+      the ticket (id, title, its status and open or closed state) beside the item (slug, title,
+      state), what each side would change into under each option, and your recommendation. Apply
+      each answer before the next question: board changes on the item, tracker changes with
+      `bun run tracker-sync set <tracker>/<id> --status <name>` (or `--close` / `--reopen`)
+      `--apply`. The owner's answer is the direct prompt that allows moving a ticket against the
+      push; without one, never move it. Run `bun run sync` after the last change.
+    gates:
+      - script: bun run check
+
+  - id: publish
+    title: Publish the board changes and report
+    phase: Publish
+    instruction: |
+      Commit every change in the data repo, including entries other sessions left uncommitted in
+      this checkout, with subjects that state what changed. Pull with `--rebase`, re-run
+      `bun run sync` if the rebase brought anything in, and push `master`. These are bookkeeping
+      commits: they need no review.
+
+      Then report to the owner, most important first: what remains open (match questions not
+      asked, mismatches recorded rather than settled, trackers that failed), then what changed
+      on each tracker and on the board, with the counts you kept and the commits you pushed. A
+      sync that stopped short says so in its first sentence. It is not an errand, so do not end
+      with an errand line.
+    gates:
+      - script: >-
+          test -z "$(git status --porcelain)" && git fetch -q &&
+          test -z "$(git log --oneline @{u}..HEAD)"
