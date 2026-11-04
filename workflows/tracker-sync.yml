@@ -20,7 +20,10 @@ steps:
     title: Push board state to the trackers
     phase: Status push
     instruction: |
-      Run `git pull --rebase` so the sync starts from the pushed board, then `bun run tracker-sync status`
+      Check that this checkout is on the data repo's integration branch
+      (`loops.json -> integrationBranch`, `master` when unset); if it is not, stop and tell the
+      owner, because the board changes must land there. Run `git pull --rebase` so the sync
+      starts from the pushed board, then `bun run tracker-sync status`
       as a dry run and read its plan. The push only moves tickets forward and leaves a ticket
       that a human moved further where it is, recording a line on its item instead. When the plan
       shows nothing you would not expect, run `bun run tracker-sync status --apply`. A tracker
@@ -112,8 +115,10 @@ steps:
       session left uncommitted in this checkout are not yours: commit them only where the house
       rules allow it for this checkout; otherwise leave them untouched, and since this step's
       gate needs a clean tree, report the step blocked and name the files. Pull with
-      `--rebase`, re-run `bun run sync` if the rebase brought anything in, and push the
-      checkout's branch to its upstream. These are bookkeeping commits: they need no review.
+      `--rebase`, re-run `bun run sync` if the rebase brought anything in, and push the data
+      repo's integration branch (`loops.json -> integrationBranch`, `master` when unset) to its
+      upstream. These are bookkeeping commits: they need no review. The gate refuses a
+      checkout on any other branch, or one whose upstream tracks another branch.
 
       Then report to the owner, most important first: what remains open (match questions not
       asked, mismatches recorded rather than settled, trackers that failed), then what changed
@@ -122,6 +127,9 @@ steps:
       with an errand line.
     gates:
       - script: >-
-          git rev-parse --verify -q @{u} >/dev/null &&
+          want=$(bun -e 'const c = JSON.parse(require("fs").readFileSync("loops.json", "utf8"));
+          console.log(c.integrationBranch ?? "master")') &&
+          branch=$(git symbolic-ref -q --short HEAD) && test "$branch" = "$want" &&
+          upstream=$(git rev-parse -q --abbrev-ref @{u}) && test "${upstream#*/}" = "$want" &&
           dirty=$(git status --porcelain) && test -z "$dirty" &&
           git fetch -q && ahead=$(git rev-list --count @{u}..HEAD) && test "$ahead" = 0
