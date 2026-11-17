@@ -183,7 +183,7 @@ handoff, or in a different harness) still carries the agreed working decisions:
 - Deferred scope: <confirm the ledger was reconciled; point to it and any required tracker>
 - Build order: <suggested sequence and why; e.g. riskiest interface first, thin vertical slice>
 - Routing: <per work item: orchestrator or delegate, at what model/effort, and why (hard core
-  needing accumulated context vs compressible leaf), per the model-selection skill>
+  needing accumulated context vs compressible leaf)>
 - Orchestrator: <model/effort for the implementing session: the cheapest that still covers the
   hardest orchestrator-bound Routing item. A fresh session must be able to implement the spec;
   continuing the spec session is a cost call, never a dependency, so anything only that

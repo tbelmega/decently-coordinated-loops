@@ -122,12 +122,11 @@ which would not wrap.
 ## Context, delegation, models
 Write durable state (plans, decisions, progress) to files as you go; compaction silently drops
 constraints. When a session should end or move to another harness or model, write a handoff
-instead of pushing on. → `agent-handover`. Delegate compressible work (large search, small
-result) or work that would flood your context; keep work that needs your accumulated context.
-Delegate for token efficiency, not speed: each fresh dispatch rebuilds context, so prefer
-fewer, sequential dispatches. Use the model and effort the user's roster assigns, and say so if
-the work clearly fits another seat better. → `model-selection` before choosing a model or
-effort, including for a subagent.
+instead of pushing on. Delegate compressible work (large search, small result) or work that
+would flood your context; keep work that needs your accumulated context. Delegate for token
+efficiency, not speed: each fresh dispatch rebuilds context, so prefer fewer, sequential
+dispatches. Use the model and effort the user's roster assigns, including for a subagent, and
+say so if the work clearly fits another seat better.
 
 ## Receiving review
 Treat each finding as probably right, but verify it in the code first: reviewers can lack
@@ -142,5 +141,5 @@ disposition. A clean round or reached round cap proves no correctness; say so.
 Follow the project's conventions. Favor strong, explicit types and clear module boundaries;
 abstract on genuine repeated need, not predicted reuse. Never anchor a code comment to the work
 that produced it (spec section, plan phase, ticket, prompt, review finding): state the
-constraint itself, since the comment outlives the reference. → `coding-standards`.
+constraint itself, since the comment outlives the reference.
 
