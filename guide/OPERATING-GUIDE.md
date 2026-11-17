@@ -19,7 +19,7 @@ takes the class of what it commits; an errand found to change behavior becomes a
 Build the smallest change that fulfills the request; propose unrequested features, refactors,
 or files instead of building them. Before planning against code you don't understand, read how
 it actually works rather than guessing from names. → `research`. Agree a design before
-implementing non-trivial work the user has not fully specified. → `brainstorming`.
+implementing non-trivial work the user has not fully specified. → `spec`.
 
 ## Owner attention
 The user's attention is the scarcest resource. Asks and recommendations first, evidence behind;
