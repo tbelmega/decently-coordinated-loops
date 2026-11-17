@@ -60,7 +60,8 @@ There is none. You don't need any.
 
 ## Two layers
 
-- **This repo (shared, public):** the workflow contract as six agent skills
+- **This repo (shared, public):** the operating guide every agent session loads
+  (`guide/OPERATING-GUIDE.md`), the workflow contract as six agent skills
   (`loops-board`, `loops-queues`, `loops-pickup`, `loops-dispatch`, `loops-review`,
   `loops-setup`), the board tools,
   seed templates, and the installer. Update with `git pull` + `./install.sh`.
@@ -93,9 +94,11 @@ Clone this repository, then from its root:
 
 This links the skills into every destination in `setup/skill-dirs.txt` (today
 `~/.claude/skills/`, `~/.agents/skills/` and `~/.kiro/skills/`), seeds the
-data repo (board, inbox, outbox, registries, house rules), and installs a small
-awareness block into your harness's global config so every session knows where the
-board lives. Then:
+data repo (board, inbox, outbox, registries, house rules), and installs two sections
+into your harness's global config: the operating guide, and below it a small awareness
+block so every session knows where the board lives. A plain `./install.sh`, without
+`--seed`, installs the skills and the operating guide only, for a machine with no board.
+Then:
 
 1. Fill in the seeded `HOUSE-RULES.md` TODOs (roster, review mechanism) and your
    projects' gates in `PROJECTS.md`, or ask an agent to interview you for it.

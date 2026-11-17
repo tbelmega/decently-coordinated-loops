@@ -37,30 +37,12 @@ export interface BlockParams {
   dclHome: string;
 }
 
-/** The operating guide's own section tag, and the first receipt line of a guide whose
- * receipt the board's additions extend. */
-export const GUIDE_SECTION_OPEN = "<DECENTLY-CAPABLE-POWERS>";
-const GUIDE_RECEIPT_LINE = "<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE -";
-
-/** Whether a config file already holds an operating guide that defines the receipt the
- * board's additions extend: its section tag as an entire trimmed line, like every other
- * tag here, and that receipt's first line. An older guide with a different receipt gets
- * the full block, so the file is never left without a receipt the additions fit. */
-export function guideDefinesReceipt(content: string): boolean {
-  return content.split("\n").some((line) => line.trim() === GUIDE_SECTION_OPEN) &&
-    content.includes(GUIDE_RECEIPT_LINE);
-}
-
-/** `full` defines work-streams and the whole receipt; `additions` assumes the operating
- * guide in the same file defines both and states only what the board adds. */
-export type ReceiptForm = "full" | "additions";
-
 /** The generic awareness body, rendered with this instance's owner and paths.
  * Owner-specific policy does NOT belong here - it lives in the data repo's
  * HOUSE-RULES.md, which the body points agents at. Each harness wraps it: a markered
  * block for CLAUDE.md/AGENTS.md (renderConfigBlock), or a standalone .mdc rule for
  * Cursor (renderCursorRule). */
-function renderBody({ owner, dataRepo, dclHome }: BlockParams, receipt: ReceiptForm): string {
+function renderBody({ owner, dataRepo, dclHome }: BlockParams): string {
   const itemAdditions = `For a registered item, the first status also names the item's board state in
 parentheses:
 
@@ -80,46 +62,12 @@ Also:
   next-actor, awaiting, next-step and \`links.base-sha\`/\`head-sha\` current, committed and
   pushed, presuming no approval you have not received.`;
 
-  const receiptText = receipt === "additions"
-    ? `End that handoff with the operating guide's completion receipt.
-
-${itemAdditions}`
-    : `End that handoff with this receipt as the last lines you print, as plain paragraphs
-separated by blank lines, never in a code block (a Markdown renderer joins adjacent
-lines, and a code block does not wrap):
-
-    <WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>) - <one sentence: what this work was and what for>
-
-    VERIFICATION: PASSED|FAILED|NOT RUN - <one sentence: what was checked>
-
-    REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN - <reviewer, rounds>
-
-    NEXT STEP/OPTIONS: <who acts next and what; when it is ${owner}'s call, every real alternative, doing nothing included>
-
-The values are closed: write only those listed, because ${owner} and tools read them. A
-step you skipped or could not run, for any reason, is \`NOT RUN\` with the reason; never
-coin another value. \`MERGED\` means in the project's integration branch,
-\`READY TO MERGE\` finished and verified but not merged yet, \`INCOMPLETE\` anything else.
-\`<WORK TYPE>\` is IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS, or TASK when nothing
-narrower fits. Write each sentence for a reader switching in cold (plain words, no slugs
-or finding IDs), then brief evidence: command, HEAD, URL, or ledger. \`WAIVED\` needs
-${owner}'s explicit opt-out; \`REQUESTED\` means a person or asynchronous tool has the
-review and has not finished; a \`BLOCKED\` line also states the risk of merging now:
-what is unreviewed, what covers it anyway, your confidence and why, and the impact if
-wrong. Say "merge", never "land", to ${owner}.
+  const receiptText = `End that handoff with the operating guide's completion receipt.
 
 ${itemAdditions}`;
 
-  const definition = receipt === "additions"
-    ? `Work-streams and errands are as the operating guide defines them; errands also skip
-the board.`
-    : `A **work-stream** is work that changes a project's behavior (for users, calling code, tests
-and CI, or agents reading its instructions) or whose state must outlive the conversation (a
-spec, a decision from ${owner}, a delivery, a later session); when unsure, it is one.
-Anything else is an **errand**: it skips the board, the review and the receipt, and if it
-changed files it ends with the line \`Errand: <what changed>; no behavior change.\` A commit
-takes the class of what it commits, and an errand found to change behavior becomes a
-work-stream.`;
+  const definition = `Work-streams and errands are as the operating guide defines them; errands also skip
+the board.`;
 
   return `## Work-stream board (decently-coordinated-loops)
 ${definition}
@@ -162,11 +110,11 @@ ${owner}'s evident intent diverge, follow the intent and say so, except for the 
 receipt values and the registration check above, which never bend.`;
 }
 
-/** The section DCL upserts inside a shared config file's <GENERATED> wrapper
- * (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md). Pass `additions` when that file already holds
- * the operating guide, so the receipt is defined once per file. */
-export function renderConfigBlock(params: BlockParams, receipt: ReceiptForm = "full"): string {
-  return `${SECTION_OPEN}\n${PROVENANCE}\n${renderBody(params, receipt)}\n${SECTION_CLOSE}\n`;
+/** The board section DCL upserts inside a shared config file's <GENERATED> wrapper
+ * (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md), below the operating guide whose receipt and
+ * work-stream definition it extends (setup/guide.ts installs that guide first). */
+export function renderConfigBlock(params: BlockParams): string {
+  return `${SECTION_OPEN}\n${PROVENANCE}\n${renderBody(params)}\n${SECTION_CLOSE}\n`;
 }
 
 /** Cursor reads global rules as standalone `.mdc` files (YAML frontmatter + body) under
@@ -178,7 +126,7 @@ description: Work-stream board participation and pickup for decently-coordinated
 alwaysApply: true
 ---
 
-${renderBody(params, "full")}
+${renderBody(params)}
 `;
 }
 
@@ -190,7 +138,7 @@ export function renderKiroSteering(params: BlockParams): string {
 inclusion: always
 ---
 
-${renderBody(params, "full")}
+${renderBody(params)}
 `;
 }
 
@@ -279,19 +227,39 @@ function findLegacy(lines: readonly string[]): { pair: TagPair | null; error?: s
   return { pair: null, error: "unmatched, duplicated, or reversed legacy LOOPS markers" };
 }
 
-/** Upserts the section into one config file's <GENERATED> wrapper, creating the file
- * (and its directory) or the wrapper if needed and migrating a legacy markered block.
- * Returns what happened, for logging; `skipped` means the file's tags are malformed
- * or ambiguous and nothing was written.
+/** Which section an upsert manages, and how it relates to the file's other sections. */
+export interface SectionSpec {
+  open: string;
+  close: string;
+  /** Migrate the board's pre-wrapper LOOPS:START/END block (the board section only). */
+  legacy?: boolean;
+  /** A section this one supersedes: replaced in place when this one is absent, removed
+   * when both are present. */
+  retired?: { open: string; close: string };
+  /** A sibling section this one is inserted above when it is first added. */
+  before?: { open: string; close: string };
+}
+
+const BOARD_SECTION: SectionSpec = { open: SECTION_OPEN, close: SECTION_CLOSE, legacy: true };
+
+/** Upserts the board section into one config file's <GENERATED> wrapper. */
+export function upsertConfigBlock(target: string, section: string): UpsertOutcome {
+  return upsertSection(target, section, BOARD_SECTION);
+}
+
+/** Upserts a tagged section into one config file's <GENERATED> wrapper, creating the
+ * file (and its directory) or the wrapper if needed, migrating a legacy markered block
+ * and replacing or removing a retired section. Returns what happened, for logging;
+ * `skipped` means the file's tags are malformed or ambiguous and nothing was written.
  *
  * Accepted limitation (owner ruling 2026-08-23): this read-modify-write is not
- * serialized against the decently-capable-powers installer, so two installers run
- * concurrently on the same file can drop each other's freshly written section -
- * last writer wins. The window is sub-second, both runs are hand-started by the
- * same user, the fail-closed parser keeps the surviving file well-formed, and
- * re-running the losing installer restores its section. A locking protocol was
- * tried and reverted: its own failure modes reviewed worse than the race. */
-export function upsertConfigBlock(target: string, section: string): UpsertOutcome {
+ * serialized against another installer writing the same file, so two installers run
+ * concurrently can drop each other's freshly written section - last writer wins. The
+ * window is sub-second, both runs are hand-started by the same user, the fail-closed
+ * parser keeps the surviving file well-formed, and re-running the losing installer
+ * restores its section. A locking protocol was tried and reverted: its own failure modes
+ * reviewed worse than the race. */
+export function upsertSection(target: string, section: string, spec: SectionSpec): UpsertOutcome {
   mkdirSync(dirname(target), { recursive: true });
   const wrapped = `${GENERATED_OPEN}\n${section}${GENERATED_CLOSE}\n`;
   if (!existsSync(target)) {
@@ -301,55 +269,74 @@ export function upsertConfigBlock(target: string, section: string): UpsertOutcom
   const content = readFileSync(target, "utf8");
   const lines = content.split("\n");
   const sectionLines = section.replace(/\n$/, "").split("\n");
-  const wrapper = scanPairs(lines, GENERATED_OPEN, GENERATED_CLOSE);
+
+  const single = (open: string, close: string, label: string): { pair: TagPair | null; error?: string } => {
+    const scan = scanPairs(lines, open, close);
+    if (scan.error) return { pair: null, error: scan.error };
+    if (scan.pairs.length > 1) return { pair: null, error: `more than one ${open} ${label}` };
+    return { pair: scan.pairs[0] ?? null };
+  };
+  const wrapper = single(GENERATED_OPEN, GENERATED_CLOSE, "block");
   if (wrapper.error) return { action: "skipped", reason: wrapper.error };
-  if (wrapper.pairs.length > 1) {
-    return { action: "skipped", reason: `more than one ${GENERATED_OPEN} block` };
-  }
-  const own = scanPairs(lines, SECTION_OPEN, SECTION_CLOSE);
+  const own = single(spec.open, spec.close, "section");
   if (own.error) return { action: "skipped", reason: own.error };
-  if (own.pairs.length > 1) {
-    return { action: "skipped", reason: `more than one ${SECTION_OPEN} section` };
-  }
-  const legacy = findLegacy(lines);
+  const retired = spec.retired ? single(spec.retired.open, spec.retired.close, "section") : { pair: null };
+  if (retired.error) return { action: "skipped", reason: retired.error };
+  const sibling = spec.before ? single(spec.before.open, spec.before.close, "section") : { pair: null };
+  if (sibling.error) return { action: "skipped", reason: sibling.error };
+  const legacy = spec.legacy ? findLegacy(lines) : { pair: null };
   if (legacy.error) return { action: "skipped", reason: legacy.error };
 
-  if (wrapper.pairs.length === 1) {
-    const { open: wrapperOpen, close: wrapperClose } = wrapper.pairs[0]!;
-    if (
-      own.pairs.length === 1 &&
-      (own.pairs[0]!.open < wrapperOpen || own.pairs[0]!.close > wrapperClose)
-    ) {
-      return {
-        action: "skipped",
-        reason: `${SECTION_OPEN} section outside the ${GENERATED_OPEN} wrapper`,
-      };
+  if (wrapper.pair) {
+    const { open: wrapperOpen, close: wrapperClose } = wrapper.pair;
+    const outside = (pair: TagPair | null): boolean =>
+      pair !== null && (pair.open < wrapperOpen || pair.close > wrapperClose);
+    for (const [pair, tag] of [[own.pair, spec.open], [retired.pair, spec.retired?.open]] as const) {
+      if (outside(pair)) {
+        return { action: "skipped", reason: `${tag} section outside the ${GENERATED_OPEN} wrapper` };
+      }
     }
-    const next = [...lines];
-    if (own.pairs.length === 1) {
-      const pair = own.pairs[0]!;
-      next.splice(pair.open, pair.close - pair.open + 1, ...sectionLines);
-    } else {
-      next.splice(wrapperClose, 0, ...sectionLines);
+    // Managed sections must be disjoint. Each tag pair is validated on its own above, so a
+    // nested or crossing pair would pass; rewriting around it could cut through content it
+    // does not own, including lines outside the wrapper.
+    const managed = [own.pair, retired.pair, sibling.pair].filter((pair): pair is TagPair => pair !== null);
+    for (const x of managed) {
+      for (const y of managed) {
+        if (x !== y && x.open < y.open && y.open <= x.close) {
+          return { action: "skipped", reason: "managed sections overlap" };
+        }
+      }
     }
-    // A leftover legacy block (this tool's own, from before the wrapper existed) is
+    // One pass over the original lines: drop this section's old copy and any retired one,
+    // and emit the new section where it belongs - where its old copy (or the retired one)
+    // stood, but never below the sibling it must precede, and at the wrapper's end when
+    // the file has neither.
+    const drop = new Set<number>();
+    for (const pair of [own.pair, retired.pair]) {
+      if (pair) for (let i = pair.open; i <= pair.close; i++) drop.add(i);
+    }
+    const existing = own.pair ?? retired.pair;
+    const anchor = sibling.pair && !outside(sibling.pair) ? sibling.pair.open : null;
+    let at = existing ? existing.open : anchor ?? wrapperClose;
+    if (anchor !== null && at > anchor) at = anchor;
+    const next: string[] = [];
+    lines.forEach((line, i) => {
+      if (i === at) next.push(...sectionLines);
+      if (!drop.has(i)) next.push(line);
+    });
+    // A leftover legacy block (the board's own, from before the wrapper existed) is
     // folded away: its content now lives in the section that was just written.
     // Everything else outside the tags is reproduced byte for byte.
-    const leftover = findLegacy(next);
+    const leftover = spec.legacy ? findLegacy(next) : { pair: null };
     if (leftover.error) return { action: "skipped", reason: leftover.error };
-    if (leftover.pair) {
-      next.splice(leftover.pair.open, leftover.pair.close - leftover.pair.open + 1);
-    }
+    if (leftover.pair) next.splice(leftover.pair.open, leftover.pair.close - leftover.pair.open + 1);
     writeFileSync(target, next.join("\n"));
-    if (leftover.pair) return { action: "migrated" };
-    return { action: own.pairs.length === 1 ? "replaced" : "appended" };
+    if (leftover.pair || retired.pair) return { action: "migrated" };
+    return { action: own.pair ? "replaced" : "appended" };
   }
 
-  if (own.pairs.length === 1) {
-    return {
-      action: "skipped",
-      reason: `${SECTION_OPEN} section outside any ${GENERATED_OPEN} wrapper`,
-    };
+  for (const [pair, tag] of [[own.pair, spec.open], [retired.pair, spec.retired?.open]] as const) {
+    if (pair) return { action: "skipped", reason: `${tag} section outside any ${GENERATED_OPEN} wrapper` };
   }
   if (legacy.pair) {
     const next = [...lines];

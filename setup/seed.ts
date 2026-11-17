@@ -26,7 +26,6 @@ import { createInterface } from "node:readline/promises";
 import { allReviewers, isReviewerId, reviewerBin, reviewerIds } from "../tools/review/reviewers.ts";
 import {
   detectConfigTargets,
-  guideDefinesReceipt,
   renderConfigBlock,
   renderCursorRule,
   renderKiroReviewerAgent,
@@ -34,6 +33,7 @@ import {
   upsertConfigBlock,
   writeOwnedFile,
 } from "./config-block.ts";
+import { installGuide } from "./guide.ts";
 
 const DCL_HOME = resolve(import.meta.dirname, "..");
 const TEMPLATES = join(DCL_HOME, "setup", "templates");
@@ -327,6 +327,9 @@ function installConfigBlock(opts: Options, root: string): void {
   const block = renderConfigBlock(params);
   const cursorRule = renderCursorRule(params);
   const kiroSteering = renderKiroSteering(params);
+  // The board section extends the guide's receipt, so the guide goes in first: a join
+  // run on its own (`bun run setup`) must not leave a board section without it.
+  installGuide(opts.home);
   const targets = detectConfigTargets(opts.home);
   if (!targets.length) {
     console.log("no harness config directories detected - config block not installed");
@@ -343,9 +346,7 @@ function installConfigBlock(opts: Options, root: string): void {
       const action = writeOwnedFile(target.path, renderKiroReviewerAgent());
       console.log(`  kiro reviewer agent ${action}: ${target.path}`);
     } else {
-      const current = existsSync(target.path) ? readFileSync(target.path, "utf8") : "";
-      const section = guideDefinesReceipt(current) ? renderConfigBlock(params, "additions") : block;
-      const outcome = upsertConfigBlock(target.path, section);
+      const outcome = upsertConfigBlock(target.path, block);
       if (outcome.action === "skipped") {
         console.log(`  ! config block skipped: ${target.path} - ${outcome.reason}; fix the tags and re-run`);
       } else {

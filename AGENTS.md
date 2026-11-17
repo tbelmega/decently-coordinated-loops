@@ -16,9 +16,13 @@ the workflow, that's the skills under `skills/`.)
 - `workflows/` - optional fuse-flow workflows for procedures a skill also describes in prose
   (`tracker-sync.yml`: the attended tracker sync). The skill stays the source of the rules;
   `fuse-flow validate workflows/` checks a workflow's format.
-- `setup/` - `seed.ts`, the config-block writer, and `templates/` for seeded data
-  repos.
-- `install.sh` - machine wiring (skill symlinks, seed chaining). Bash only.
+- `guide/OPERATING-GUIDE.md` - the operating guide: the working defaults every session
+  loads, on every machine, board or not. `setup/guide.ts` installs it into each harness
+  config as the `<OPERATING-GUIDE>` section, above the board section whose receipt it
+  defines. Edit the guide here, then re-run `install.sh`.
+- `setup/` - `seed.ts`, the config-block writer, the guide installer, and `templates/`
+  for seeded data repos.
+- `install.sh` - machine wiring (skill symlinks, the guide via bun, seed chaining).
 
 ## Rules
 

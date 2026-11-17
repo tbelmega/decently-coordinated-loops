@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { GUIDE_SECTION_OPEN, RETIRED_GUIDE_SECTION_CLOSE, RETIRED_GUIDE_SECTION_OPEN } from "./marks.ts";
 import {
   GENERATED_OPEN,
   GENERATED_CLOSE,
@@ -22,7 +23,6 @@ import {
   LEGACY_END_MARK,
   LEGACY_START_MARK,
   detectConfigTargets,
-  guideDefinesReceipt,
   renderConfigBlock,
   renderCursorRule,
   renderKiroSteering,
@@ -449,60 +449,9 @@ describe("generated receipt contract", () => {
     ["cursor rule", renderCursorRule(params)],
     ["kiro steering", renderKiroSteering(params)],
   ];
-  const additions = renderConfigBlock(params, "additions");
-  // What a registered item adds to the receipt holds in both forms.
-  const allForms: ReadonlyArray<readonly [string, string]> = [...wrappers, ["additions block", additions]];
-
-  test.each(wrappers)("%s states the four receipt lines in order", (_name, rendered) => {
-    const positions = [
-      rendered.indexOf("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)"),
-      rendered.indexOf("VERIFICATION: PASSED|FAILED|NOT RUN"),
-      rendered.indexOf("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN"),
-      rendered.indexOf("NEXT STEP/OPTIONS:"),
-    ];
-
-    expect(positions.every((position) => position >= 0)).toBe(true);
-    expect(positions).toEqual([...positions].sort((a, b) => a - b));
-  });
-
-  // Several UIs render the handoff as Markdown, which joins adjacent lines into one
-  // paragraph; the template itself must model the blank-line separation it requires.
-  test.each(wrappers)("%s separates the receipt lines with blank lines", (_name, rendered) => {
-    expect(rendered).toMatch(
-      /<WORK TYPE>: MERGED\|READY TO MERGE\|INCOMPLETE[^\n]*\n\n {4}VERIFICATION: [^\n]*\n\n {4}REVIEW: [^\n]*\n\n {4}NEXT STEP\/OPTIONS:/,
-    );
-    expect(flatten(rendered)).toContain(
-      "as plain paragraphs separated by blank lines, never in a code block",
-    );
-  });
-
-  test.each(wrappers)("%s closes the values and defines the merge states", (_name, rendered) => {
-    const flat = flatten(rendered);
-
-    expect(flat).toContain("The values are closed: write only those listed");
-    expect(flat).toContain(
-      "`MERGED` means in the project's integration branch, `READY TO MERGE` finished and " +
-        "verified but not merged yet, `INCOMPLETE` anything else.",
-    );
-    expect(flat).toContain('Say "merge", never "land", to casey.');
-  });
-
-  test.each(wrappers)(
-    "%s makes each receipt line readable without the thread's context",
-    (_name, rendered) => {
-      const flat = flatten(rendered);
-
-      expect(flat).toContain(
-        "`<WORK TYPE>` is IMPLEMENTATION, FIX, SPEC, PLAN, RESEARCH, DOCS, or TASK when " +
-          "nothing narrower fits.",
-      );
-      expect(flat).toContain("Write each sentence for a reader switching in cold");
-      expect(flat).toContain(
-        "a `BLOCKED` line also states the risk of merging now: what is unreviewed, what " +
-          "covers it anyway, your confidence and why, and the impact if wrong.",
-      );
-    },
-  );
+  // Every wrapper carries only the board's additions; the receipt itself is the operating
+  // guide's (setup/guide.test.ts).
+  const allForms = wrappers;
 
   test.each(allForms)("%s names the item's board state after the first status", (_name, rendered) => {
     for (const value of [
@@ -567,32 +516,20 @@ describe("generated receipt contract", () => {
     );
   });
 
-  // The operating guide in the same file already defines work-streams and the receipt;
-  // the additions form must not restate either, or the file carries two definitions to
-  // drift apart.
-  test("the additions block defers the receipt and the definitions to the operating guide", () => {
-    const flat = flatten(additions);
+  // The operating guide in the same file defines work-streams and the receipt; the board
+  // section must not restate either, or the file carries two definitions to drift apart.
+  test.each(wrappers)("%s defers the receipt and the definitions to the operating guide", (_name, rendered) => {
+    const flat = flatten(rendered);
 
     expect(flat).toContain("End that handoff with the operating guide's completion receipt.");
     expect(flat).toContain("Work-streams and errands are as the operating guide defines them");
-    expect(additions).not.toContain("<WORK TYPE>:");
-    expect(additions).not.toContain("VERIFICATION: PASSED|FAILED|NOT RUN");
-    expect(additions).not.toContain("A **work-stream** is work that changes");
+    expect(rendered).not.toContain("<WORK TYPE>:");
+    expect(rendered).not.toContain("VERIFICATION: PASSED|FAILED|NOT RUN");
+    expect(rendered).not.toContain("A **work-stream** is work that changes");
   });
 
-  test("only a guide that defines the merge-state receipt gets the additions form", () => {
-    const receipt = "    <WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE - <one sentence>\n";
-    expect(guideDefinesReceipt(`# Rules\n<GENERATED>\n  <DECENTLY-CAPABLE-POWERS>\n${receipt}`)).toBe(true);
-    // An older guide whose receipt the additions do not extend.
-    expect(guideDefinesReceipt(
-      "<DECENTLY-CAPABLE-POWERS>\n    <WORK TYPE>: COMPLETE|INCOMPLETE - <one sentence>\n",
-    )).toBe(false);
-    expect(guideDefinesReceipt(`# Rules\nmentions <DECENTLY-CAPABLE-POWERS> in prose\n${receipt}`)).toBe(false);
-    expect(guideDefinesReceipt("")).toBe(false);
-  });
-
-  test("an implemented item whose review is still pending has a truthful first status", () => {
-    expect(flatten(additions)).toContain(
+  test.each(wrappers)("%s gives an implemented item with a pending review a truthful first status", (_name, rendered) => {
+    expect(flatten(rendered)).toContain(
       "the second whenever the review has not passed (requested, waived, or not configured)",
     );
   });
@@ -607,11 +544,14 @@ describe("config block", () => {
     const dir = seedNewRepo([], home);
     const claudeMd = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
     expect(claudeMd).toContain("# My rules");
-    expect(claudeMd).toContain(`${GENERATED_OPEN}\n${SECTION_OPEN}\n`);
+    expect(claudeMd).toContain(`${GENERATED_OPEN}\n${GUIDE_SECTION_OPEN}\n`);
+    expect(claudeMd).toContain(`\n${SECTION_OPEN}\n`);
     expect(claudeMd).toContain(`${SECTION_CLOSE}\n${GENERATED_CLOSE}\n`);
     expect(claudeMd).toContain(dir);
     expect(claudeMd).toContain("casey");
-    expect(claudeMd).toContain("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)");
+    // The guide that defines the receipt sits above the board section that extends it.
+    expect(claudeMd.indexOf(GUIDE_SECTION_OPEN)).toBeGreaterThan(-1);
+    expect(claudeMd.indexOf(GUIDE_SECTION_OPEN)).toBeLessThan(claudeMd.indexOf(SECTION_OPEN));
     expect(claudeMd).toContain("REVIEW: PASSED|REQUESTED|BLOCKED|NOT CONFIGURED|WAIVED|NOT RUN");
     // Re-running replaces the block instead of duplicating it.
     const rerun = run(["run", SEED, dir, "--join", "--owner", "casey"], { home });
@@ -619,28 +559,26 @@ describe("config block", () => {
     const after = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
     expect(after.split(SECTION_OPEN).length).toBe(2);
     expect(after.split(GENERATED_OPEN).length).toBe(2);
+    expect(after.split(GUIDE_SECTION_OPEN).length).toBe(2);
     // No .codex dir in this fake home - must not have been created.
     expect(existsSync(join(home, ".codex"))).toBe(false);
   });
 
-  test("a config file that holds the operating guide gets only the board's receipt additions", () => {
+  test("seeding replaces a retired guide with the operating guide, above the board section", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-home-"));
     mkdirSync(join(home, ".claude"), { recursive: true });
     writeFileSync(
       join(home, ".claude", "CLAUDE.md"),
-      `${GENERATED_OPEN}\n<DECENTLY-CAPABLE-POWERS>\n    <WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE - guide\n</DECENTLY-CAPABLE-POWERS>\n${GENERATED_CLOSE}\n`,
+      `${GENERATED_OPEN}\n${RETIRED_GUIDE_SECTION_OPEN}\nold guide\n${RETIRED_GUIDE_SECTION_CLOSE}\n${GENERATED_CLOSE}\n`,
     );
-    mkdirSync(join(home, ".claude-solo"), { recursive: true });
-    writeFileSync(join(home, ".claude-solo", "CLAUDE.md"), "# Solo rules\n");
 
     seedNewRepo([], home);
 
-    const withGuide = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
-    expect(withGuide).toContain("End that handoff with the operating guide's completion receipt.");
-    expect(withGuide).not.toContain("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)");
-    expect(withGuide).toContain("INCOMPLETE - guide\n</DECENTLY-CAPABLE-POWERS>");
-    const solo = readFileSync(join(home, ".claude-solo", "CLAUDE.md"), "utf8");
-    expect(solo).toContain("<WORK TYPE>: MERGED|READY TO MERGE|INCOMPLETE (<item state>)");
+    const text = readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8");
+    expect(text).not.toContain(RETIRED_GUIDE_SECTION_OPEN);
+    expect(text).not.toContain("old guide");
+    expect(text.indexOf(GUIDE_SECTION_OPEN)).toBeLessThan(text.indexOf(SECTION_OPEN));
+    expect(text).toContain("End that handoff with the operating guide's completion receipt.");
   });
 
   test("seeds every alternate Claude profile, migrating legacy blocks", () => {

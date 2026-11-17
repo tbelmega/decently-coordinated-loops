@@ -3,10 +3,14 @@
 # harnesses.
 #
 # Default (no args):
+#   - Installs the operating guide (guide/OPERATING-GUIDE.md) into every detected
+#     harness config via setup/install-guide.ts, which needs bun; without bun the
+#     skills are still linked and the guide is skipped with a warning.
 #   - Symlinks each skills/<name>/ into every destination listed in
-#     setup/skill-dirs.txt, the generated mirror of setup/harnesses.ts. This script
-#     stays bash-only (no bun on the plain path), so it reads the list rather than
-#     the registry; setup/harnesses.test.ts fails if the two drift apart. A path
+#     setup/skill-dirs.txt, the generated mirror of setup/harnesses.ts. Skills are
+#     linked in bash alone, so a machine without bun still gets them; that is why this
+#     reads the list rather than the registry, and setup/harnesses.test.ts fails if
+#     the two drift apart. A path
 #     that already exists and is not a link to this repo is left untouched and
 #     reported.
 #
@@ -112,6 +116,17 @@ export DCL_CREATED_SKILL_DIRS="$created_skill_dirs"
 for extra_dir in ${extra_config_dirs[@]+"${extra_config_dirs[@]}"}; do
   link_skills "$extra_dir/skills"
 done
+
+# The operating guide goes onto every machine, data repo or not. A --seed run installs it
+# itself, ahead of the board section that extends it.
+if [ "${1:-}" != "--seed" ]; then
+  echo
+  if command -v bun >/dev/null 2>&1; then
+    bun "$REPO_DIR/setup/install-guide.ts"
+  else
+    echo "! bun not found (https://bun.sh) - skills are linked, but the operating guide was not installed"
+  fi
+fi
 
 if [ "${1:-}" = "--seed" ]; then
   shift
