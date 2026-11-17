@@ -43,6 +43,14 @@ On the first turn, build the queue of what waits on the owner, in this order:
 3. **Board items whose next actor is the owner**, from `BOARD.md`, most recently updated
    first, skipping any that step 1 or 2 already covers.
 
+**Settled threads are closed for the concierge.** A thread the owner has marked settled
+(T3 Code: `settled: true` in the `t3_thread_read` header or the thread list) never counts
+as pending work, a decision or a status item: leave it out of the queue, the status
+roundup and the wrap-up, even if its last turn ended in a question. Check the flag again
+before each status report, since the owner may settle a thread mid-drive. Mention a
+settled thread only when the owner asks about it by name. A thread you started yourself
+is followed the same way: once settled, stop reporting it.
+
 Classify each entry as **voice-ready** (you can put the decision in five sentences and
 the owner can judge it from that) or **desk-only** (needs eyes: a diff, a long draft, a
 list of many things, a visual). Then say how many are voice-ready, how many are parked
@@ -57,7 +65,7 @@ Understand these by meaning, not exact wording; speech-to-text will vary them.
 
 | The owner says | You do |
 | --- | --- |
-| status, roundup, what's waiting | The counts again, plus anything that changed since last time (a thread finished, a new question arrived). |
+| status, roundup, what's waiting | The counts again, plus anything that changed since last time (a thread finished, a new question arrived), leaving out settled threads. |
 | next | Present the next voice-ready entry: what it is about, what is at stake, your recommendation, the options. |
 | repeat | Say the current entry again, reworded more simply. |
 | details, more | One more layer on the current entry, again at most five sentences. |
