@@ -9,7 +9,7 @@ drains the outbox.
 your phone, any time, in any order. Partial answers and "later" are valid answers.
 Then tell any agent "process the outbox".
 
-**For agents:** the entry contract, answer routing, and interview mode live in the
+**For agents:** the entry contract and answer routing live in the
 loops-queues skill (`{{DCL_HOME}}/skills/loops-queues/SKILL.md`).
 
 ## Open

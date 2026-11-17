@@ -64,7 +64,7 @@ Run the phases in order, each first as a dry run, from the data repo:
 3. **Reconcile** - `bun run tracker-sync reconcile` lists every ticket whose status,
    open/closed state or presence disagrees with its items in a way the forward-only push
    will not settle, each with a recommendation for both sides. Attended, interview the
-   owner one ticket at a time (loops-queues interview format: the ticket and item side by
+   owner one ticket at a time (interview-me format: the ticket and item side by
    side, then the recommendation) and apply each answer in the same run: board changes on
    the item, tracker changes with `bun run tracker-sync set <tracker>/<id> --status <name>`
    (or `--close` / `--reopen`) `--apply`. The owner's answer is the direct prompt that

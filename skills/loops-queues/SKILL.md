@@ -1,6 +1,6 @@
 ---
 name: loops-queues
-description: Use when processing the inbox ("process the inbox"), writing to or processing the outbox ("process the outbox"), or when the owner says "interview me" without naming another topic; the contracts for both queues and interview mode
+description: Use when the owner mentions the inbox or the outbox (processing, writing to, or asking about either), or asks what work is outstanding or waiting for them; the contracts for both queues and the owner's waiting work
 ---
 
 # The queues: inbox and outbox
@@ -139,19 +139,15 @@ sync run to observe the entry in `## Open`, and deleting it early strands the ro
 Surfacing is a delivery mechanism, not a licence to ask more. What deserves an entry
 at all is unchanged, including resolving first everything you can resolve yourself.
 
-## Interview mode
+## The owner's waiting work
 
-When the owner says "interview me" without naming another topic (optionally with a time
-budget): pull the board and the outbox, then interview live, one question at a time,
-highest-leverage first:
+When the owner asks what is outstanding or what waits for them: pull the board and the
+outbox, and answer with what needs them, highest leverage first:
 
 1. blockers on in-progress work,
 2. open outbox entries,
 3. autonomy approvals for near-eligible items,
-4. probing vague `idea` items toward spec-readiness.
+4. vague `idea` items that need probing toward spec-readiness.
 
-Each question stands on its own: what is at stake, the options and what each causes, and
-your recommendation, never a slug, finding ID or earlier option the owner would have to
-look up. Use structured multiple-choice prompts where the harness supports them. Route every
-answer immediately; an interview ends with the board updated and the outbox
-shorter, not with notes to file later.
+When they settle these, conduct it per interview-me and route every answer immediately: it
+ends with the board updated and the outbox shorter, not with notes to file later.

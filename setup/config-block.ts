@@ -139,8 +139,9 @@ concept that has become real work), offer ${owner} to register it, and say what 
 a board item, review and pickup. Register it (\`PROJECTS.md\` + \`loops.json\`) only on
 ${owner}'s yes. A repository that only hosts errands gets no offer.
 
-Phrases from ${owner} and the skill each one loads: "process the inbox", "process the
-outbox", "interview me" with no other topic → loops-queues; "sync the tracker" →
+Phrases from ${owner} and the skill each one loads: any mention of the inbox or outbox
+("process the inbox", "process the outbox"), or asking what work waits for ${owner} →
+loops-queues; "interview me" in any form → interview-me; "sync the tracker" →
 loops-board; "pick up the next available piece of work", or any unattended work →
 loops-pickup; dispatch duty → loops-dispatch. Questions only ${owner} can answer go to \`${dataRepo}/OUTBOX.md\` per
 loops-queues. If this harness cannot load skills by name, read
