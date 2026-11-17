@@ -12,7 +12,8 @@
 #     reads the list rather than the registry, and setup/harnesses.test.ts fails if
 #     the two drift apart. A path
 #     that already exists and is not a link to this repo is left untouched and
-#     reported.
+#     reported, except a link a decently-capable-powers install made to a skill this
+#     repo now carries, which is repointed here.
 #
 # --config-dir <dir> (repeatable): also symlink the skills into <dir>/skills.
 #   Use it for each extra Claude profile / CLAUDE_CONFIG_DIR you run - e.g. a
@@ -42,10 +43,28 @@ canonical_dir() {
   (cd -P "$1" 2>/dev/null && pwd -P)
 }
 
+# Is $1 a link an earlier decently-capable-powers (DCP) install made: one into
+# <checkout>/skills/<name>, where <checkout> is a DCP clone (its installer says so) or, if
+# that clone is gone, a directory named decently-capable-powers? DCL now carries skills that
+# came from DCP, and without this its install would report those links and leave them.
+is_dcp_skill_link() {
+  local destination skills checkout
+  destination="$(readlink "$1")"
+  case "$destination" in /*) ;; *) destination="$(dirname "$1")/$destination" ;; esac
+  skills="$(dirname "$destination")"
+  [ "$(basename "$skills")" = skills ] || return 1
+  checkout="$(dirname "$skills")"
+  if [ -f "$checkout/install.sh" ]; then
+    grep -q "deploy decently-capable-powers" "$checkout/install.sh"
+  else
+    [ ! -e "$checkout" ] && [ "$(basename "$checkout")" = decently-capable-powers ]
+  fi
+}
+
 link_skills() {
   local target_root="$1"
   mkdir -p "$target_root"
-  local linked=0 current=0
+  local linked=0 current=0 taken=0
   for skill_dir in "$REPO_DIR"/skills/*/; do
     [ -d "$skill_dir" ] || continue
     local name link
@@ -54,6 +73,11 @@ link_skills() {
     if [ -L "$link" ] && [ -n "$(canonical_dir "$link")" ] &&
        [ "$(canonical_dir "$link")" = "$(canonical_dir "$skill_dir")" ]; then
       current=$((current + 1))
+    elif [ -L "$link" ] && is_dcp_skill_link "$link"; then
+      rm -f "$link"
+      ln -s "${skill_dir%/}" "$link"
+      echo "  ~ $link taken over from decently-capable-powers"
+      taken=$((taken + 1))
     elif [ -e "$link" ] || [ -L "$link" ]; then
       echo "  ! $link exists and is not a link to this repo - left untouched"
     else
@@ -61,7 +85,7 @@ link_skills() {
       linked=$((linked + 1))
     fi
   done
-  echo "  $target_root: $linked newly linked, $current already current"
+  echo "  $target_root: $linked newly linked, $taken taken over, $current already current"
 }
 
 # Pull optional --config-dir values out of the args; everything else (notably
