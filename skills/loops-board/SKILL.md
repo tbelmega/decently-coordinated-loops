@@ -119,7 +119,7 @@ links:
   spec-sha: <the spec commit on spec-branch>
   branch: <agent branch>
   pr: <review URL, when the review mechanism is PR-based>
-  stack-parent: <preceding item in this worktree stack>
+  stack-parent: <legacy: preceding item of a stack; new items never set it>
   base-sha: <commit at which this item's implementation began>
   head-sha: <reviewed handoff commit for this item>
 ---
@@ -154,12 +154,8 @@ is derived from it and the targets' merged status, never stored separately.
 A target is **satisfied** only when its work is on the project's integration branch:
 `bun run check-integration-status` reports it MERGED, or its state is
 `merged`/`tested`/`delivered`/`accepted`. `implemented` is **not** satisfied (review
-requested is not merged), nor is `dropped`. Exception: deliberate stacking within one
-permanent slot may build on an unmerged target when the new item records that target as
-`links.stack-parent`, its `links.base-sha` equals the target's `links.head-sha`, and Git
-confirms that commit is the new branch's ancestor. This exact relationship satisfies a
-dependency for the stacked item; a shared branch name alone does not. (`bun run ready`
-does not know this exception; check it yourself.)
+requested is not merged), nor is `dropped`. Slots carry one work-stream at a time, so
+new work never builds on an unmerged target.
 
 **Descriptive vs prescriptive.** A *descriptive* item, documenting behavior that already
 exists (runbooks, references, "how it works" notes), must declare `depends-on` for every
@@ -194,15 +190,17 @@ project repo at its registered specs location (`PROJECTS.md`), referenced via
 - **A `spec-filed` spec must be reachable by other agents.** Flip to `spec-filed` only
   when the spec commit is on the project's integration branch, or pushed on an agent
   branch recorded as `links.spec-branch` (+ `links.spec-sha`); a spec only in a local
-  checkout is not filed. Implementation bases on that recorded branch/commit (as a stack
-  where the project uses permanent slots), so the spec is in the implementor's tree.
+  checkout is not filed. Implementation continues in the slot carrying that branch (spec
+  and implementation are one work-stream there) or starts after the spec is merged, so
+  the spec is in the implementor's tree.
   (`links.branch`/`base-sha`/`head-sha` stay reserved for the reviewed implementation
   range; the integration check reads them.)
 
 ## Update rules
 
-1. **Read `BOARD.md` before starting a work-stream** in a registered project. Errands
-   skip the board.
+1. **Read `BOARD.md` before starting a work-stream** in a registered project, and read
+   `references/worktree-slots.md` before touching branch state for it. Errands skip the
+   board.
 2. When an item's state or next step changes: update its item file (state, next-step,
    next-actor, awaiting, updated, append a log line), then run `bun run sync` (or
    hand-edit the board row when a sync isn't warranted).

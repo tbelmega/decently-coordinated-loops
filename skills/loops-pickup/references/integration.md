@@ -5,7 +5,8 @@ integration to agents and the item's review has passed. Without that delegation,
 the owner-owned `review-merge` state; never integrate.
 
 1. **Refresh the integration ref after review.**
-2. **Stacked child:** it never carries integration authority for its parent. While
+2. **Legacy stacked child** (an item recorded with `links.stack-parent` before slots
+   stopped stacking): it never carries integration authority for its parent. While
    `links.stack-parent` is not integrated, leave the child at `implemented` and wait. Once
    the parent is integrated, replay only the child's recorded range with
    `git rebase --onto <integration-head> <base-sha> <working-branch>`; never a normal

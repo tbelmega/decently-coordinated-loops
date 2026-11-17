@@ -30,7 +30,7 @@ Run from the **target repository (not the data repo)**, on the branch under revi
 
 ```bash
 bun "$DCL_HOME/tools/review/cli-review.ts" start --item <item-slug> \
-  --base <integration-ref-or-stack-parent-sha> --data-repo <data-repo> \
+  --base <integration-ref> --data-repo <data-repo> \
   --implementer-harness <harness> --implementer-model <model> \
   --implementer-effort <effort>
 ```
@@ -43,7 +43,7 @@ value until the base changes.
 
 1. **Prepare.** Run the project's typecheck and tests, commit, and leave a clean tree.
    After the pre-review rebase loops-pickup requires, use the refreshed integration ref as
-   `--base`; for an unmerged stacked parent, its exact handoff HEAD.
+   `--base`.
 2. **Start a round.** It reviews `<base-sha>..HEAD` into an item-scoped ledger under
    `.reviews/`.
 3. **Decide each finding.** Read the Markdown ledger, verify each finding against the code,
@@ -181,7 +181,6 @@ prose next to the receipt:
 | `cap_exit=true residual_obligations=n` | Name the residual obligations. |
 | `test_cap_exit=true ...` | Name the fixes and the test evidence. |
 
-Record `links.base-sha` and `links.head-sha` on the item, plus `links.stack-parent` when
-stacked, so later branch movement cannot change the recorded range. Keep state, next actor,
+Record `links.base-sha` and `links.head-sha` on the item, so later branch movement cannot change the recorded range. Keep state, next actor,
 and next step accurate. **A clean review is merge evidence, not merge authority:** resolve
 authorization and fast-forward conditions from `HOUSE-RULES.md → Merge policy`.

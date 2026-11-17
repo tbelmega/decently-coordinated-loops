@@ -14,8 +14,8 @@ single move everything that history rewriting would otherwise have to chase:
   time. A fresh repository starts with whatever identity you choose now.
 - **Commit messages written for a private audience.** Early messages may name private
   repositories, machines, or people.
-- **Local tags and branches.** `review-base/*` tags from the bundled reviewer, and any
-  `pickup/*` branches, are working state that no reader needs.
+- **Local tags and branches.** `review-base/*` tags from the bundled reviewer, and the
+  `agents/*` slot branches, are working state that no reader needs.
 
 `git filter-repo` is the alternative if the history itself is worth keeping. It is
 strictly more work and strictly easier to get wrong: every reachable commit from every

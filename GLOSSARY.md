@@ -29,7 +29,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Delegated follow-up**: A finding disposition that assigns remediation to a separate active board item under the review policy's validation rules.
 - **Delegated integration**: A merge policy that authorizes an agent to fast-forward reviewed work onto the integration branch under specified safeguards. Delegated landing is a synonym retained in existing configuration and policy wording.
 - **Delivered state**: The board state asserting that verified work was released to the owner's target environment and now awaits acceptance.
-- **Dependency gate**: The rule that an item is not ready until each required `depends-on` target has landed or qualifies as its exact stack parent.
+- **Dependency gate**: The rule that an item is not ready until each required `depends-on` target has landed.
 - **Deterministic manifest**: The persisted reproducible inventory of files, hunks, instructions, and linked context supplied to a review round.
 - **Dispatcher**: A long-lived session that holds a recurring job and invokes unattended pickup on its configured schedule.
 - **Disposition**: The persisted decision describing how a review finding is handled, such as accepted, rejected, waived, or deferred.
@@ -63,7 +63,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Participation gate**: The checkout registration check that decides whether normal board operations apply to the current repository.
 - **Patch-equivalent rebase**: A base rewrite that preserves the reviewed patch's effective content and may retain review evidence where policy permits.
 - **Periodic dispatch**: Recurring unattended pickup that must perform preflight and substantive eligible work during each firing.
-- **Permanent slot**: A documented persistent worktree and branch lane used for a bounded sequence of unlanded items.
+- **Permanent slot**: A persistent worktree `.worktrees/<host>-<tool>-<n>` on the fixed branch `agents/<host>-<tool>-<n>`, owned by one host and reused for one work-stream at a time; the default place agents work.
 - **Pointer grammar**: The restricted syntax accepted for repository and branch references in cross-workstream review dispositions.
 - **Prior-obligation sweep**: The required resolution or accurate parking of unfinished duties from earlier work before a dispatcher begins new work.
 - **Promoted refinement**: An approved board-side draft committed to the project's spec location, after which that spec becomes authoritative.
@@ -84,7 +84,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Spec gate**: The rule that unattended authorization does not substitute for a concrete, reachable, owner-approved implementation specification.
 - **Spec-filed state**: The board state asserting that an owner-approved specification is committed and reachable at the item's recorded spec link.
 - **Spec-sized**: Too broad or decision-heavy to implement from the item alone, requiring an approved spec or an explicit owner waiver.
-- **Stack parent**: The preceding item whose exact unlanded reviewed head is the deliberate base of a child item in the same slot.
+- **Stack parent**: Legacy: the preceding item whose unlanded reviewed head was the base of a child item in the same slot, from before slots stopped stacking.
 - **Stagger offset**: A deliberate schedule shift that prevents several dispatchers from firing simultaneously.
 - **Stale review**: Review evidence that no longer applies because its branch, base, `HEAD`, or non-metadata content changed and no carry-over covers the move.
 - **Stopped ask**: An outbox question or approval request that blocks progress and must be surfaced directly to the owner at attended handoff.

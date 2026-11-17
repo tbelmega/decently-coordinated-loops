@@ -67,5 +67,5 @@ ordinary prose.
   itself (at most two cheap-to-reverse calls per item, one-way doors excluded) lives only
   in the skill.
 - **House rules win.** Instances legitimately narrow generic mechanics (for example,
-  forbidding stacked items in a permanent slot); the skill states the priority once rather
+  opting a project out of slots); the skill states the priority once rather
   than enumerating each local exception.

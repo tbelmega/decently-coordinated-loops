@@ -116,7 +116,8 @@ Run from the data-repo root:
 | --- | --- |
 | `bun run check` | Report-only integrity check: board vs item files, closed-set validation, version-stamp drift. |
 | `bun run sync` | Regenerate `BOARD.md` from the item files, move items between `items/`/`for-delivery/`/`archive/` per state. Lock-guarded and idempotent, so agents can run it freely. |
-| `bun run check-integration-status [--apply]` | Detect which items' work is integrated into the integration branch, via the forge API (`github` adapter) or pure git patch-id comparison (`git` adapter). Recorded `base-sha..head-sha` ranges keep stacked items independent as their branch advances. `--apply` records observed integration as the existing `merged` board state. It does not perform Git integration. `bun run landed` is retained as a compatibility alias. |
+| `bun run check-integration-status [--apply]` | Detect which items' work is integrated into the integration branch, via the forge API (`github` adapter) or pure git patch-id comparison (`git` adapter). Recorded `base-sha..head-sha` ranges keep one item's work apart from the next as a slot branch is reused. `--apply` records observed integration as the existing `merged` board state. It does not perform Git integration. `bun run landed` is retained as a compatibility alias. |
+| `bun <DCL>/tools/cli-slots.ts --project <name> --host <host> --tool <tool>` | List the project's permanent worktree slots on this host, which are idle (content on the integration branch, clean, unclaimed), the first idle one and the next free slot name. Moves no ref; it fetches, and its merge check stores unreferenced objects that `git gc` prunes. `--item <slug>` leaves that item's own claim out, to re-check a contested slot. |
 
 If the bundled local reviewer is active, run it once from the target project at the
 final handoff of a tracked item. `cli-review.ts status --item <item-slug> --data-repo <data-repo>`

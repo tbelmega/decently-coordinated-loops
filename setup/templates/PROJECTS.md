@@ -22,7 +22,7 @@ Entry template - copy for each new project:
   its board URL, and any Git automation configured on that board - omit when the DCL
   board is the sole authority>`
 - review mechanism: `<per-project override of HOUSE-RULES.md's review mechanism, if any>`
-- worktrees / branches: `<isolated per item, or permanent slot paths and their persistent base branches>`
+- worktrees / branches: `<omit for the default permanent slots (loops-board → worktree-slots); "main checkout" to opt out and work on the integration branch>`
 - notes: `<credentials and anything else agents must know>`
 ```
 

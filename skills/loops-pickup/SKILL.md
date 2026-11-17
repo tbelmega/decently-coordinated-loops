@@ -33,8 +33,8 @@ Before claiming anything new, in order:
      `next-actor: agent`, `autonomy: auto`, and the next-step (record by hand only when
      the adapter cannot see the integration, such as a squash with edits). Then verify it
      ("Verify an integrated item").
-4. **Permanent slot:** if the project documents permanent slots, read
-   `references/permanent-slots.md` before touching branch state.
+4. **Your slot:** read loops-board's `references/worktree-slots.md` before touching
+   branch state; it syncs the slot and stops on unmerged content.
 
 **Periodic firings complete the sweep, then do substantive work.** In a periodic wakeup,
 steps 1-4 are one preflight, not stopping points. Afterwards continue through project and
@@ -136,9 +136,9 @@ if none exists).
   path as `execution.worktree`, and push that update **before writing implementation
   code**. Update it if work moves; keep it until the checkout can be reaped or the item is
   abandoned.
-- Projects with documented permanent slots: `references/permanent-slots.md`. Otherwise,
-  branch `pickup/<item-slug>` from the integration branch rather than committing to that
-  branch directly.
+- Work in a permanent slot per loops-board's `references/worktree-slots.md` (unattended:
+  the first idle slot; with none idle, take another candidate), or in the main checkout
+  where the project opts out. Never create a per-item branch.
 - **What licenses these branch and worktree operations.** Claiming the item is the owner's
   standing instruction to perform them in that project, so a general rule against creating
   branches or worktrees unasked does not bar them here. That rule does still bar touching
@@ -155,8 +155,7 @@ if none exists).
 ## 5. Deliver and iterate
 
 1. **Prepare the review candidate.** Refresh the integration ref and rebase the working
-   branch onto it (a stacked item whose parent is not integrated keeps the parent's
-   recorded HEAD as base). Resolve conflicts, rerun the quality gate, and record the base
+   branch onto it. Resolve conflicts, rerun the quality gate, and record the base
    as `links.base-sha`. Owner-instructed work directly on the integration branch is outside
    this flow.
 2. **Request review** per `HOUSE-RULES.md → Review mechanism`, referencing the spec. If
@@ -177,8 +176,7 @@ if none exists).
    never as an implicit dependency.
 4. **Integrate only when house rules explicitly delegate it,** and then only as a
    fast-forward of the reviewed head using the exact-lease procedure in
-   `references/integration.md`; never `--force` or a broad lease, and a stacked child never
-   integrates its parent. A moved integration branch means rebase, rerun the gate, and
+   `references/integration.md`; never `--force` or a broad lease. A moved integration branch means rebase, rerun the gate, and
    carry the review over (a fresh round only when a conflict resolution changed reviewed
    code). Without delegation, stop at owner-owned `review-merge`.
 

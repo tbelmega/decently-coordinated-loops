@@ -78,13 +78,11 @@ to a history file, so it stays short enough to read every time.
 
 ## Worktree and branch policy
 
-- TODO: For each project, choose either isolated item branches/worktrees or permanent
-  worktree slots and record the choice in `PROJECTS.md`.
-- Permanent slots use one persistent base branch per worktree. They may carry at most
-  three unlanded items in an ancestry chain; later items branch from the current tip
-  as `<base-branch>--<item-slug>` and record immutable handoff ranges. Acquire and
-  clean slots per loops-pickup. Owner-only landing remains in force unless the merge
-  policy above explicitly delegates it.
+- Default: permanent worktree slots per loops-board → `references/worktree-slots.md`.
+  No per-item branches; each slot `.worktrees/<host>-<tool>-<n>` keeps its fixed branch
+  `agents/<host>-<tool>-<n>` and carries one work-stream at a time. A project opts out
+  in its `PROJECTS.md` entry ("main checkout"). Owner-only merging remains in force
+  unless the merge policy above explicitly delegates it.
 
 ## Guardrails (additions)
 
