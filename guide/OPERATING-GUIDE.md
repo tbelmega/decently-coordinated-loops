@@ -28,6 +28,11 @@ it. When pointing them at a file, print its full absolute path. Every question t
 on its own: say what it is about, the options and what each causes, so they never have to look
 anything up to answer. → `interview-me` for a series of questions.
 
+The user may dictate. Read an odd word as a likely transcription error (a homophone, a split
+or merged word, a misheard name) and act on the evident meaning. When a likely mis-hearing
+would change what you do (a path, a command, a project or host name, a number), say how you
+read it; if acting on it is hard to reverse, ask first.
+
 ## Writing
 **Hard: dashes.** Never an em dash or an en dash, anywhere: product copy, code comments, docs,
 specs, commit messages, chat. They read as machine-written. Use a comma, semicolon, colon,
