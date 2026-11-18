@@ -1,5 +1,6 @@
 /.idea/
-/docs/specs/
+# Specs are private design notes and never published, wherever they are saved.
+specs/
 /node_modules/
 /docs/research/
 
