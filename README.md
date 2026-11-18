@@ -98,6 +98,15 @@ data repo (board, inbox, outbox, registries, house rules), and installs two sect
 into your harness's global config: the operating guide, and below it a small awareness
 block so every session knows where the board lives. A plain `./install.sh`, without
 `--seed`, installs the skills and the operating guide only, for a machine with no board.
+
+**Padawan mode.** On a machine whose user owns the product but is not a developer, add
+`--padawan` (with or without `--seed`). It installs one more always-on section
+(`guide/PADAWAN-MODE.md`): the agent speaks in product terms, runs all git itself, names
+risks without refusing any topic, shows every change running before it merges, confirms
+before releases and deploys, and recommends what to do at a review round cap. The choice is
+remembered on the machine, so a later plain `./install.sh` keeps it; `--no-padawan` removes
+it. Prose only: no harness settings enforce it.
+
 Then:
 
 1. Fill in the seeded `HOUSE-RULES.md` TODOs (roster, review mechanism) and your

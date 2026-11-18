@@ -19,6 +19,7 @@ import {
 } from "./marks.ts";
 import { detectConfigTargets } from "./harnesses.ts";
 import { upsertSection, writeOwnedFile, type UpsertOutcome } from "./config-block.ts";
+import { applyPadawan, padawanEnabled } from "./padawan.ts";
 
 const GUIDE_SOURCE = fileURLToPath(new URL("../guide/OPERATING-GUIDE.md", import.meta.url));
 
@@ -88,6 +89,7 @@ export function installGuide(home: string, log: (line: string) => void = console
     return 0;
   }
   const section = renderGuideSection();
+  const padawan = padawanEnabled(home);
   let skipped = 0;
   for (const target of targets) {
     if (target.kind === "cursor" || target.kind === "kiro") {
@@ -99,10 +101,12 @@ export function installGuide(home: string, log: (line: string) => void = console
       if (outcome.action === "skipped") {
         skipped++;
         log(`  ! operating guide skipped: ${target.path} - ${outcome.reason}; fix the tags and re-run`);
+        continue; // the same malformed tags would make the padawan section skip too
       } else {
         log(`  operating guide ${outcome.action}: ${target.path}`);
       }
     }
+    if (!applyPadawan(target, padawan, log)) skipped++;
   }
   return skipped;
 }

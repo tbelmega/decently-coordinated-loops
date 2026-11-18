@@ -39,3 +39,10 @@ export const GUIDE_PROVENANCE =
 // installer writes back. Recognised for removal only; nothing writes these tags.
 export const RETIRED_GUIDE_SECTION_OPEN = "<DECENTLY-CAPABLE-POWERS>";
 export const RETIRED_GUIDE_SECTION_CLOSE = "</DECENTLY-CAPABLE-POWERS>";
+
+// Padawan mode: an opt-in section for machines whose user owns the product but is not a
+// developer. It sits below the operating guide, which it extends, and above the board section.
+export const PADAWAN_SECTION_OPEN = "<PADAWAN-MODE>";
+export const PADAWAN_SECTION_CLOSE = "</PADAWAN-MODE>";
+export const PADAWAN_PROVENANCE =
+  "<!-- managed by decently-coordinated-loops; edit guide/PADAWAN-MODE.md in that repo, then re-run install.sh (--no-padawan removes it) -->";

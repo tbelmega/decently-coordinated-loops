@@ -23,6 +23,12 @@
 #   (Config-block seeding via --seed already reaches every ~/.claude-* profile on
 #   its own - --config-dir adds skill links only, not config-block targets.)
 #
+# --padawan / --no-padawan: turn padawan mode on or off for this machine. Padawan mode
+#   (guide/PADAWAN-MODE.md) is an extra always-on section for a user who owns the product
+#   but is not a developer. The choice is a marker file
+#   (~/.config/decently-coordinated-loops/padawan-mode), so a later plain ./install.sh
+#   keeps it; every install applies whatever the marker says.
+#
 # --seed <dir> [seed args...]: additionally stand up (or join) a data repo by
 #   chaining setup/seed.ts, which also installs the agent-config block into the
 #   harness global configs (block content carries the data-repo path and owner).
@@ -88,12 +94,21 @@ link_skills() {
   echo "  $target_root: $linked newly linked, $taken taken over, $current already current"
 }
 
-# Pull optional --config-dir values out of the args; everything else (notably
-# --seed and its arguments) passes through unchanged.
+# Pull optional --config-dir values and the padawan switch out of the args; everything
+# else (notably --seed and its arguments) passes through unchanged.
 extra_config_dirs=()
 passthrough_args=()
+padawan_choice=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --padawan|--no-padawan)
+      if [ -n "$padawan_choice" ] && [ "$padawan_choice" != "$1" ]; then
+        echo "--padawan and --no-padawan cannot be combined" >&2
+        exit 1
+      fi
+      padawan_choice="$1"
+      shift
+      ;;
     --config-dir)
       if [ "$#" -lt 2 ]; then
         echo "--config-dir requires a directory argument" >&2
@@ -109,6 +124,21 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 set -- ${passthrough_args[@]+"${passthrough_args[@]}"}
+
+padawan_marker="$HOME/.config/decently-coordinated-loops/padawan-mode"
+case "$padawan_choice" in
+  --padawan)
+    mkdir -p "$(dirname "$padawan_marker")"
+    : > "$padawan_marker"
+    echo "Padawan mode: on for this machine (re-run with --no-padawan to turn it off)"
+    echo
+    ;;
+  --no-padawan)
+    rm -f "$padawan_marker"
+    echo "Padawan mode: off for this machine"
+    echo
+    ;;
+esac
 
 echo "Linking DCL skills:"
 skill_dirs_file="$REPO_DIR/setup/skill-dirs.txt"

@@ -353,6 +353,32 @@ export function upsertSection(target: string, section: string, spec: SectionSpec
   return { action: "appended" };
 }
 
+export type RemoveOutcome = { action: "removed" | "absent" } | { action: "skipped"; reason: string };
+
+/** Removes one tagged section from a config file's <GENERATED> wrapper, leaving every other
+ * line byte for byte. Fails closed like the upsert: malformed or duplicated tags, or the
+ * section sitting outside the wrapper, write nothing. The wrapper stays even when this
+ * leaves it empty; the next install fills it. */
+export function removeSection(target: string, open: string, close: string): RemoveOutcome {
+  if (!existsSync(target)) return { action: "absent" };
+  const lines = readFileSync(target, "utf8").split("\n");
+  const wrapper = scanPairs(lines, GENERATED_OPEN, GENERATED_CLOSE);
+  if (wrapper.error) return { action: "skipped", reason: wrapper.error };
+  if (wrapper.pairs.length > 1) return { action: "skipped", reason: `more than one ${GENERATED_OPEN} block` };
+  const own = scanPairs(lines, open, close);
+  if (own.error) return { action: "skipped", reason: own.error };
+  if (own.pairs.length > 1) return { action: "skipped", reason: `more than one ${open} section` };
+  const pair = own.pairs[0];
+  if (!pair) return { action: "absent" };
+  const outer = wrapper.pairs[0];
+  if (!outer || pair.open < outer.open || pair.close > outer.close) {
+    return { action: "skipped", reason: `${open} section outside the ${GENERATED_OPEN} wrapper` };
+  }
+  lines.splice(pair.open, pair.close - pair.open + 1);
+  writeFileSync(target, lines.join("\n"));
+  return { action: "removed" };
+}
+
 /** Writes a whole-file managed unit (the Cursor rule, the Kiro steering and agent files), creating
  * its directory if needed. Returns what happened, for logging. */
 export function writeOwnedFile(target: string, content: string): "created" | "replaced" {
