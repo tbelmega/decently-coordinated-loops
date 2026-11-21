@@ -182,6 +182,20 @@ export const harnesses: Harness[] = [
       return !context.claudeConfigured || existsSync(path) ? [{ path, kind: "block" }] : [];
     },
   },
+  {
+    // Antigravity (CLI, App, IDE) reads global skills from `~/.gemini/config/skills/` and
+    // always-on global rules from `~/.gemini/AGENTS.md` (it does not read `~/.claude/CLAUDE.md`
+    // or global `~/.agents/skills/`). Neither `agy --version` nor `agy install` creates
+    // `~/.gemini`, so a freshly installed native `~/.local/bin/agy` binary counts as presence
+    // alongside any pre-existing `~/.gemini` directory (discounting a `~/.gemini` this install
+    // run just created while linking skills).
+    id: "antigravity",
+    skillsDirs: [".gemini/config/skills"],
+    detect: (home) =>
+      (existsSync(join(home, ".gemini")) && !justCreated(".gemini")) ||
+      existsSync(join(home, ".local", "bin", "agy")),
+    configTargets: (home) => [{ path: join(home, ".gemini", "AGENTS.md"), kind: "block" }],
+  },
 ];
 
 /** Home-relative skill destinations, in registry order, deduplicated. This is the list

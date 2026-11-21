@@ -4,3 +4,4 @@
 .claude/skills
 .agents/skills
 .kiro/skills
+.gemini/config/skills

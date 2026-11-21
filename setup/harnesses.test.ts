@@ -42,11 +42,11 @@ describe("harness registry", () => {
   });
 
   test("every entry has a usable id", () => {
-    expect(harnesses.map((harness) => harness.id)).toEqual(["claude", "agents", "codex", "cursor", "kiro", "grok", "opencode"]);
+    expect(harnesses.map((harness) => harness.id)).toEqual(["claude", "agents", "codex", "cursor", "kiro", "grok", "opencode", "antigravity"]);
   });
 
   test("skillsDirs is the deduplicated union, in registry order", () => {
-    expect(skillsDirs()).toEqual([".claude/skills", ".agents/skills", ".kiro/skills"]);
+    expect(skillsDirs()).toEqual([".claude/skills", ".agents/skills", ".kiro/skills", ".gemini/config/skills"]);
   });
 
   test("setup/skill-dirs.txt matches the registry", () => {
@@ -139,6 +139,7 @@ describe("detectConfigTargets", () => {
       makeDir(home, ".codex");
       makeDir(home, ".cursor");
       makeDir(home, ".kiro/steering");
+      makeDir(home, ".gemini");
       expect(detectConfigTargets(home)).toEqual([
         { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
         { path: join(home, ".codex", "AGENTS.md"), kind: "block" },
@@ -148,6 +149,7 @@ describe("detectConfigTargets", () => {
         },
         { path: join(home, ".kiro", "steering", "decently-coordinated-loops.md"), kind: "kiro" },
         { path: join(home, ".kiro", "agents", "dcl-reviewer.json"), kind: "kiro-agent" },
+        { path: join(home, ".gemini", "AGENTS.md"), kind: "block" },
       ]);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -255,6 +257,40 @@ describe("detectConfigTargets", () => {
         { path: join(home, ".config", "opencode", "AGENTS.md"), kind: "block" },
       ]);
     } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("an Antigravity home this run created is not evidence unless agy is installed", () => {
+    const home = tempHome();
+    try {
+      makeDir(home, ".gemini/config/skills");
+      process.env.DCL_CREATED_SKILL_DIRS = ".gemini\n.gemini/config/skills\n";
+      expect(detectConfigTargets(home)).toEqual([]);
+      makeDir(home, ".local/bin");
+      writeFileSync(join(home, ".local", "bin", "agy"), "");
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".gemini", "AGENTS.md"), kind: "block" },
+      ]);
+    } finally {
+      delete process.env.DCL_CREATED_SKILL_DIRS;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a pre-existing ~/.gemini counts for Antigravity even alongside Claude Code", () => {
+    const home = tempHome();
+    try {
+      makeDir(home, ".claude");
+      writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+      makeDir(home, ".gemini/config/skills");
+      process.env.DCL_CREATED_SKILL_DIRS = ".gemini/config/skills\n";
+      expect(detectConfigTargets(home)).toEqual([
+        { path: join(home, ".claude", "CLAUDE.md"), kind: "block" },
+        { path: join(home, ".gemini", "AGENTS.md"), kind: "block" },
+      ]);
+    } finally {
+      delete process.env.DCL_CREATED_SKILL_DIRS;
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -382,6 +418,37 @@ describe("install.sh", () => {
     } finally {
       rmSync(withKiro, { recursive: true, force: true });
       rmSync(withoutKiro, { recursive: true, force: true });
+    }
+  });
+
+  test("--seed writes Antigravity AGENTS.md when ~/.gemini or ~/.local/bin/agy exists, never for a fresh ~/.gemini it created", () => {
+    const agentsMd = (home: string) => join(home, ".gemini", "AGENTS.md");
+    const seed = (home: string) =>
+      spawnSync(
+        "bash",
+        [join(DCL_HOME, "install.sh"), "--seed", join(home, "data"), "--owner", "casey", "--branch", "main"],
+        { env: { ...process.env, HOME: home }, encoding: "utf8" },
+      );
+    const withGemini = tempHome();
+    const withAgy = tempHome();
+    const withoutAntigravity = tempHome();
+    try {
+      makeDir(withGemini, ".gemini");
+      expect(seed(withGemini).status).toBe(0);
+      expect(existsSync(agentsMd(withGemini))).toBe(true);
+
+      makeDir(withAgy, ".local/bin");
+      writeFileSync(join(withAgy, ".local", "bin", "agy"), "");
+      expect(seed(withAgy).status).toBe(0);
+      expect(existsSync(agentsMd(withAgy))).toBe(true);
+
+      expect(seed(withoutAntigravity).status).toBe(0);
+      expect(existsSync(join(withoutAntigravity, ".gemini", "config", "skills"))).toBe(true);
+      expect(existsSync(agentsMd(withoutAntigravity))).toBe(false);
+    } finally {
+      rmSync(withGemini, { recursive: true, force: true });
+      rmSync(withAgy, { recursive: true, force: true });
+      rmSync(withoutAntigravity, { recursive: true, force: true });
     }
   });
 

@@ -50,8 +50,9 @@ written, so they can rename any `.claude-*` directory that is not really a profi
 Other harnesses get the same body in their own form: a DCL-owned rule file
 `~/.cursor/rules/decently-coordinated-loops.mdc`, a DCL-owned steering file
 `~/.kiro/steering/decently-coordinated-loops.md` plus the read-only Kiro reviewer agent
-`~/.kiro/agents/dcl-reviewer.json`, and the section in `~/.grok/AGENTS.md` and
-`~/.config/opencode/AGENTS.md`. Grok and OpenCode also read `~/.claude/CLAUDE.md`, so
+`~/.kiro/agents/dcl-reviewer.json`, and the section in `~/.gemini/AGENTS.md`
+(Antigravity), `~/.grok/AGENTS.md` and `~/.config/opencode/AGENTS.md`. Grok and OpenCode
+also read `~/.claude/CLAUDE.md`, so
 when Claude Code is detected they get no file of their own: Grok would load the
 section twice, and creating OpenCode's `AGENTS.md` would hide `CLAUDE.md` from it. An
 OpenCode `AGENTS.md` that already exists does get the section.
