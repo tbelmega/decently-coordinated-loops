@@ -71,6 +71,10 @@ deleted; never renumber to close a gap, since answered entries are cited by ID.
 - The body carries the source link (item file, spec), the ask itself, and the options
   where the answer space is known. It ends with an empty `> A:` line: an entry with no
   `> A:` line cannot be answered in place.
+- **`- speak: <spoken summary ending with the options>`** is optional and exempt from
+  the body line limit. Add it when the owner can decide from the summary alone. Leave
+  it out for consequential or context-heavy asks. Outbox Voice presents only entries
+  with a spoken summary and an empty answer line.
 - Every question only the owner can answer that you write into an item file gets
   mirrored here; the item file holds the context, the outbox is where the owner
   finds it.
@@ -99,6 +103,9 @@ deleted; never renumber to close a gap, since answered entries are cited by ID.
 - Dedup before appending; don't re-ask what an existing entry covers.
 - **Cap: at most 3 new entries per unattended session.** Rank by what unblocks the
   most work; hold the rest in item files until slots free up.
+- Interpret `> A: [voice] <transcript>` as raw dictation. Read it generously against
+  the question and its options. If the intent is unclear, ask for clarification before
+  acting on the answer.
 - Processing answers ("process the outbox", and at every unattended pickup): route
   each answer back into its source (item state, next-step, spec, autonomy flag,
   ...), log the routing on the item, then delete the entry. An answered entry that

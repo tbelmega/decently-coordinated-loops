@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ee">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./style.css">
+  <title>Outbox Voice</title>
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <main>
+    <h1>Outbox Voice</h1>
+    <button id="start" type="button">Start</button>
+    <p id="status" role="status"></p>
+    <pre id="entry"></pre>
+    <label hidden>Answer <input id="transcript" type="text" autocomplete="off"></label>
+    <div id="commands"></div>
+    <details>
+      <summary>Settings</summary>
+      <form>
+        <fieldset>
+          <label>Repository <input name="repo" placeholder="owner/task-tracking" required></label>
+          <label>Branch <input name="branch" required></label>
+          <label>GitHub personal access token <input name="token" type="password" autocomplete="off" required></label>
+          <p>Use a fine-grained token with Contents read and write access to the data repository only and a 90-day expiry. Use a dedicated HTTPS origin to save the token between visits.</p>
+          <label>Speech language <input name="language" placeholder="en-US" required></label>
+          <button type="submit">Save settings</button>
+        </fieldset>
+      </form>
+    </details>
+  </main>
+</body>
+</html>

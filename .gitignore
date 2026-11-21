@@ -7,3 +7,5 @@ specs/
 # Local review evidence (cli-review.ts ledgers)
 /.reviews/
 /.worktrees/
+
+/apps/outbox-voice/dist/
