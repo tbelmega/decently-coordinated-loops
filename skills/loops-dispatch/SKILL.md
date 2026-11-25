@@ -168,3 +168,26 @@ you say them out loud. Re-run this skill in a fresh session to renew.
 - **On a hard usage-limit warning mid-run** - finish or park the current item safely
   per loops-pickup, then stop the recurring job and log that you did, rather than
   letting later firings fail against an exhausted budget.
+
+## Central dispatch
+
+Next to this session-timer dispatch, a data repo can run **central dispatch**: the
+dispatch program (`bun run dispatch`, no model inside) that a timer on one control host
+runs every few minutes. Each tick claims eligible items the way a session claims work and
+starts one T3 Code thread per item, under the limits of `loops.json → dispatch`; the
+thread follows loops-pickup → Dispatched item. Absent or `enabled: false`, it starts
+nothing.
+
+- `plan --host <name>` - what a tick would start, and why every other item would not;
+  changes nothing and never pulls.
+- `tick --host <name> [--init]` - observe dispatched threads, clean up, claim, start.
+  Runs in a clone of the data repo dedicated to the program; `--init` once, and again
+  only after checking T3 Code for threads whose title ends with a claim tag such as
+  `[d-1a2b3c4d]` when the state file was lost.
+- `status` - dispatched items, their thread and item state, lane cooldowns, pause flags.
+- `pause [--project <name>] [--note <text>]`, `resume [--project <name>]` - the committed
+  `dispatch-control.json`, so a pause can come from any checkout that can push.
+
+Arming a session timer is unchanged, and "dispatch duty" keeps meaning this skill's
+session timer unless the owner says otherwise. Where both run, the pushed claim decides
+races; the program's limits count only its own threads.

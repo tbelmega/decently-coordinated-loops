@@ -290,6 +290,9 @@ Run from the data-repo root:
   linked tickets; plans only without `--apply`. Other subcommands:
   `references/tracker-sync.md`.
 - `bun run tickets <item-slug>` - the commit reference for that item's tickets.
+- `bun run dispatch plan|tick|status|pause|resume` - central dispatch, the program that
+  claims eligible items and starts one agent thread each (loops-dispatch → Central
+  dispatch); off unless `loops.json → dispatch` enables it.
 - `bun run restamp` - advance `.loops-version` to the DCL clone's HEAD after reviewing an
   upgrade, clearing the drift note `check` prints.
 - `bun "$DCL_HOME/tools/cli-registered.ts" --data-repo <data-repo> [--cwd <dir>]` - the

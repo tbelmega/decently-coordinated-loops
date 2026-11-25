@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {isReviewerId, reviewerIds, type ReviewerId} from "./review/reviewers.ts";
+import { validateDispatchConfig, type DispatchConfig } from "./dispatch-config.ts";
 import { validateTrackers, type TrackerConfig } from "./tracker/tracker-config.ts";
 
 /** Where a project's lifecycle ends. `deploy` keeps the full tail
@@ -364,6 +365,8 @@ export interface LoopsConfig {
   trackers: Record<string, TrackerConfig>;
   projects: Record<string, ProjectConfig>;
   review: ReviewConfig;
+  /** Central dispatch (dispatch-config.ts). Absent means central dispatch is off. */
+  dispatch?: DispatchConfig;
 }
 
 function defaults(): LoopsConfig {
@@ -663,7 +666,8 @@ export function loadConfig(root: string): LoopsConfig {
 
   const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<LoopsConfig>;
   const trackers = validateTrackers(raw.trackers);
-  return {
+  const rawDispatch = (raw as { dispatch?: unknown }).dispatch;
+  const config: LoopsConfig = {
     owner: raw.owner ?? base.owner,
     priorityProjects: raw.priorityProjects ?? base.priorityProjects,
     integrationBranch: raw.integrationBranch ?? base.integrationBranch,
@@ -673,4 +677,6 @@ export function loadConfig(root: string): LoopsConfig {
     projects: validateProjects(raw.projects ?? base.projects, trackers),
     review: validateReviewConfig(raw.review ?? base.review),
   };
+  if (rawDispatch !== undefined) config.dispatch = validateDispatchConfig(rawDispatch);
+  return config;
 }

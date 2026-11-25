@@ -61,8 +61,11 @@ export interface SlotClaim {
   worktree?: string;
 }
 
-function git(dir: string, args: string[]): { ok: boolean; out: string } {
-  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+/** A hung git must not hold up a caller that holds the data repo lock. */
+const GIT_TIMEOUT_MS = 120_000;
+
+function git(dir: string, args: string[], env?: NodeJS.ProcessEnv): { ok: boolean; out: string } {
+  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", env: env ?? process.env, timeout: GIT_TIMEOUT_MS });
   return { ok: result.status === 0, out: (result.stdout ?? "").trim() };
 }
 
@@ -76,10 +79,10 @@ export function integrationRef(repo: string, branch: string): string {
 /** True when merging `ref` into `integration` would leave the integration tree unchanged,
  * i.e. everything on `ref` is already integrated, however it got there (fast-forward,
  * rebase or squash). A conflicting merge counts as not integrated. */
-export function contentIntegrated(repo: string, integration: string, ref: string): boolean {
-  const merged = git(repo, ["merge-tree", "--write-tree", integration, ref]);
+export function contentIntegrated(repo: string, integration: string, ref: string, env?: NodeJS.ProcessEnv): boolean {
+  const merged = git(repo, ["merge-tree", "--write-tree", integration, ref], env);
   if (!merged.ok) return false;
-  const tree = git(repo, ["rev-parse", `${integration}^{tree}`]);
+  const tree = git(repo, ["rev-parse", `${integration}^{tree}`], env);
   return tree.ok && merged.out.split("\n")[0] === tree.out;
 }
 
@@ -107,6 +110,19 @@ function listWorktrees(repo: string): ListedWorktree[] {
   return result;
 }
 
+/** A git environment under which the slot report writes nothing to `repo`: new objects
+ * (from `merge-tree --write-tree`) go to `objectDir`, the repository's own objects stay
+ * readable as alternates, and `git status` takes no optional index lock. */
+export function readOnlyGitEnv(repo: string, objectDir: string): NodeJS.ProcessEnv {
+  const common = git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  return {
+    ...process.env,
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_OBJECT_DIRECTORY: objectDir,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: join(common.out, "objects"),
+  };
+}
+
 /** Reports the slots of `repo` that belong to `host`, and the next free name for `tool`. */
 export function slotReport(opts: {
   repo: string;
@@ -114,8 +130,11 @@ export function slotReport(opts: {
   tool: string;
   integrationBranch: string;
   claims: SlotClaim[];
+  /** Environment for every git call; a caller that must not write to the repository passes
+   * one that sends new objects elsewhere (see readOnlyGitEnv). */
+  env?: NodeJS.ProcessEnv;
 }): SlotReport {
-  const { repo, host, tool, integrationBranch, claims } = opts;
+  const { repo, host, tool, integrationBranch, claims, env } = opts;
   if (!TOOL_PATTERN.test(tool)) throw new Error(`tool "${tool}" must be one token of lowercase letters and digits`);
   const integration = integrationRef(repo, integrationBranch);
 
@@ -126,10 +145,10 @@ export function slotReport(opts: {
     if (!isSlotName(name, host)) continue;
     if (canonical(worktree.path) !== canonical(join(repo, ".worktrees", name))) continue;
     const reasons: string[] = [];
-    const status = git(worktree.path, ["status", "--porcelain"]);
+    const status = git(worktree.path, ["status", "--porcelain"], env);
     if (!status.ok) reasons.push("git cannot read its working tree");
     else if (status.out) reasons.push("uncommitted changes");
-    if (!contentIntegrated(repo, integration, worktree.branch)) reasons.push(`content not on ${integration}`);
+    if (!contentIntegrated(repo, integration, worktree.branch, env)) reasons.push(`content not on ${integration}`);
     for (const claim of claims) {
       if (!OCCUPYING_STATES.has(claim.state) || !claim.worktree) continue;
       if (claim.host !== undefined && claim.host !== host) continue;

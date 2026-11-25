@@ -14,12 +14,15 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Carried decision**: An eligible finding disposition inherited automatically when the same finding recurs in a later review round.
 - **Carry-over**: An implementer-attested record that `HEAD` moved past a passed review without changing reviewed behavior, letting `status` pass while reporting that the delta was not independently reviewed.
 - **Causal scope**: The ledger rules that identify what caused a finding and whether it belongs to the current work-stream.
+- **Central dispatch**: Assignment of eligible board items by the dispatch program, as opposed to a dispatcher session's own pickup.
 - **Change class**: An owner-configured functional category that can authorize defined review handling, including limited waivers, for matching changes.
+- **Claim token**: The random tag (`d-` plus eight hex digits) that identifies one central-dispatch claim on the item's log line, in the thread title, and in the thread's work message.
 - **Claim**: An assignment or state change that becomes authoritative across machines only after its data-repo commit is pushed successfully.
 - **Clean review**: A current-HEAD review result with no blocking findings or unresolved obligations under the configured policy.
 - **Cleanup work**: Trust-maintenance work that checks stale specifications, follow-ups, research, or board records against current evidence.
 - **Completion receipt**: The required four-line handoff summary reporting the work done, its verification, its review, and the next step or options.
 - **Confirmation round**: A later review round that checks required remediation or documentation, confirms qualifying rejected decisions, scans for regression, and looks for new defects.
+- **Control host**: The one machine whose timer runs the dispatch program.
 - **Current-HEAD status**: A review verdict evaluated against the repository's exact current `HEAD`, not merely the last commit a reviewer examined.
 - **Current-workstream causality**: A finding classification that attributes the problem to the current change and can therefore create a remediation obligation.
 - **Data repo**: The private repository that stores board items, queues, project registration, and owner-specific configuration and policy.
@@ -31,6 +34,8 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Delivered state**: The board state asserting that verified work was released to the owner's target environment and now awaits acceptance.
 - **Dependency gate**: The rule that an item is not ready until each required `depends-on` target has landed.
 - **Deterministic manifest**: The persisted reproducible inventory of files, hunks, instructions, and linked context supplied to a review round.
+- **Dispatch program**: The tool `cli-dispatch` (`bun run dispatch`), which runs central dispatch without a model.
+- **Dispatched item**: An item claimed by a tick of the dispatch program and handed to the thread it started.
 - **Dispatcher**: A long-lived session that holds a recurring job and invokes unattended pickup on its configured schedule.
 - **Disposition**: The persisted decision describing how a review finding is handled, such as accepted, rejected, waived, or deferred.
 - **Documentation obligation**: A review requirement to record an accepted limitation honestly at its declared tracked path and obtain confirmation of that documentation.
@@ -48,6 +53,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Instruction file**: Or rule file. Executed prose, such as `AGENTS.md` or a skill, whose content directs agent behavior.
 - **Integrate or integrated**: To establish as a Git fact that a change is present on the project's integration branch, whether by ancestry, fast-forward, or the configured equivalence check. This does not imply creation of a merge commit.
 - **Land or landed**: A synonym for integrate or integrated. Retained where it is part of an existing command, configuration key, or persisted wording.
+- **Lane**: A named way for the dispatch program to run a thread: one provider and model with its own thread limit, typically one per subscription.
 - **Linked spec**: The owner-approved specification used as the acceptance authority for a reviewed change range.
 - **Logical review round**: One numbered review cycle in an epoch, including reviewer passes, findings, dispositions, and required remediation.
 - **Mechanism defect**: A suspected failure in the review system itself that ordinary changes to the implementation cannot resolve.
@@ -92,6 +98,7 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Terminal state**: A lifecycle state that finishes or abandons a work-stream and routes it out of the active board.
 - **Test-backed cap exit**: A configured cap exit that relies on committed regression evidence and the mechanical quality gate instead of another review round.
 - **Tested state**: The state asserting that integrated work passed the project's end-to-end, functional, or consumer verification in the most appropriate production-like context. For a deployed product this may be a dev, Sandbox, staging, or production environment. For a library or DCL itself it is the closest meaningful integrated or consumer check. The mechanical quality gate alone does not establish this state. It is terminal for a no-deploy lifecycle.
+- **Tick**: One run of the dispatch program's `tick` command.
 - **Tracked elsewhere**: A review disposition that points to a separately landing fix outside the reviewed range using a board item, `repo#branch`, or path.
 - **Unattended pickup**: Selection and progression of eligible board work without live owner interaction.
 - **Verification pickup**: Pickup of a `merged` item to test its integrated branch state rather than continue implementation.

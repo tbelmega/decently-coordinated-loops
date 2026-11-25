@@ -187,6 +187,30 @@ hermetic checks first and record the result; hold at `merged` while the environm
 the change; flip to `tested` only on evidence logged on the item, never on a failed or
 unrun check; you never deploy.
 
+## Dispatched item
+
+A thread started by central dispatch (the dispatch program, `bun run dispatch`; see
+loops-dispatch → Central dispatch) is handed one item it has already claimed, named in its
+work message with a kind (`verify`, `merge` or `build`), host, lane, and claim token.
+Such a thread:
+
+- skips project and item selection, step 3's claim, and the queue processing of step 0;
+- pulls the data repo its own configuration names, re-reads the item, and stops without
+  working unless the newest log line ending in `(dispatch <token>).` carries its own token
+  and no line ending in `(dispatch <its token> ended).` follows it (the program writes that
+  suffix when it releases or parks the claim);
+- refines `assignee` to its slot lane when it takes a slot, then continues: `verify` with
+  "Verify an integrated item", `merge` with `references/integration.md` as the project's
+  merge policy allows, `build` with steps 4 and 5 (a `build` item without a concrete spec
+  becomes spec drafting, as any pickup does). Every gate and guardrail applies unchanged;
+- never ends leaving a `build` item `in-progress` with nobody on it: it finishes its step,
+  or, when a gate or guardrail stops it, parks the item for the owner as pickup parks work
+  (`blocked` or the gate's own resting state, `next-actor: owner`, the ask in the outbox
+  per loops-queues);
+- whenever it ends without changing the item's state (a `verify` hold, for example),
+  appends a log line that says why and ends with `(dispatch <token>)`. Without that line
+  the program takes a stopped thread for an interrupted one and sends it a "continue".
+
 ## Guardrails - never unattended
 
 - No merging to shared branches unless `HOUSE-RULES.md → Merge policy` explicitly

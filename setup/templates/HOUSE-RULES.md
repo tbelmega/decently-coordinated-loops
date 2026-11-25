@@ -109,3 +109,11 @@ to a history file, so it stays short enough to read every time.
      schedule, usage-limit handling, stagger offsets across sessions. -->
 
 - TODO: define, or leave empty until you automate pickup.
+
+<!-- Central dispatch (optional, loops-dispatch → Central dispatch): the control host and
+     its dedicated clone of this repo, the timer that runs
+     `bun run dispatch tick --host <name>`, whether a dispatched thread runs any
+     instance-specific preflight, and who may pause it. Off until loops.json has a
+     `dispatch` section with `enabled: true`. -->
+
+- TODO: none, or describe the control host and its timer.

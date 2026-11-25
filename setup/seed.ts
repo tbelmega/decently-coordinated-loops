@@ -273,6 +273,7 @@ function packageJsonText(root: string): string {
         "check-integration-status": scriptFor("cli-landed"),
         landed: scriptFor("cli-landed"),
         ready: scriptFor("cli-ready"),
+        dispatch: scriptFor("cli-dispatch"),
         tickets: scriptFor("tracker/cli-tickets"),
         "tracker-sync": scriptFor("tracker/cli-tracker-sync"),
         restamp: scriptFor("cli-restamp"),
