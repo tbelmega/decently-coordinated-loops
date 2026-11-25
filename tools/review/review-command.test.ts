@@ -2765,7 +2765,7 @@ describe("cli-review conditional reviewer routing", () => {
     const matching = runTwoRounds("persona-alternative", ["--implementer-model", "gpt-6.1-sol"]);
     const invocations = readFileSync(matching.argsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(invocations).toHaveLength(3);
-    // Round 1's personas run concurrently and append to the log in completion order;
+    // Round 1's personas run concurrently, so their log entries can arrive in either order;
     // round 2 starts only after round 1 settles, so its entry is always last.
     const byPass = (left: {pass: string}, right: {pass: string}) => left.pass.localeCompare(right.pass);
     expect(invocations.slice(0, 2).sort(byPass)).toEqual([
