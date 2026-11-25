@@ -2763,11 +2763,16 @@ describe("cli-review conditional reviewer routing", () => {
     };
 
     const matching = runTwoRounds("persona-alternative", ["--implementer-model", "gpt-6.1-sol"]);
-    expect(readFileSync(matching.argsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
-      {pass: "diff", model: "opus-model", effort: "medium"},
+    const invocations = readFileSync(matching.argsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(invocations).toHaveLength(3);
+    // Round 1's personas run concurrently and append to the log in completion order;
+    // round 2 starts only after round 1 settles, so its entry is always last.
+    const byPass = (left: {pass: string}, right: {pass: string}) => left.pass.localeCompare(right.pass);
+    expect(invocations.slice(0, 2).sort(byPass)).toEqual([
       {pass: "adversarial", model: "opus-model", effort: "medium"},
-      {pass: "confirmation", model: "sonnet-model", effort: "medium"},
+      {pass: "diff", model: "opus-model", effort: "medium"},
     ]);
+    expect(invocations[2]).toEqual({pass: "confirmation", model: "sonnet-model", effort: "medium"});
     const rounds = readItemLedger(matching.repository, "persona-alternative").rounds;
     expect(rounds[1].routing.selection).toEqual({kind: "alternative", index: 0, when: {model: "gpt-"}});
     expect(rounds[1].routing.finalPasses).toEqual([
