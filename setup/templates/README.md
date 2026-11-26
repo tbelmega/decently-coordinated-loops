@@ -28,7 +28,7 @@ tools, and skills live in the DCL clone at `{{DCL_HOME}}`.
 - `bun run landed` - compatibility alias for `bun run check-integration-status`.
 - `bun run ready` - the dependency gate: which items' `depends-on` targets are satisfied.
 - `bun run dispatch plan|tick|status|pause|resume` - central dispatch: claims eligible items
-  and starts one agent thread each, off unless `loops.json → dispatch` enables it.
+  and starts each on a configured worker host, off unless `loops.json → dispatch` enables it.
 - `bun run restamp` - advance `.loops-version` after reviewing a DCL upgrade.
 - `bun run setup` - wire this machine to this repo: refresh the harness config block and
   set the review adapter. Safe to re-run; run it on every machine that joins.

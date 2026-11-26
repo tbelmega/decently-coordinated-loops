@@ -22,13 +22,25 @@ export function releaseLog(date: string, reason: string, token: string): string 
   return `${date}: Released by central dispatch: ${reason}; the fields the claim wrote are restored where unchanged (dispatch ${token} ended).`;
 }
 
-export function parkLog(date: string, reason: string, title: string, token: string): string {
-  return `${date}: Parked by central dispatch: the thread "${title}" stopped without finishing (${reason}) (dispatch ${token} ended).`;
+/** What was parked, as the owner finds it: a T3 thread by its title, or a Codex job by its
+ * worker and log file. */
+export type ParkedJob = { kind: "thread"; title: string } | { kind: "codex-job"; token: string; worker: string; log: string };
+
+function parkedName(job: ParkedJob): string {
+  return job.kind === "thread" ? `the thread "${job.title}"` : `the Codex job ${job.token} on ${job.worker}`;
 }
 
-export function parkNextStep(owner: string, title: string, reason: string, previousState: string): string {
+function lookAt(job: ParkedJob): string {
+  return job.kind === "thread" ? "Look at the thread" : `Look at its log (${job.worker}:${job.log})`;
+}
+
+export function parkLog(date: string, reason: string, job: ParkedJob, token: string): string {
+  return `${date}: Parked by central dispatch: ${parkedName(job)} stopped without finishing (${reason}) (dispatch ${token} ended).`;
+}
+
+export function parkNextStep(owner: string, job: ParkedJob, reason: string, previousState: string): string {
   const who = owner || "Owner";
-  return `${who}: the thread "${title}" started by central dispatch stopped without finishing (${reason}). Look at the thread, then set the item back to ${previousState} with next-actor agent, or decide otherwise.`;
+  return `${who}: ${parkedName(job)} started by central dispatch stopped without finishing (${reason}). ${lookAt(job)}, then set the item back to ${previousState} with next-actor agent, or decide otherwise.`;
 }
 
 export function handshakeMessage(token: string): string {

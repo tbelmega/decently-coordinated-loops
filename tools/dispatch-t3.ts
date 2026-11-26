@@ -3,6 +3,7 @@
 // and error texts are what `t3` 0.1.9 reported on a real server for a running, a finished,
 // an interrupted and a failed thread, and for an unknown thread id or project.
 import { spawnSync } from "node:child_process";
+import type { Remote, Route } from "./dispatch-remote.ts";
 
 export interface ThreadInfo {
   threadId: string;
@@ -55,7 +56,7 @@ export function classifyStatus(status: string): StatusClass {
 
 const UNKNOWN_THREAD = /is no longer available/;
 const UNKNOWN_PROJECT = /No T3 Code project matches/;
-const TIMEOUT_MS = 120_000;
+const TIMEOUT_MS = 60_000;
 
 function readThread(raw: unknown): ThreadInfo | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -85,16 +86,37 @@ function parseJson(text: string): unknown {
   }
 }
 
-/** The `t3` command as a ThreadStarter. `bin` is a name on PATH or a path. */
+interface Ran {
+  /** False when no answer came: the command did not run, timed out, or SSH failed. */
+  spawned: boolean;
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  detail: string;
+}
+
+type T3Run = (args: string[], input?: string) => Ran;
+
+/** The `t3` command on the local host as a ThreadStarter. `bin` is a name on PATH or a path. */
 export function t3Starter(bin: string, env: NodeJS.ProcessEnv = process.env): ThreadStarter {
-  function run(args: string[], input?: string) {
+  return starterFrom((args, input) => {
     const result = spawnSync(bin, args, { encoding: "utf8", input, env, timeout: TIMEOUT_MS });
     const stdout = result.stdout ?? "";
     const stderr = result.stderr ?? "";
     return { spawned: !result.error, status: result.status, stdout, stderr, detail: diagnostic(stderr || String(result.error ?? "") || "no diagnostic") };
-  }
+  });
+}
 
-  function failure<T>(r: ReturnType<typeof run>, onFailure: StarterFailure): StarterResult<T> {
+/** The `t3` command on a worker, run through the route's login shell (dispatch-remote.ts). */
+export function remoteT3Starter(remote: Remote, route: Route): ThreadStarter {
+  return starterFrom((args, input) => {
+    const r = remote.run(route, [route.t3Bin, ...args], { input, timeoutMs: TIMEOUT_MS });
+    return { spawned: r.reached, status: r.status, stdout: r.stdout, stderr: r.stderr, detail: r.detail || "no diagnostic" };
+  });
+}
+
+function starterFrom(run: T3Run): ThreadStarter {
+  function failure<T>(r: Ran, onFailure: StarterFailure): StarterResult<T> {
     const text = `${r.stderr}\n${r.stdout}`;
     if (!r.spawned || r.status === null) return { ok: false, failure: "unreachable", detail: r.detail };
     if (UNKNOWN_THREAD.test(text)) return { ok: false, failure: "unknown-thread", detail: r.detail };

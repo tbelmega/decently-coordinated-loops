@@ -16,13 +16,13 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Causal scope**: The ledger rules that identify what caused a finding and whether it belongs to the current work-stream.
 - **Central dispatch**: Assignment of eligible board items by the dispatch program, as opposed to a dispatcher session's own pickup.
 - **Change class**: An owner-configured functional category that can authorize defined review handling, including limited waivers, for matching changes.
-- **Claim token**: The random tag (`d-` plus eight hex digits) that identifies one central-dispatch claim on the item's log line, in the thread title, and in the thread's work message.
+- **Claim token**: The random tag (`d-` plus eight hex digits) that identifies one central-dispatch claim on the item's log line, in the thread title or Codex job status file, and in the work message.
 - **Claim**: An assignment or state change that becomes authoritative across machines only after its data-repo commit is pushed successfully.
 - **Clean review**: A current-HEAD review result with no blocking findings or unresolved obligations under the configured policy.
 - **Cleanup work**: Trust-maintenance work that checks stale specifications, follow-ups, research, or board records against current evidence.
 - **Completion receipt**: The required four-line handoff summary reporting the work done, its verification, its review, and the next step or options.
 - **Confirmation round**: A later review round that checks required remediation or documentation, confirms qualifying rejected decisions, scans for regression, and looks for new defects.
-- **Control host**: The one machine whose timer runs the dispatch program.
+- **Control host**: The one machine whose timer runs the dispatch program. It runs no job itself unless it is also listed as a worker.
 - **Current-HEAD status**: A review verdict evaluated against the repository's exact current `HEAD`, not merely the last commit a reviewer examined.
 - **Current-workstream causality**: A finding classification that attributes the problem to the current change and can therefore create a remediation obligation.
 - **Data repo**: The private repository that stores board items, queues, project registration, and owner-specific configuration and policy.
@@ -35,13 +35,14 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Dependency gate**: The rule that an item is not ready until each required `depends-on` target has landed.
 - **Deterministic manifest**: The persisted reproducible inventory of files, hunks, instructions, and linked context supplied to a review round.
 - **Dispatch program**: The tool `cli-dispatch` (`bun run dispatch`), which runs central dispatch without a model.
-- **Dispatched item**: An item claimed by a tick of the dispatch program and handed to the thread it started.
+- **Dispatched item**: An item claimed by a tick of the dispatch program and handed to the thread or Codex job it started on a worker.
 - **Dispatcher**: A long-lived session that holds a recurring job and invokes unattended pickup on its configured schedule.
 - **Disposition**: The persisted decision describing how a review finding is handled, such as accepted, rejected, waived, or deferred.
 - **Documentation obligation**: A review requirement to record an accepted limitation honestly at its declared tracked path and obtain confirmation of that documentation.
 - **Dropped state**: The terminal board state indicating that a work-stream was abandoned.
 - **Equality gate**: The publication check that proves an exported staged tree exactly matches the reviewed commit tree.
 - **Exact lease**: A compare-and-swap ref update that permits landing only while the integration ref still equals the expected commit.
+- **Executor**: How the dispatch program runs one kind of work (`build`, `verify`, `merge`): as a T3 Code thread on a lane, or as a Codex CLI job through the job launcher.
 - **Finalization**: Advisory review of a refined draft before it is presented to the owner for approval.
 - **Firing**: One complete periodic-dispatch cycle, including prior-obligation handling and substantive eligible work.
 - **Governance mode**: Review mode in which declared instruction-file changes are evaluated as proposed rules against an owner-approved spec.
@@ -52,8 +53,9 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Inbox dump zone**: The intentionally unstructured section of `INBOX.md` where the owner records raw thoughts for later processing.
 - **Instruction file**: Or rule file. Executed prose, such as `AGENTS.md` or a skill, whose content directs agent behavior.
 - **Integrate or integrated**: To establish as a Git fact that a change is present on the project's integration branch, whether by ancestry, fast-forward, or the configured equivalence check. This does not imply creation of a merge commit.
+- **Job launcher**: `tools/dispatch-job.ts`, run on a worker from its own DCL clone; it starts a Codex CLI job, supervises it, and records it in a status file named after the claim token.
 - **Land or landed**: A synonym for integrate or integrated. Retained where it is part of an existing command, configuration key, or persisted wording.
-- **Lane**: A named way for the dispatch program to run a thread: one provider and model with its own thread limit, typically one per subscription.
+- **Lane**: A named way for the dispatch program to run a T3 Code thread: one provider and model. Its name is the slot tool of the builds it runs.
 - **Linked spec**: The owner-approved specification used as the acceptance authority for a reviewed change range.
 - **Logical review round**: One numbered review cycle in an epoch, including reviewer passes, findings, dispositions, and required remediation.
 - **Mechanism defect**: A suspected failure in the review system itself that ordinary changes to the implementation cannot resolve.
@@ -105,5 +107,6 @@ DCL uses the terms below with specific operational meanings across its skills, p
 - **Verify gate**: The project-specific end-to-end, functional, or consumer checks run against integrated work before moving an item to `tested`.
 - **Waived by policy**: A finding disposition permitted by an owner-configured change class for the finding's priority and scope.
 - **Work-stream**: Work that changes a project's behavior (for users, calling code, tests and CI, or agents reading its instructions) or whose state must outlive the conversation; it is represented by one board item. Everything else is an **errand**, which skips the board, the review, and the completion receipt.
+- **Worker**: A host listed in `loops.json → dispatch.workers` that takes dispatched jobs, at most one per slot, and only while it answers SSH.
 - **Wrap gap**: The shortened interval between the last firing of one day and the first firing of the next after an interval is converted to clock times.
 - **Zero-context hunk**: A diff hunk recorded without surrounding unchanged lines so the manifest captures only changed content.

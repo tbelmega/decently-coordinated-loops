@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
-// Central dispatch: assigns eligible board items and starts one agent thread per item
-// through T3 Code, under the limits of the `dispatch` section of loops.json. Run from the
-// data repo root (for `tick`, a clone dedicated to the program):
+// Central dispatch: assigns eligible board items and starts each one as a job on a worker
+// host listed in the `dispatch` section of loops.json (a T3 Code thread or a Codex CLI job,
+// by kind of work), one job per worker slot. Run from the data repo root (for `tick`, a
+// clone dedicated to the program):
 //
 //   bun <DCL>/tools/cli-dispatch.ts plan --host <name>
 //   bun <DCL>/tools/cli-dispatch.ts tick --host <name> [--init]
@@ -10,7 +11,8 @@
 //   bun <DCL>/tools/cli-dispatch.ts resume [--project <name>]
 //
 // Exit 0 on success (including "central dispatch is off"), 2 on a usage or precondition
-// error, 1 when an operation failed (pull, push, T3 Code unreachable).
+// error, 1 when an operation failed (pull, push, a board write). A worker that does not
+// answer is reported and is not a failure.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "./config.ts";
@@ -60,6 +62,9 @@ try {
 } catch (error) {
   fail(`loops.json: ${(error as Error).message}`);
 }
+// A tick first brings its dedicated clone up to date, since the fix for a refused dispatch
+// section may already be upstream; every other command reports it now.
+if (config.dispatchError && command !== "tick") fail(`loops.json: ${config.dispatchError}`);
 
 const deps: RunDeps = {
   root: ROOT,

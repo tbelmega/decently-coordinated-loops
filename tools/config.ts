@@ -367,6 +367,10 @@ export interface LoopsConfig {
   review: ReviewConfig;
   /** Central dispatch (dispatch-config.ts). Absent means central dispatch is off. */
   dispatch?: DispatchConfig;
+  /** Why the `dispatch` section was refused. Only the dispatch program fails on it: every
+   * other tool loads the rest of the configuration, so a dispatch section written for
+   * another DCL version never stops sync or check on a host. */
+  dispatchError?: string;
 }
 
 function defaults(): LoopsConfig {
@@ -677,6 +681,13 @@ export function loadConfig(root: string): LoopsConfig {
     projects: validateProjects(raw.projects ?? base.projects, trackers),
     review: validateReviewConfig(raw.review ?? base.review),
   };
-  if (rawDispatch !== undefined) config.dispatch = validateDispatchConfig(rawDispatch);
+  if (rawDispatch !== undefined) {
+    const repos = Object.values(config.projects).flatMap((project) => (project?.repo ? [project.repo] : []));
+    try {
+      config.dispatch = validateDispatchConfig(rawDispatch, repos);
+    } catch (error) {
+      config.dispatchError = (error as Error).message;
+    }
+  }
   return config;
 }

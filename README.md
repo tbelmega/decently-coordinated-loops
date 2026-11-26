@@ -43,7 +43,7 @@ Work can get done multiple ways:
 1. You start a new agent session and tell it "pick up workstream x-y-z from the board" - the old fashioned way, you control what the agent is working on.
 2. You start a new agent session and tell it "pick up the next item" - you control when work is being done, but you leave it to the agent to pick the workstream.
 3. You set up the built-in dispatch schedule - every x hours the agent session will wake up, pick up the next eligible item and work on it until it hits a blocker that needs you attention. It updates the state on the board and goes back to sleep.
-4. You turn on central dispatch - a small program without a model that a timer runs on one machine. It claims eligible items under limits you set and starts one agent thread per item through T3 Code, so unattended work no longer depends on a chat session staying alive.
+4. You turn on central dispatch - a small program without a model that a timer runs on one machine. It claims eligible items and starts each one on a worker host you list, one job per slot: a T3 Code thread for spec and implementation work, a Codex CLI job for verify and merge work, so unattended work no longer depends on a chat session staying alive.
 
 In conclusion, you don't write the trivial prompts any more. Your main job is to look at blocked workstreams, make the high-value decisions to unblock the workstream, and let the agents prompt themselves to do the trivial work.
 
@@ -127,7 +127,7 @@ Run from the data-repo root:
 | `bun run check` | Report-only integrity check: board vs item files, closed-set validation, version-stamp drift. |
 | `bun run sync` | Regenerate `BOARD.md` from the item files, move items between `items/`/`for-delivery/`/`archive/` per state. Lock-guarded and idempotent, so agents can run it freely. |
 | `bun run check-integration-status [--apply]` | Detect which items' work is integrated into the integration branch, via the forge API (`github` adapter) or pure git patch-id comparison (`git` adapter). Recorded `base-sha..head-sha` ranges keep one item's work apart from the next as a slot branch is reused. `--apply` records observed integration as the existing `merged` board state. It does not perform Git integration. `bun run landed` is retained as a compatibility alias. |
-| `bun run dispatch plan\|tick\|status\|pause\|resume` | Central dispatch: claims eligible items and starts one agent thread per item through T3 Code, under the limits of `loops.json → dispatch`. Off unless that section sets `enabled: true`; `plan` prints what a tick would start and changes nothing. See loops-dispatch → Central dispatch. |
+| `bun run dispatch plan\|tick\|status\|pause\|resume` | Central dispatch: claims eligible items and starts each one on a configured worker host (a T3 Code thread or a Codex CLI job, by kind of work), one job per worker slot, per `loops.json → dispatch`. Off unless that section sets `enabled: true`; `plan` prints what a tick would start and changes nothing. See loops-dispatch → Central dispatch. |
 | `bun <DCL>/tools/cli-slots.ts --project <name> --host <host> --tool <tool>` | List the project's permanent worktree slots on this host, which are idle (content on the integration branch, clean, unclaimed), the first idle one and the next free slot name. Moves no ref; it fetches, and its merge check stores unreferenced objects that `git gc` prunes. `--item <slug>` leaves that item's own claim out, to re-check a contested slot. |
 
 If the bundled local reviewer is active, run it once from the target project at the

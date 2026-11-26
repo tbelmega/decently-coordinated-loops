@@ -7,19 +7,38 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFil
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ClaimFieldValues } from "./claim.ts";
+import type { ExecutorType } from "./dispatch-config.ts";
+import type { Route } from "./dispatch-remote.ts";
 
 export type DispatchKind = "verify" | "merge" | "build";
 
-/** starting: claimed, no thread id recorded; started: thread id recorded, work not
- * confirmed sent; running: work message sent. */
+/** starting: claimed, the start not confirmed (no thread id, or no launcher answer);
+ * started: thread id recorded, work not confirmed sent (T3 only); running: work message
+ * sent, or the Codex job confirmed started. */
 export type EntryPhase = "starting" | "started" | "running";
 
 export interface DispatchEntry {
   slug: string;
   project: string;
   kind: DispatchKind;
+  /** The T3 lane, or "codex" for a Codex CLI job; the slot tool and the claim's assignee. */
   lane: string;
+  /** The claim token, which also names a Codex job on its worker. */
   token: string;
+  /** The worker host the entry runs on. Absent: a legacy entry, made before workers existed,
+   * on the control host; it is observed but never sent work or a continue. */
+  worker?: string;
+  /** Absent on legacy entries, which are T3 threads. */
+  executor?: ExecutorType;
+  /** How the worker was reached when the entry was claimed; observation uses it. */
+  route?: Route;
+  /** The working directory of a Codex job on its worker. */
+  cwd?: string;
+  /** The Codex job's log file on its worker, as the launcher reported it. */
+  jobLog?: string;
+  /** The project path a T3 thread was started with, so a lost start is looked up where it
+   * was made even after the project's path changes in configuration. */
+  threadProject?: string;
   phase: EntryPhase;
   /** The thread title, which ends with the claim tag. */
   title: string;
@@ -35,19 +54,19 @@ export interface DispatchEntry {
   /** Every claim field right after the claim; cleanup that overwrites fields (park)
    * happens only while the item still matches it. */
   claimed: ClaimFieldValues;
-  /** True once `thread start` was called, so a start that is later found to have failed
-   * still cools the lane down. */
+  /** True once the start command was run, so a start that is later found to have failed
+   * still cools the worker down. */
   startAttempted: boolean;
-  /** Successful "continue" sends. */
+  /** Successful "continue" sends or Codex resumes. */
   resumes: number;
-  /** Failed "continue" sends. */
+  /** Failed "continue" sends or Codex resumes. */
   sendFailures: number;
 }
 
 export interface DispatchState {
   version: 1;
   entries: DispatchEntry[];
-  /** Lane name -> ISO time its cooldown ends. */
+  /** Worker host (or, from before workers, lane name) -> ISO time its cooldown ends. */
   cooldowns: Record<string, string>;
 }
 

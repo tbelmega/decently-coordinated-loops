@@ -59,6 +59,10 @@ const outboxPath = join(ROOT, "OUTBOX.md");
 const outboxProblems = existsSync(outboxPath) ? outboxHeadingProblems(readFileSync(outboxPath, "utf8")) : [];
 printOutboxHeadingProblems(outboxProblems);
 
+// A refused dispatch section stops only the dispatch program (config.ts), so it is shown
+// here as a note instead of failing every gate that runs check.
+if (config.dispatchError) console.log(`\nNote: loops.json dispatch is refused, so central dispatch will not run: ${config.dispatchError}`);
+
 // Version-stamp drift check (warning only, never fails the run): the data repo records
 // which DCL commit seeded it; if the DCL clone serving this run has moved on,
 // templates/contracts may have evolved past what this instance was seeded with. Clear

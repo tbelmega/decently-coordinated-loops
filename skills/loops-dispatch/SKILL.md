@@ -173,21 +173,60 @@ you say them out loud. Re-run this skill in a fresh session to renew.
 
 Next to this session-timer dispatch, a data repo can run **central dispatch**: the
 dispatch program (`bun run dispatch`, no model inside) that a timer on one control host
-runs every few minutes. Each tick claims eligible items the way a session claims work and
-starts one T3 Code thread per item, under the limits of `loops.json → dispatch`; the
-thread follows loops-pickup → Dispatched item. Absent or `enabled: false`, it starts
-nothing.
+runs. Each tick claims eligible items the way a session claims work and starts each one
+as a job on a **worker**, a host listed in `loops.json → dispatch.workers`; the job
+follows loops-pickup → Dispatched item. Absent or `enabled: false`, it starts nothing.
 
-- `plan --host <name>` - what a tick would start, and why every other item would not;
-  changes nothing and never pulls.
-- `tick --host <name> [--init]` - observe dispatched threads, clean up, claim, start.
-  Runs in a clone of the data repo dedicated to the program; `--init` once, and again
-  only after checking T3 Code for threads whose title ends with a claim tag such as
-  `[d-1a2b3c4d]` when the state file was lost.
-- `status` - dispatched items, their thread and item state, lane cooldowns, pause flags.
+- **Workers and slots are the only capacity.** Each worker takes at most `slots` jobs of
+  any kind at once (`kinds` narrows which), and only in a tick where it answers SSH. A
+  worker that does not answer keeps every claim it holds and gets nothing new. The control
+  host runs no job unless it is listed as a worker itself (an entry without `ssh`).
+- **The kind of work picks the executor** (`dispatch.executors`): a T3 Code thread on a
+  lane (`type: "t3"`), or a Codex CLI job (`type: "codex-cli"`) that the worker's own DCL
+  clone starts and supervises (`tools/dispatch-job.ts`, status and log under
+  `~/.local/state/dcl/jobs/` on the worker). Both get the same work message.
+- **Where a start goes:** among workers that take the kind, answer, have the project's
+  repository, a ready executor and a free slot (and, for a build in a slotted project, an
+  idle worktree slot there), the one with the most free slots, ties in configuration
+  order. A merge goes only to the worker named in the item's `execution.host`, and runs
+  in the recorded worktree (else the project's primary checkout there) once Git confirms
+  it exists; without a recorded host a merge is not dispatched.
+- **Commands run through the worker's login shell** (`ssh -o BatchMode=yes <ssh>
+  '<shell> -lc ...'`), so `t3`, `codex` and `bun` resolve as in a terminal there;
+  `t3Bin`, `codexBin`, `dclHome` and `shell` per worker override, as command names or
+  absolute or `~/` paths. Each worker resolves them itself (symlinks included) before
+  running anything and refuses one that lands inside a project repository, any Git work
+  tree holding a `BOARD.md` (a data repo), or a root listed in the worker's own
+  `~/.config/dcl/guard-roots` (one path per line, `~/` allowed). That file is required on
+  every host that runs dispatch commands, the control host included: list the directories
+  the host keeps its checkouts in, which no board edit can move. A host without it, or
+  with an empty one, refuses every command, as does a host without `realpath` (it must
+  follow symlinks); plan shows such a worker as unreachable with a `dcl-guard` reason.
+- **Entries from before workers** (no `worker` in the state file) run on the control host:
+  they are observed until they end, and parked for the owner where they would otherwise
+  get work or a continue.
+
+Commands:
+
+- `plan --host <name>` - each worker's probe, what a tick would start where, and why every
+  other item would not; changes nothing and never pulls.
+- `tick --host <name> [--init]` - observe dispatched threads and jobs, clean up, claim,
+  start. Runs in a clone of the data repo dedicated to the program; `--init` once, and
+  again only after checking each worker for threads whose title ends with a claim tag
+  such as `[d-1a2b3c4d]`, and for Codex job status files, when the state file was lost.
+- `status` - dispatched items with worker, executor, phase, thread id or job log path,
+  item state; worker cooldowns; pause flags.
 - `pause [--project <name>] [--note <text>]`, `resume [--project <name>]` - the committed
   `dispatch-control.json`, so a pause can come from any checkout that can push.
 
+**Adding a worker** is a configuration change: give it the project repositories, a DCL
+clone outside every project repository (its `tools/dispatch-job.ts` is the launcher; set
+the entry's `dclHome`, or export `DCL_HOME` in the worker's login shell, since the
+installer does not), `bun`, and the executables its kinds need (`codex`, and `t3` with a running T3 Code server for builds); add its entry; check
+`plan`; then run one supervised `tick` and confirm the job's outcome on the board before
+the timer runs unattended. A worker whose job fails for a missing prerequisite (secrets,
+credentials, browsers) is removed or its `kinds` narrowed until it is provisioned.
+
 Arming a session timer is unchanged, and "dispatch duty" keeps meaning this skill's
 session timer unless the owner says otherwise. Where both run, the pushed claim decides
-races; the program's limits count only its own threads.
+races; worker slots count only the program's own jobs.

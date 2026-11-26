@@ -189,10 +189,10 @@ unrun check; you never deploy.
 
 ## Dispatched item
 
-A thread started by central dispatch (the dispatch program, `bun run dispatch`; see
-loops-dispatch → Central dispatch) is handed one item it has already claimed, named in its
-work message with a kind (`verify`, `merge` or `build`), host, lane, and claim token.
-Such a thread:
+A thread or Codex CLI job started by central dispatch on a worker host (the dispatch
+program, `bun run dispatch`; see loops-dispatch → Central dispatch) is handed one item it
+has already claimed, named in its work message with a kind (`verify`, `merge` or
+`build`), host, lane, and claim token. Such a job:
 
 - skips project and item selection, step 3's claim, and the queue processing of step 0;
 - pulls the data repo its own configuration names, re-reads the item, and stops without
@@ -209,7 +209,8 @@ Such a thread:
   per loops-queues);
 - whenever it ends without changing the item's state (a `verify` hold, for example),
   appends a log line that says why and ends with `(dispatch <token>)`. Without that line
-  the program takes a stopped thread for an interrupted one and sends it a "continue".
+  the program takes a stopped job for an interrupted one and sends it a "continue" (a
+  Codex job is resumed in its session).
 
 ## Guardrails - never unattended
 
