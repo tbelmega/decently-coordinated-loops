@@ -96,7 +96,11 @@ export function planReviewerPasses(input: {
   explicit: ReviewExplicitSelection;
   alternativesEnabled: boolean;
 }): ReviewPassSelection[] {
-  const baseline: ReviewPassTemplate[] = input.saved ?? input.templates.map((template) => {
+  // A retry keeps each pass on the tuple it ran with; a pass the earlier attempt did
+  // not run (a widened round adds the round-1 personas) is planned like a first attempt.
+  const baseline: ReviewPassTemplate[] = input.templates.map((template) => {
+    const saved = input.saved?.find((selection) => selection.pass === template.pass);
+    if (saved) return saved;
     if (!input.alternative) return template;
     const override = input.alternative.personas?.[template.pass];
     const model = override?.model ?? input.alternative.model;

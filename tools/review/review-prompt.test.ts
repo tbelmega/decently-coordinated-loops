@@ -58,6 +58,25 @@ describe("reviewPrompt", () => {
     expect(prompt("adversarial")).toContain("security, data loss, concurrency, failure handling, accessibility");
   });
 
+  test("asks the confirmation pass to audit every manifest hunk its coverage is checked against", () => {
+    // A brief limited to the fix delta made the pass report coverage only for the files it
+    // read, so a round whose manifest spans the whole range failed every attempt.
+    for (const personaBriefs of [false, true]) {
+      const value = reviewPrompt({
+        pass: "confirmation",
+        manifest,
+        contextDocuments: [],
+        priorNotes: [],
+        obligations: [],
+        classifyObligations: true,
+        remediationBaseSha: "previous-head",
+        personaBriefs,
+      });
+      expect(value).toContain("audit every manifest hunk for new defects");
+      expect(value).not.toContain("scan the fix delta for new defects");
+    }
+  });
+
   test("requires broad contextual inspection but a bounded causal classification", () => {
     const value = prompt("integration");
     expect(value).toContain("introduced, worsened, unmet-obligation, pre-existing, or unknown");

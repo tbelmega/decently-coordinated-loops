@@ -3078,6 +3078,26 @@ describe("cli-review persona engine (C2/C3)", () => {
       expect(round.audit.scope).toBe("full-widened");
     });
 
+    test("a widened round has the round-1 personas audit the full range and confirmation the fix delta", () => {
+      // A confirmation persona asked to cover a large full range reported only the files it
+      // read and failed every attempt; the full range is what the round-1 personas cover.
+      const { repository, dataRepo } = scopedSetup("P0");
+      writeFileSync(`${repository}/fix.txt`, "the fix\n");
+      git(repository, ["add", "fix.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+      expect(runStart(repository, dataRepo, "persona-item", "master").status).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(round.audit.scope).toBe("full-widened");
+      expect(round.audit.manifest.files.map((file: any) => file.path).sort()).toEqual(["change.txt", "fix.txt"]);
+      const byPass = new Map(round.audit.passes.map((pass: any) => [pass.pass, pass]));
+      expect([...byPass.keys()].sort()).toEqual(["adversarial", "confirmation", "diff"]);
+      const coveredBy = (pass: string) =>
+        (byPass.get(pass) as any).coverage.files.map((file: any) => file.path).sort();
+      expect(coveredBy("diff")).toEqual(["change.txt", "fix.txt"]);
+      expect(coveredBy("adversarial")).toEqual(["change.txt", "fix.txt"]);
+      expect(coveredBy("confirmation")).toEqual(["fix.txt"]);
+    });
+
     test("--shadow-full records the round-1 personas non-blockingly, failures included", () => {
       const { repository, dataRepo } = scopedSetup("P1");
       writeFileSync(`${repository}/change.txt`, "review me, fixed\n");

@@ -95,6 +95,18 @@ describe("planReviewerPasses", () => {
     })).toEqual([{pass: "diff", reviewer: "claude", model: "new-model", effort: "high"}]);
   });
 
+  test("a retry keeps saved tuples for their passes and plans a pass it did not run before", () => {
+    expect(planReviewerPasses({
+      templates: [{pass: "confirmation", reviewer: "codex", model: "terra"}, {pass: "diff", reviewer: "codex", model: "sol"}],
+      saved: [{pass: "confirmation", reviewer: "claude", model: "saved-model"}],
+      explicit: {},
+      alternativesEnabled: false,
+    })).toEqual([
+      {pass: "confirmation", reviewer: "claude", model: "saved-model"},
+      {pass: "diff", reviewer: "codex", model: "sol"},
+    ]);
+  });
+
   test("an alternative's persona override overlays its tuple for that pass only, field by field", () => {
     const alternative = {
       when: {model: "gpt-"},

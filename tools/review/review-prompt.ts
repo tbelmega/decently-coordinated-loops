@@ -66,7 +66,7 @@ const passInstructions: Record<ReviewPersonaName, string> = {
   diff: "Audit local correctness of every changed hunk, including boundary behavior, compatibility, and tests that should require the change.",
   integration: "Audit callers, consumers, tests, contracts, and architecture. Trace the changed behavior through relevant call paths rather than judging files in isolation.",
   adversarial: "Audit security, data loss, concurrency, failure handling, accessibility, compatibility, and documentation consistency. Look deliberately for interactions the other passes may miss.",
-  confirmation: "You are the unified confirmation reviewer for this round. Classify every open obligation against the artifact it names, and scan the fix delta for new defects, with the full reviewed range as context.",
+  confirmation: "You are the unified confirmation reviewer for this round. Classify every open obligation against the artifact it names, and audit every manifest hunk for new defects: the fix delta (remediationRange) is where they are most likely, but a regression it causes elsewhere in the manifest counts too.",
 };
 
 /** The C2 persona-engine briefs: diff unchanged; adversarial keeps documentation

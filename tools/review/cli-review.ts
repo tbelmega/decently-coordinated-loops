@@ -1299,8 +1299,21 @@ async function startReview(options: StartOptions): Promise<void> {
           obligations.some((obligation) => obligation.priority === "P0");
       }
       const scopedRange = widenedScope ? undefined : scopedEligible;
+      // A widened round proves the full range with the personas built to cover it, the
+      // round-1 ones; the confirmation persona classifies the obligations and audits the
+      // fix delta, as on a scoped round. Asked to cover a large full range itself, it
+      // reported only the files it read and failed every attempt.
+      const widenedPersonas =
+        widenedScope && confirmationPersona
+          ? [
+              confirmationPersona,
+              ...(options.personas ?? []).filter(
+                (persona) => personaCovers(persona, 1) && persona.name !== "confirmation",
+              ),
+            ]
+          : undefined;
       const activePersonas = usingPersonas
-        ? (scopedRange && confirmationPersona ? [confirmationPersona] : roundPersonas)
+        ? (widenedPersonas ?? (scopedRange && confirmationPersona ? [confirmationPersona] : roundPersonas))
         : [];
       const templates: ReviewPassTemplate[] = usingPersonas
         ? activePersonas.map((persona) => ({
@@ -1414,6 +1427,19 @@ async function startReview(options: StartOptions): Promise<void> {
             context.rewrites,
           )
         : manifest;
+      const fixDeltaManifest = widenedPersonas && scopedEligible
+        ? createManifest(
+            repository,
+            scopedEligible.baseSha,
+            headSha,
+            options.metadataPaths,
+            context.references,
+            currentPatchIds,
+            baseDeltaRange,
+            scopedEligible,
+            context.rewrites,
+          )
+        : undefined;
       const docArtifacts = obligations
         .filter((obligation) => obligation.type === "documentation" && obligation.doc)
         .map((obligation) => ({
@@ -1519,7 +1545,11 @@ async function startReview(options: StartOptions): Promise<void> {
         // fails the attempt without killing the sibling processes mid-flight.
         const settled = await Promise.allSettled(
           plannedPasses.map((planned) =>
-            runPlannedPass(planned, reviewedManifest, planned.pass === obligationPass),
+            runPlannedPass(
+              planned,
+              planned.pass === "confirmation" && fixDeltaManifest ? fixDeltaManifest : reviewedManifest,
+              planned.pass === obligationPass,
+            ),
           ),
         );
         const failures = settled
