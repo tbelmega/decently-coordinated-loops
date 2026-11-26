@@ -3138,14 +3138,10 @@ describe("cli-review persona engine (C2/C3)", () => {
       expect(coveredPaths(round, "confirmation")).toEqual(["fix.txt"]);
     });
 
-    test("a retry routes a pass its earlier attempt did not run through the selected alternative", () => {
-      const routed = {
-        when: {model: "gpt-"},
-        reviewer: "codex",
-        model: "opus-model",
-        effort: "medium",
-        personas: {confirmation: {model: "sonnet-model"}, adversarial: {effort: "high"}},
-      };
+    test("a retry that would add a pass to an alternative route asks for an explicit route", () => {
+      // The saved selection names the alternative by position; reordered or edited
+      // alternatives would silently route the added pass elsewhere, so it fails closed.
+      const routed = {when: {model: "gpt-"}, reviewer: "codex", model: "opus-model", effort: "medium"};
       const identity = ["--implementer-model", "gpt-6.1-sol"];
       const { repository, dataRepo } = scopedSetup("P0", {alternatives: [routed]}, identity);
       commitFix(repository);
@@ -3157,12 +3153,14 @@ describe("cli-review persona engine (C2/C3)", () => {
       const routing = ledger.failures.at(-1).routing;
       routing.finalPasses = routing.finalPasses.filter((pass: any) => pass.pass === "confirmation");
       writeFileSync(paths.jsonPath, `${JSON.stringify(ledger, null, 2)}\n`);
-      expect(runStart(repository, dataRepo, "persona-item", "master", {}, identity).status).toBe(0);
+      const refused = runStart(repository, dataRepo, "persona-item", "master", {}, identity);
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("pass --reviewer and --model to route diff, adversarial");
+      expect(
+        runStart(repository, dataRepo, "persona-item", "master", {}, [...identity, "--reviewer", "codex", "--model", "chosen-model"]).status,
+      ).toBe(0);
       const passes = readItemLedger(repository, "persona-item").rounds[1].routing.finalPasses;
-      const byPass = new Map(passes.map((pass: any) => [pass.pass, pass]));
-      expect(byPass.get("confirmation")).toEqual({pass: "confirmation", reviewer: "codex", model: "sonnet-model", effort: "medium"});
-      expect(byPass.get("diff")).toEqual({pass: "diff", reviewer: "codex", model: "opus-model", effort: "medium"});
-      expect(byPass.get("adversarial")).toEqual({pass: "adversarial", reviewer: "codex", model: "opus-model", effort: "high"});
+      expect(passes.every((pass: any) => pass.model === "chosen-model")).toBe(true);
     });
 
     test("--shadow-full records the round-1 personas non-blockingly, failures included", () => {

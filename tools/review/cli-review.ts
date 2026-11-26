@@ -1355,12 +1355,10 @@ async function startReview(options: StartOptions): Promise<void> {
         ...(options.modelFlag ? {model: options.modelFlag} : {}),
         ...(options.effortFlag ? {effort: options.effortFlag} : {}),
       };
-      // A retry pins the tuples its earlier attempt ran with; a pass that attempt did not
-      // run is routed through the alternative it selected, as a first attempt would be.
-      const retriedAlternative =
-        retryEvidence?.selection.kind === "alternative"
-          ? options.alternatives?.[retryEvidence.selection.index]
-          : undefined;
+      // A retry pins the tuples its earlier attempt ran with. A pass that attempt did not
+      // run (one recorded before widened rounds ran the round-1 personas) cannot be put
+      // on its alternative route: the selection names the alternative only by position,
+      // and reordered or edited alternatives would route it elsewhere without notice.
       const passesWithoutSavedTuple = retryEvidence
         ? templates.filter(
             (template, index) =>
@@ -1371,16 +1369,15 @@ async function startReview(options: StartOptions): Promise<void> {
       if (
         retryEvidence?.selection.kind === "alternative" &&
         explicit.reviewer === undefined &&
-        retriedAlternative === undefined &&
         passesWithoutSavedTuple.length > 0
       ) {
         throw new Error(
-          `the failed attempt this retries was routed through reviewer alternative ${retryEvidence.selection.index}, which is no longer configured, and ${passesWithoutSavedTuple.map((template) => template.pass).join(", ")} has no saved tuple; pass --reviewer and --model to route it`,
+          `the failed attempt this retries was routed through reviewer alternative ${retryEvidence.selection.index}, whose route its record does not preserve; pass --reviewer and --model to route ${passesWithoutSavedTuple.map((template) => template.pass).join(", ")}`,
         );
       }
       const selections = planReviewerPasses({
         templates,
-        ...(matched ? {alternative: matched.alternative} : retriedAlternative ? {alternative: retriedAlternative} : {}),
+        ...(matched ? {alternative: matched.alternative} : {}),
         ...(retryEvidence ? {saved: retryEvidence.finalPasses} : {}),
         explicit,
         alternativesEnabled:
