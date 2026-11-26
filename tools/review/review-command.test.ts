@@ -3032,11 +3032,15 @@ describe("cli-review persona engine (C2/C3)", () => {
   });
 
   describe("scoped confirmation with widening (C2)", () => {
-    function scopedSetup(priority: string): { repository: string; dataRepo: string } {
+    function scopedSetup(
+      priority: string,
+      extraReview: Record<string, unknown> = {},
+      extraArgs: string[] = [],
+    ): { repository: string; dataRepo: string } {
       const { repository } = createReviewRepository();
-      const dataRepo = createPersonaDataRepo({confirmation: "scoped"});
+      const dataRepo = createPersonaDataRepo({confirmation: "scoped", ...extraReview});
       expect(
-        runStart(repository, dataRepo, "persona-item", "master", {FAKE_FINDINGS_JSON: finding(priority)}).status,
+        runStart(repository, dataRepo, "persona-item", "master", {FAKE_FINDINGS_JSON: finding(priority)}, extraArgs).status,
       ).toBe(0);
       expect(
         runDisposition(repository, "persona-item", "E1-R1-F1", "accepted", "fix it", ["--data-repo", dataRepo]).status,
@@ -3096,6 +3100,69 @@ describe("cli-review persona engine (C2/C3)", () => {
       expect(coveredBy("diff")).toEqual(["change.txt", "fix.txt"]);
       expect(coveredBy("adversarial")).toEqual(["change.txt", "fix.txt"]);
       expect(coveredBy("confirmation")).toEqual(["fix.txt"]);
+    });
+
+    function commitFix(repository: string): void {
+      writeFileSync(`${repository}/fix.txt`, "the fix\n");
+      git(repository, ["add", "fix.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix boundary"]);
+    }
+    const coveredPaths = (round: any, pass: string): string[] =>
+      round.audit.passes.find((entry: any) => entry.pass === pass).coverage.files.map((file: any) => file.path).sort();
+
+    test("a widened round with only a confirmation persona keeps it on the full range", () => {
+      const { repository, dataRepo } = scopedSetup("P0", {
+        personas: [{name: "confirmation", fromRound: 1, model: "terra-model"}],
+      });
+      commitFix(repository);
+      expect(runStart(repository, dataRepo, "persona-item", "master").status).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(round.audit.scope).toBe("full-widened");
+      expect(round.audit.passes.map((pass: any) => pass.pass)).toEqual(["confirmation"]);
+      expect(coveredPaths(round, "confirmation")).toEqual(["change.txt", "fix.txt"]);
+    });
+
+    test("a widened round keeps the personas scheduled for its own round", () => {
+      const { repository, dataRepo } = scopedSetup("P0", {
+        personas: [
+          {name: "diff", fromRound: 1, toRound: 1, model: "sol-model"},
+          {name: "adversarial", fromRound: 2, model: "sol-model"},
+          {name: "confirmation", fromRound: 2, model: "terra-model"},
+        ],
+      });
+      commitFix(repository);
+      expect(runStart(repository, dataRepo, "persona-item", "master").status).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(round.audit.passes.map((pass: any) => pass.pass).sort()).toEqual(["adversarial", "confirmation", "diff"]);
+      expect(coveredPaths(round, "adversarial")).toEqual(["change.txt", "fix.txt"]);
+      expect(coveredPaths(round, "confirmation")).toEqual(["fix.txt"]);
+    });
+
+    test("a retry routes a pass its earlier attempt did not run through the selected alternative", () => {
+      const routed = {
+        when: {model: "gpt-"},
+        reviewer: "codex",
+        model: "opus-model",
+        effort: "medium",
+        personas: {confirmation: {model: "sonnet-model"}, adversarial: {effort: "high"}},
+      };
+      const identity = ["--implementer-model", "gpt-6.1-sol"];
+      const { repository, dataRepo } = scopedSetup("P0", {alternatives: [routed]}, identity);
+      commitFix(repository);
+      expect(runStart(repository, dataRepo, "persona-item", "master", {FAKE_SKIP_FILE: "1"}, identity).status).toBe(1);
+      // An attempt recorded before widened rounds ran the round-1 personas saved
+      // the confirmation tuple alone.
+      const paths = reviewEvidencePaths(repository, git(repository, ["branch", "--show-current"]), "persona-item");
+      const ledger = JSON.parse(readFileSync(paths.jsonPath, "utf8"));
+      const routing = ledger.failures.at(-1).routing;
+      routing.finalPasses = routing.finalPasses.filter((pass: any) => pass.pass === "confirmation");
+      writeFileSync(paths.jsonPath, `${JSON.stringify(ledger, null, 2)}\n`);
+      expect(runStart(repository, dataRepo, "persona-item", "master", {}, identity).status).toBe(0);
+      const passes = readItemLedger(repository, "persona-item").rounds[1].routing.finalPasses;
+      const byPass = new Map(passes.map((pass: any) => [pass.pass, pass]));
+      expect(byPass.get("confirmation")).toEqual({pass: "confirmation", reviewer: "codex", model: "sonnet-model", effort: "medium"});
+      expect(byPass.get("diff")).toEqual({pass: "diff", reviewer: "codex", model: "opus-model", effort: "medium"});
+      expect(byPass.get("adversarial")).toEqual({pass: "adversarial", reviewer: "codex", model: "opus-model", effort: "high"});
     });
 
     test("--shadow-full records the round-1 personas non-blockingly, failures included", () => {

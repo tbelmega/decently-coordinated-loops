@@ -98,9 +98,11 @@ export function planReviewerPasses(input: {
 }): ReviewPassSelection[] {
   // A retry keeps each pass on the tuple it ran with; a pass the earlier attempt did
   // not run (a widened round adds the round-1 personas) is planned like a first attempt.
+  // Each saved tuple answers one template, so same-name personas keep their own.
+  const unclaimed = [...(input.saved ?? [])];
   const baseline: ReviewPassTemplate[] = input.templates.map((template) => {
-    const saved = input.saved?.find((selection) => selection.pass === template.pass);
-    if (saved) return saved;
+    const savedIndex = unclaimed.findIndex((selection) => selection.pass === template.pass);
+    if (savedIndex >= 0) return unclaimed.splice(savedIndex, 1)[0]!;
     if (!input.alternative) return template;
     const override = input.alternative.personas?.[template.pass];
     const model = override?.model ?? input.alternative.model;

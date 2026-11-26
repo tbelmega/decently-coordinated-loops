@@ -107,6 +107,21 @@ describe("planReviewerPasses", () => {
     ]);
   });
 
+  test("a retry gives each same-name persona its own saved tuple", () => {
+    expect(planReviewerPasses({
+      templates: [{pass: "adversarial", reviewer: "codex"}, {pass: "adversarial", reviewer: "codex"}],
+      saved: [
+        {pass: "adversarial", reviewer: "codex", model: "first"},
+        {pass: "adversarial", reviewer: "claude", model: "second"},
+      ],
+      explicit: {},
+      alternativesEnabled: false,
+    })).toEqual([
+      {pass: "adversarial", reviewer: "codex", model: "first"},
+      {pass: "adversarial", reviewer: "claude", model: "second"},
+    ]);
+  });
+
   test("an alternative's persona override overlays its tuple for that pass only, field by field", () => {
     const alternative = {
       when: {model: "gpt-"},

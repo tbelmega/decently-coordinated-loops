@@ -1303,14 +1303,17 @@ async function startReview(options: StartOptions): Promise<void> {
       // round-1 ones; the confirmation persona classifies the obligations and audits the
       // fix delta, as on a scoped round. Asked to cover a large full range itself, it
       // reported only the files it read and failed every attempt.
+      // The personas of this round stay; the round-1 ones join them. Without any
+      // persona but confirmation, confirmation keeps the full range itself.
+      const fullRangePersonas = [
+        ...new Set([
+          ...roundPersonas,
+          ...(options.personas ?? []).filter((persona) => personaCovers(persona, 1)),
+        ]),
+      ].filter((persona) => persona.name !== "confirmation");
       const widenedPersonas =
-        widenedScope && confirmationPersona
-          ? [
-              confirmationPersona,
-              ...(options.personas ?? []).filter(
-                (persona) => personaCovers(persona, 1) && persona.name !== "confirmation",
-              ),
-            ]
+        widenedScope && confirmationPersona && fullRangePersonas.length > 0
+          ? [confirmationPersona, ...fullRangePersonas]
           : undefined;
       const activePersonas = usingPersonas
         ? (widenedPersonas ?? (scopedRange && confirmationPersona ? [confirmationPersona] : roundPersonas))
@@ -1352,9 +1355,32 @@ async function startReview(options: StartOptions): Promise<void> {
         ...(options.modelFlag ? {model: options.modelFlag} : {}),
         ...(options.effortFlag ? {effort: options.effortFlag} : {}),
       };
+      // A retry pins the tuples its earlier attempt ran with; a pass that attempt did not
+      // run is routed through the alternative it selected, as a first attempt would be.
+      const retriedAlternative =
+        retryEvidence?.selection.kind === "alternative"
+          ? options.alternatives?.[retryEvidence.selection.index]
+          : undefined;
+      const passesWithoutSavedTuple = retryEvidence
+        ? templates.filter(
+            (template, index) =>
+              templates.slice(0, index + 1).filter((other) => other.pass === template.pass).length >
+              retryEvidence.finalPasses.filter((saved) => saved.pass === template.pass).length,
+          )
+        : [];
+      if (
+        retryEvidence?.selection.kind === "alternative" &&
+        explicit.reviewer === undefined &&
+        retriedAlternative === undefined &&
+        passesWithoutSavedTuple.length > 0
+      ) {
+        throw new Error(
+          `the failed attempt this retries was routed through reviewer alternative ${retryEvidence.selection.index}, which is no longer configured, and ${passesWithoutSavedTuple.map((template) => template.pass).join(", ")} has no saved tuple; pass --reviewer and --model to route it`,
+        );
+      }
       const selections = planReviewerPasses({
         templates,
-        ...(matched ? {alternative: matched.alternative} : {}),
+        ...(matched ? {alternative: matched.alternative} : retriedAlternative ? {alternative: retriedAlternative} : {}),
         ...(retryEvidence ? {saved: retryEvidence.finalPasses} : {}),
         explicit,
         alternativesEnabled:
