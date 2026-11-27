@@ -32,7 +32,11 @@ It fetches, lists this host's slots of the project, and prints `FIRST_IDLE=` and
 idle when its working tree is clean, no active board item records it as
 `execution.worktree`, and its content is already on the integration branch (a squash
 merge counts). A clean slot can still have a live session in it that has not edited
-anything yet, which is why the owner confirms.
+anything yet, which is why the owner confirms. The tool's verdict is the only evidence of
+idleness: never infer it from ahead/behind commit counts (`git status`, `git rev-list`, a
+fleet sweep). Being behind is irrelevant, and commits ahead may already be on the
+integration branch through a squash; the tool checks content with a dry-run merge that
+leaves the slot branch and working tree untouched, so no rebase is needed to find out.
 
 - **An idle slot exists:** tell the owner which worktree and branch you picked and ask
   them to confirm it. On a no, ask which slot to use instead, or offer the next free name.
@@ -83,7 +87,8 @@ planning. Decide before changing anything:
 4. **Otherwise, stop and report before building, with the branch untouched.** List each
    commit in `git log <integration-ref>..HEAD` and any uncommitted changes, with the
    work-stream each belongs to where you can tell (a board item whose recorded range or
-   ticket matches). Ask the owner whether to build on top, use another slot, or merge it
+   ticket matches). Some of those commits may already be integrated through a squash; when
+   step 3 ran, the tool's reasons say what keeps the slot busy. Ask the owner whether to build on top, use another slot, or merge it
    first; never choose for them. Unattended, leave the slot alone and choose another.
    Exception: resuming your own item recorded in this slot, continue it; it is rebased
    at its pre-review step like any work-stream.
