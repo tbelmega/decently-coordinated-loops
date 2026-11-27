@@ -73,6 +73,17 @@ describe("executable guard", () => {
     expect(guard(home, join(home, "bin/plain")).stdout).toContain("passed");
   });
 
+  test("the guard behaves the same in zsh, whose `path` and `status` are special", () => {
+    const zsh = ["/bin/zsh", "/usr/bin/zsh"].find((candidate) => spawnSync(candidate, ["-c", "true"]).status === 0);
+    if (!zsh) return;
+    const home = host();
+    const run = (path: string) =>
+      spawnSync(zsh, ["-c", `${GUARD_FUNCTIONS}\ndcl_guard tool ${path}\necho passed "$PATH"`], { env: { PATH: process.env.PATH, HOME: home }, encoding: "utf8" });
+    const plain = run(join(home, "bin/plain"));
+    expect(plain.stdout).toContain(`passed ${process.env.PATH}`);
+    expect(run(join(home, "bin/tool")).status).toBe(GUARD_REFUSED);
+  });
+
   test("when realpath fails or is missing, an existing path is refused", () => {
     const home = host();
     const broken = mkdtempSync(join(tmpdir(), "dcl-guard-bin-"));

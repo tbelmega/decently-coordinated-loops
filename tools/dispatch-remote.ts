@@ -71,14 +71,16 @@ export const GUARD_ROOTS_FILE = '"${XDG_CONFIG_HOME:-$HOME/.config}/dcl/guard-ro
  * without a guard-roots file, or with an empty one, or without `realpath`, refuses every
  * command, and so does a path that exists but does not resolve. */
 export const GUARD_FUNCTIONS = [
+  // Every variable carries a dcl_ prefix: these functions also run in zsh, where names such
+  // as `path` (tied to PATH) and `status` (read-only) are special.
   // realpath is required: without it a file symlink cannot be followed, so a path that
   // exists but does not resolve is reported as unresolvable and refused.
   'dcl_real() { if realpath "$1" 2>/dev/null; then return 0; elif [ -e "$1" ] || [ -L "$1" ]; then return 1; else printf "%s\\n" "$1"; fi; }',
-  'dcl_under() { [ -e "$2" ] || return 1; rr=$(dcl_real "$2") || return 0; case "$1/" in "$rr"/*) return 0;; esac; return 1; }',
-  'dcl_data_repo() { d=$1; [ -d "$d" ] || d=$(dirname "$d"); top=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null) || return 1; [ -f "$top/BOARD.md" ]; }',
-  `dcl_inside() { p=$(dcl_real "$1") || return 0; shift; for r in "$@"; do dcl_under "$p" "$r" && return 0; done; f=${GUARD_ROOTS_FILE}; while IFS= read -r r || [ -n "$r" ]; do case "$r" in "") continue;; "~/"*) r="$HOME/\${r#??}";; esac; dcl_under "$p" "$r" && return 0; done < "$f"; dcl_data_repo "$p"; }`,
-  `dcl_guard() { label=$1; value=$2; shift 2; if ! command -v realpath >/dev/null 2>&1; then echo "dcl-guard: realpath is not installed; refused" >&2; exit ${GUARD_REFUSED}; fi; f=${GUARD_ROOTS_FILE}; if ! grep -q '[^[:space:]]' "$f" 2>/dev/null; then echo "dcl-guard: no guard roots in $f (list the directories this host keeps checkouts in); refused" >&2; exit ${GUARD_REFUSED}; fi;`+
-    ' case "$value" in */*) path=$value;; *) path=$(command -v "$value" 2>/dev/null) || return 0;; esac; if dcl_inside "$path" "$@"; then echo "dcl-guard: $label resolves into a project repository or the data repo; refused" >&2; exit ' +
+  'dcl_under() { [ -e "$2" ] || return 1; dcl_rr=$(dcl_real "$2") || return 0; case "$1/" in "$dcl_rr"/*) return 0;; esac; return 1; }',
+  'dcl_data_repo() { dcl_d=$1; [ -d "$dcl_d" ] || dcl_d=$(dirname "$dcl_d"); dcl_top=$(git -C "$dcl_d" rev-parse --show-toplevel 2>/dev/null) || return 1; [ -f "$dcl_top/BOARD.md" ]; }',
+  `dcl_inside() { dcl_p=$(dcl_real "$1") || return 0; shift; for dcl_r in "$@"; do dcl_under "$dcl_p" "$dcl_r" && return 0; done; dcl_f=${GUARD_ROOTS_FILE}; while IFS= read -r dcl_r || [ -n "$dcl_r" ]; do case "$dcl_r" in "") continue;; "~/"*) dcl_r="$HOME/\${dcl_r#??}";; esac; dcl_under "$dcl_p" "$dcl_r" && return 0; done < "$dcl_f"; dcl_data_repo "$dcl_p"; }`,
+  `dcl_guard() { dcl_label=$1; dcl_value=$2; shift 2; if ! command -v realpath >/dev/null 2>&1; then echo "dcl-guard: realpath is not installed; refused" >&2; exit ${GUARD_REFUSED}; fi; dcl_f=${GUARD_ROOTS_FILE}; if ! grep -q '[^[:space:]]' "$dcl_f" 2>/dev/null; then echo "dcl-guard: no guard roots in $dcl_f (list the directories this host keeps checkouts in); refused" >&2; exit ${GUARD_REFUSED}; fi;`+
+    ' case "$dcl_value" in */*) dcl_path=$dcl_value;; *) dcl_path=$(command -v "$dcl_value" 2>/dev/null) || return 0;; esac; if dcl_inside "$dcl_path" "$@"; then echo "dcl-guard: $dcl_label resolves into a project repository or the data repo; refused" >&2; exit ' +
     String(GUARD_REFUSED) +
     "; fi; }",
 ].join("\n");
