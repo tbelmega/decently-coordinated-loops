@@ -44,6 +44,20 @@ function passResult(pass: "diff" | "integration" | "adversarial", title = "Race"
 }
 
 describe("parseReviewPass", () => {
+  test("accepts partial coverage when the pass reports what it inspected, but only within the manifest", () => {
+    const reported = (files: unknown[]): unknown => ({
+      ...(passResult("diff") as Record<string, unknown>),
+      coverage: {files, instructionFiles: ["AGENTS.md"], callsites: []},
+    });
+    const options = {fileCoverage: "reported" as const};
+    expect(parseReviewPass(reported([manifest.files[0]]), "diff", manifest, [], options).coverage.files)
+      .toEqual([manifest.files[0]]);
+    expect(() => parseReviewPass(reported([{path: "src/a.ts", hunks: ["-9,1 +9,1"]}]), "diff", manifest, [], options))
+      .toThrow(/outside the review manifest/);
+    expect(() => parseReviewPass(reported([{path: "src/elsewhere.ts", hunks: []}]), "diff", manifest, [], options))
+      .toThrow(/outside the review manifest: src\/elsewhere\.ts/);
+  });
+
   test("requires exact file and hunk coverage for the selected pass", () => {
     const parsed = parseReviewPass(passResult("diff"), "diff", manifest, []);
     expect(parsed.coverage.files).toEqual(manifest.files);

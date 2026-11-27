@@ -73,6 +73,7 @@ import {
   combineReviewPasses,
   computeReviewMetrics,
   parseReviewPass,
+  type FileCoverage,
   type PriorFindingIdentity,
   type ReviewPassResult,
   type ReviewPassStats,
@@ -1510,6 +1511,7 @@ async function startReview(options: StartOptions): Promise<void> {
         planned: PlannedPass,
         passManifest: ReviewManifest,
         classify: boolean,
+        fileCoverage: FileCoverage = "complete",
       ): Promise<{result: ReviewPassResult; stats: ReviewPassStats}> => {
         const prompt = reviewPrompt({
           pass: planned.pass,
@@ -1528,6 +1530,7 @@ async function startReview(options: StartOptions): Promise<void> {
           ...(severityFloorActive ? {severityFloorActive: true} : {}),
           ...(refuteRejections ? {refuteRejections: true} : {}),
           ...(usingPersonas ? {personaBriefs: true} : {}),
+          ...(fileCoverage === "reported" ? {coverageAsReported: true} : {}),
         });
         dumpReviewPrompt(options.item, pendingEpoch, pendingLogicalRound, planned.pass, prompt);
         const passStarted = Date.now();
@@ -1555,6 +1558,7 @@ async function startReview(options: StartOptions): Promise<void> {
           classify
             ? obligations.map((obligation) => ({findingId: obligation.findingId, type: obligation.type}))
             : [],
+          {fileCoverage},
         );
         return {result, stats};
       };
@@ -1568,11 +1572,11 @@ async function startReview(options: StartOptions): Promise<void> {
         // fails the attempt without killing the sibling processes mid-flight.
         const settled = await Promise.allSettled(
           plannedPasses.map((planned) =>
-            runPlannedPass(
-              planned,
-              planned.pass === "confirmation" && fixDeltaManifest ? fixDeltaManifest : reviewedManifest,
-              planned.pass === obligationPass,
-            ),
+            // In a widened round the full-range personas prove every hunk, so the
+            // confirmation persona reports what it inspected of the fix delta.
+            planned.pass === "confirmation" && fixDeltaManifest
+              ? runPlannedPass(planned, fixDeltaManifest, planned.pass === obligationPass, "reported")
+              : runPlannedPass(planned, reviewedManifest, planned.pass === obligationPass),
           ),
         );
         const failures = settled

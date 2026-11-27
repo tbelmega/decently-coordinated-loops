@@ -206,12 +206,18 @@ export type ReviewCoverageManifest = Pick<ReviewManifest,
  * the reviewer loaded on its own (harness skills, project rule files) are kept as evidence. */
 export type InstructionFileCoverage = "exact" | "reviewer-reported";
 
+/** How a pass's `coverage.files` is checked against the manifest.
+ * `complete`: every manifest file with all its hunks.
+ * `reported`: the files the pass inspected, each within the manifest. Only for a pass whose
+ * round has other passes proving the full manifest. */
+export type FileCoverage = "complete" | "reported";
+
 export function parseReviewPass(
   input: unknown,
   expectedPass: ReviewPersonaName,
   manifest: ReviewCoverageManifest,
   requiredObligations: RequiredReviewObligation[],
-  options: {instructionFileCoverage?: InstructionFileCoverage} = {},
+  options: {instructionFileCoverage?: InstructionFileCoverage; fileCoverage?: FileCoverage} = {},
 ): ReviewPassResult {
   if (!isRecord(input)) throw new Error("review pass result must be an object");
   if (input.pass !== expectedPass) throw new Error(`review pass must be ${expectedPass}`);
@@ -242,9 +248,11 @@ export function parseReviewPass(
   // (reviewer left the fix delta out of its coverage list) or their complete union with
   // the fix-delta hunks (reviewer counted the audited delta in). A partial union would
   // persist an audit of a range the reviewer did not finish, so it fails closed too.
+  const reportedOnly = options.fileCoverage === "reported";
   for (const manifestFile of manifest.files) {
     const covered = byPath.get(manifestFile.path);
-    if (!covered || manifestFile.hunks.some((hunk) => !covered.hunks.includes(hunk))) {
+    if (reportedOnly && !covered) continue;
+    if (!covered || (!reportedOnly && manifestFile.hunks.some((hunk) => !covered.hunks.includes(hunk)))) {
       throw new Error(`coverage is incomplete for ${manifestFile.path}`);
     }
     const union = new Set([...manifestFile.hunks, ...(fixDeltaHunks.get(manifestFile.path) ?? [])]);
@@ -254,7 +262,7 @@ export function parseReviewPass(
         `coverage for ${manifestFile.path} includes a hunk outside the review manifest: ${unknown}`,
       );
     }
-    if (covered.hunks.length !== manifestFile.hunks.length && covered.hunks.length !== union.size) {
+    if (!reportedOnly && covered.hunks.length !== manifestFile.hunks.length && covered.hunks.length !== union.size) {
       throw new Error(
         `coverage for ${manifestFile.path} must be exactly the manifest hunks or their complete union with the fix delta`,
       );

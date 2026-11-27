@@ -50,6 +50,9 @@ export interface ReviewPromptInput {
   /** C2: the persona engine's sharpened briefs (interactions-only integration,
    * security-sharpened adversarial). Off for legacy auditPasses runs. */
   personaBriefs?: boolean;
+  /** Other passes of this round prove the full manifest; this one reports coverage of
+   * the hunks it inspected instead of every manifest hunk. */
+  coverageAsReported?: boolean;
 }
 
 /** The four priority definitions, load-bearing for the severity floor, terminal
@@ -112,7 +115,9 @@ export function reviewPrompt(input: ReviewPromptInput): string {
     `AUDIT_INPUT=${JSON.stringify(auditInput)}`,
     `Review exactly the committed change ${input.manifest.baseSha}..${input.manifest.headSha}.`,
     (input.personaBriefs ? personaPassInstructions : passInstructions)[input.pass],
-    "Return coverage for every manifest file and exact hunk list. Missing coverage invalidates the entire logical round.",
+    input.coverageAsReported
+      ? "Return coverage for the manifest files you inspected, each with the exact manifest hunks you inspected; other passes of this round cover the full range. Coverage of a file or hunk outside the manifest invalidates the entire logical round."
+      : "Return coverage for every manifest file and exact hunk list. Missing coverage invalidates the entire logical round.",
     "coverage.instructionFiles must repeat every path in the manifest's instructionFiles, including files you judged irrelevant to this change. It records that you considered the repository's instructions, so any deviation from that exact set invalidates the round.",
     ...(input.manifest.instructionFilesUnderRevision?.length
       ? [

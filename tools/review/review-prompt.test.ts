@@ -58,6 +58,20 @@ describe("reviewPrompt", () => {
     expect(prompt("adversarial")).toContain("security, data loss, concurrency, failure handling, accessibility");
   });
 
+  test("asks a pass whose coverage is as reported for the hunks it inspected", () => {
+    const value = reviewPrompt({
+      pass: "confirmation",
+      manifest,
+      contextDocuments: [],
+      priorNotes: [],
+      obligations: [],
+      classifyObligations: true,
+      coverageAsReported: true,
+    });
+    expect(value).toContain("Return coverage for the manifest files you inspected");
+    expect(value).not.toContain("Return coverage for every manifest file");
+  });
+
   test("asks the confirmation pass to audit every manifest hunk its coverage is checked against", () => {
     // A brief limited to the fix delta made the pass report coverage only for the files it
     // read, so a round whose manifest spans the whole range failed every attempt.

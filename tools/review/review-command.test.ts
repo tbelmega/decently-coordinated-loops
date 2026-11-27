@@ -144,7 +144,7 @@ function createFakeCodex(): string {
       'if (process.env.FAKE_CODEX_TRACE) appendFileSync(process.env.FAKE_CODEX_TRACE, `${audit.pass} start ${Date.now()}\\n`);',
       'if (process.env.FAKE_CODEX_SLEEP_MS) await new Promise((done) => setTimeout(done, Number(process.env.FAKE_CODEX_SLEEP_MS)));',
       'if (process.env.FAKE_FAIL_PASS && process.env.FAKE_FAIL_PASS === audit.pass) { if (process.env.FAKE_CODEX_TRACE) appendFileSync(process.env.FAKE_CODEX_TRACE, `${audit.pass} failed ${Date.now()}\\n`); process.exit(1); }',
-      'let covered = process.env.FAKE_SKIP_FILE ? audit.manifest.files.slice(0, -1) : audit.manifest.files;',
+      'let covered = process.env.FAKE_SKIP_FILE && (!process.env.FAKE_SKIP_FILE_PASS || process.env.FAKE_SKIP_FILE_PASS === audit.pass) ? audit.manifest.files.slice(0, -1) : audit.manifest.files;',
       // Faithful to a compliant reviewer on a remediation round: the prompt embeds
       // remediationFiles and instructs auditing that range, so coverage comes back with
       // those hunks unioned in (measured with codex/gpt-5.6-terra, 2026-08-09).
@@ -3109,6 +3109,28 @@ describe("cli-review persona engine (C2/C3)", () => {
     }
     const coveredPaths = (round: any, pass: string): string[] =>
       round.audit.passes.find((entry: any) => entry.pass === pass).coverage.files.map((file: any) => file.path).sort();
+
+    test("a widened round accepts confirmation coverage of only the fix-delta files it inspected", () => {
+      const { repository, dataRepo } = scopedSetup("P0");
+      commitFix(repository);
+      writeFileSync(`${repository}/second-fix.txt`, "more of the fix\n");
+      git(repository, ["add", "second-fix.txt"]);
+      git(repository, ["commit", "-q", "-m", "Fix the other boundary"]);
+      expect(
+        runStart(repository, dataRepo, "persona-item", "master", {FAKE_SKIP_FILE: "1", FAKE_SKIP_FILE_PASS: "confirmation"}).status,
+      ).toBe(0);
+      const round = readItemLedger(repository, "persona-item").rounds[1];
+      expect(coveredPaths(round, "confirmation")).toEqual(["fix.txt"]);
+      expect(coveredPaths(round, "diff")).toEqual(["change.txt", "fix.txt", "second-fix.txt"]);
+    });
+
+    test("a widened round still requires full coverage from the full-range personas", () => {
+      const { repository, dataRepo } = scopedSetup("P0");
+      commitFix(repository);
+      const result = runStart(repository, dataRepo, "persona-item", "master", {FAKE_SKIP_FILE: "1", FAKE_SKIP_FILE_PASS: "diff"});
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("diff pass failed: coverage is incomplete");
+    });
 
     test("a widened round with only a confirmation persona keeps it on the full range", () => {
       const { repository, dataRepo } = scopedSetup("P0", {
